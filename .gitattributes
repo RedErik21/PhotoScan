@@ -1,4 +1,4 @@
-# Esclusi dallo zip delle Release (usato dagli aggiornamenti automatici): non servono per far girare FotoScan.
+# Esclusi dallo zip delle Release (usato dagli aggiornamenti automatici): non servono per far girare PhotoScan.
 docs/screenshots/ export-ignore
 tools/demo/ export-ignore
 .github/ export-ignore

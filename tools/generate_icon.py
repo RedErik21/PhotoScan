@@ -1,4 +1,4 @@
-"""Generatore professionale dell'icona Material 3 di FotoScan in SVG, ICO e PNG multi-risoluzione."""
+"""Generatore professionale dell'icona Material 3 di PhotoScan in SVG, ICO e PNG multi-risoluzione."""
 import asyncio
 import ctypes
 from pathlib import Path

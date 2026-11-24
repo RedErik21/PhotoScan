@@ -1,4 +1,4 @@
-# FotoScan 2 — Contratto di sviluppo (API, frontend, proprietà dei file)
+# PhotoScan 2 — Contratto di sviluppo (API, frontend, proprietà dei file)
 
 **Stato: implementato.** API, oggetto `File`, interfacce UI condivise e shell sono in uso; i test in `tests/` passano. Dettagli, limiti noti e come testare: `docs/STATO.md`.
 

@@ -1,4 +1,4 @@
-# FotoScan 2 — Stato dell'implementazione
+# PhotoScan 2 — Stato dell'implementazione
 
 Stato: **implementato** (rifiniture finali completate, test verdi). Contratto API e convenzioni: `docs/CONTRACT.md`.
 
@@ -36,7 +36,7 @@ Stato: **implementato** (rifiniture finali completate, test verdi). Contratto AP
 ## Come avviare
 
 ```powershell
-.\.venv\Scripts\pythonw.exe -m fotoscan.desktop        # stessa cosa dell'icona FotoScan sul Desktop
+.\.venv\Scripts\pythonw.exe -m fotoscan.desktop        # stessa cosa dell'icona PhotoScan sul Desktop
 .\.venv\Scripts\python.exe -m fotoscan serve --port 8765   # solo server, per sviluppo
 ```
 
