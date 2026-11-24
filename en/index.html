@@ -3,7 +3,9 @@
 
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#fafaf9" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#111114" media="(prefers-color-scheme: dark)">
   <title>PhotoScan — Organize your photo archive, 100% locally</title>
   <meta name="description"
     content="PhotoScan indexes the photo and video archive on your PC, recognizes what is in each picture with AI and suggests an organization by year, month and event. No data leaves your computer.">
@@ -18,16 +20,14 @@
   <nav class="nav" aria-label="Main navigation">
     <div class="wrap nav__inner">
       <a class="nav__brand" href="#">
-        <img class="nav__logo-img" src="../icon-192.png" alt="" width="32" height="32" aria-hidden="true">
+        <img class="nav__logo-img" src="../icon-192.png" alt="" width="28" height="28" aria-hidden="true">
         <span>PhotoScan</span>
       </a>
 
       <div class="nav__links">
-        <a href="#why">Features</a>
-        <a href="#features">Screenshots</a>
+        <a href="#screenshots">Screenshots</a>
         <a href="#how">How it works</a>
-        <a href="#safety">Safety</a>
-        <a href="#installation">Install</a>
+        <a href="#installation">Download</a>
         <a href="#faq">FAQ</a>
       </div>
 
@@ -45,536 +45,296 @@
           </svg>
         </button>
         <a class="lang-pill" href="../index.html" lang="it" title="Passa all'italiano">IT</a>
-        <a class="nav__gh" href="https://github.com/RedErik21/PhotoScan" target="_blank" rel="noopener">
+        <a class="nav__gh" href="https://github.com/RedErik21/PhotoScan" target="_blank" rel="noopener"
+          aria-label="PhotoScan on GitHub">
           <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path
               d="M12 2C6.48 2 2 6.58 2 12.26c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.48 0-.24-.01-.87-.01-1.7-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.63.07-.63 1 .07 1.53 1.05 1.53 1.05.9 1.57 2.36 1.12 2.94.86.09-.66.35-1.12.63-1.38-2.22-.26-4.56-1.14-4.56-5.08 0-1.12.39-2.04 1.03-2.76-.1-.26-.45-1.31.1-2.73 0 0 .84-.28 2.75 1.05a9.3 9.3 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.42.2 2.47.1 2.73.64.72 1.03 1.64 1.03 2.76 0 3.95-2.34 4.82-4.57 5.07.36.32.68.94.68 1.9 0 1.37-.01 2.48-.01 2.82 0 .27.18.59.69.48A10.02 10.02 0 0 0 22 12.26C22 6.58 17.52 2 12 2z" />
           </svg>
           <span>GitHub</span>
         </a>
+        <button type="button" id="menu-toggle" class="icon-btn nav__menu-btn" aria-label="Open navigation menu"
+          aria-expanded="false" aria-controls="mobile-menu">
+          <svg class="icon-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round">
+            <line x1="4" y1="7" x2="20" y2="7" />
+            <line x1="4" y1="12" x2="20" y2="12" />
+            <line x1="4" y1="17" x2="20" y2="17" />
+          </svg>
+          <svg class="icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" style="display:none">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div id="mobile-menu" class="nav__drawer" hidden>
+      <div class="wrap nav__drawer-inner">
+        <a href="#screenshots">Screenshots</a>
+        <a href="#how">How it works</a>
+        <a href="#installation">Download</a>
+        <a href="#faq">FAQ</a>
       </div>
     </div>
   </nav>
 
-  <header class="hero">
-    <div class="wrap">
-      <div class="hero__content">
-        <h1>Bring order to years of photos, <span class="hero__grad">100% locally</span>.</h1>
-        <p class="hero__lead">
-          PhotoScan analyzes your photo and video archive right on your PC with local AI, finds duplicates and
-          near-identical shots,
-          lets you search by words, and proposes a clean folder structure by year, month and event.
-        </p>
-        <div class="cta">
-          <a class="btn btn--primary" href="#installation">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="7 10 12 15 17 10" />
-              <line x1="12" y1="15" x2="12" y2="3" />
-            </svg>
-            How to install
-          </a>
-          <a class="btn btn--secondary" href="#features">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="3" y="3" width="18" height="18" rx="2" />
-              <circle cx="8.5" cy="8.5" r="1.5" />
-              <path d="M21 15l-5-5L5 21" />
-            </svg>
-            View screenshots
-          </a>
-          <a class="btn btn--secondary" href="https://github.com/RedErik21/PhotoScan/releases" target="_blank"
-            rel="noopener">
-            GitHub Releases
-          </a>
-        </div>
-        <div class="hero__pillars">
-          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M20 6L9 17l-5-5" />
-            </svg>Zero cloud uploads</span>
-          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M20 6L9 17l-5-5" />
-            </svg>Originals always read-only</span>
-          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M20 6L9 17l-5-5" />
-            </svg>Import from Android &amp; iPhone via USB</span>
-          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M20 6L9 17l-5-5" />
-            </svg>SigLIP2 AI on NVIDIA GPU or CPU</span>
-        </div>
-      </div>
-
-      <div class="hero__stage">
-        <div class="window-frame window-frame--video">
-          <div class="window-frame__bar" aria-hidden="true">
-            <span class="window-frame__dots"><i></i><i></i><i></i></span>
-            <span class="window-frame__title">PhotoScan — Desktop Preview</span>
-          </div>
-          <div class="window-frame__media">
-            <video class="window-frame__video" src="../img/promo-pc.mp4" poster="../img/13-home-scuro.png" autoplay
-              muted loop playsinline preload="metadata" aria-label="PhotoScan desktop app walkthrough video">
-            </video>
-            <button type="button" class="video-toggle" data-video-toggle aria-label="Pause or play preview video"
-              title="Pause / Play">
-              <svg class="ic-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <rect x="6" y="4" width="4" height="16" rx="1" />
-                <rect x="14" y="4" width="4" height="16" rx="1" />
+  <main>
+    <header class="hero">
+      <div class="wrap">
+        <div class="hero__head">
+          <h1>Bring order to years of photos, right on your PC.</h1>
+          <p class="hero__lead">
+            PhotoScan analyzes your photos and videos locally with AI, finds duplicates and similar shots,
+            lets you search by words, and suggests folders by year, month and event. Zero cloud, originals untouched.
+          </p>
+          <div class="hero__actions">
+            <a class="btn btn--primary" href="https://github.com/RedErik21/PhotoScan/releases/latest" target="_blank"
+              rel="noopener">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
               </svg>
-              <svg class="ic-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="display:none">
-                <polygon points="6,4 20,12 6,20" />
-              </svg>
-            </button>
+              Download for Windows
+            </a>
+            <a class="btn btn--ghost" href="#screenshots">Explore screenshots</a>
           </div>
+          <p class="hero__meta">Windows 10/11 · Free &amp; open source (MIT) · NVIDIA GPU or CPU</p>
         </div>
-      </div>
-    </div>
-  </header>
 
-  <section id="why">
-    <div class="wrap">
-      <div class="sec-head">
-        <span class="sec-eyebrow">Features</span>
-        <h2>Built for large, real-world archives</h2>
-        <p>Thousands of photos and videos scattered across old drives and unhelpful folder names — finally organized.
-        </p>
-      </div>
-      <div class="features">
-        <article class="feat-card">
-          <div class="feat-card__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+        <div class="hero__media">
+          <video class="hero__video" src="../img/promo-pc.mp4" poster="../img/13-home-scuro.png" autoplay muted loop
+            playsinline preload="metadata" aria-label="PhotoScan desktop app walkthrough video">
+          </video>
+          <button type="button" class="video-toggle" data-video-toggle aria-label="Pause or play preview video"
+            title="Pause / Play">
+            <svg class="ic-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <rect x="6" y="4" width="4" height="16" rx="1" />
+              <rect x="14" y="4" width="4" height="16" rx="1" />
             </svg>
-          </div>
-          <h3>Automatic organization</h3>
-          <p>Proposes folders by date and context, such as <em>2024/03 - Seaside holiday</em>. Review everything in
-            simulation before applying.</p>
-        </article>
-        <article class="feat-card">
-          <div class="feat-card__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="11" cy="11" r="8" />
-              <path d="M21 21l-4.35-4.35" />
+            <svg class="ic-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="display:none">
+              <polygon points="6,4 20,12 6,20" />
             </svg>
-          </div>
-          <h3>Natural-language search</h3>
-          <p>Type "sunset", "birthday cake" or "dog in snow" to find the right pictures, even without tags or meaningful
-            filenames.</p>
-        </article>
-        <article class="feat-card">
-          <div class="feat-card__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="9" y="9" width="13" height="13" rx="2" />
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-            </svg>
-          </div>
-          <h3>Duplicates &amp; similar shots</h3>
-          <p>Finds exact copies and near-identical photos. Pick what to keep or send to the Recycle Bin in bulk —
-            nothing is deleted behind your back.</p>
-        </article>
-        <article class="feat-card">
-          <div class="feat-card__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
-              <circle cx="12" cy="10" r="3" />
-            </svg>
-          </div>
-          <h3>Places on a map</h3>
-          <p>Reads GPS coordinates from your photos to display them on an interactive map and help you rediscover past
-            trips.</p>
-        </article>
-        <article class="feat-card">
-          <div class="feat-card__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-              <circle cx="9" cy="7" r="4" />
-              <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-            </svg>
-          </div>
-          <h3>People (optional)</h3>
-          <p>Groups recurring faces and lets you name them. Face recognition is off by default and only runs if you
-            enable it.</p>
-        </article>
-        <article class="feat-card">
-          <div class="feat-card__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="6" y="2" width="12" height="20" rx="2" />
-              <path d="M11 18h2" />
-              <path d="M12 8v6M9 11l3 3 3-3" />
-            </svg>
-          </div>
-          <h3>Import from phone</h3>
-          <p>Copies photos and videos from an Android phone connected via USB. The phone is only read, nothing is
-            deleted, and existing files are never overwritten.</p>
-        </article>
-        <article class="feat-card">
-          <div class="feat-card__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="2" y="3" width="20" height="14" rx="2" />
-              <path d="M8 21h8M12 17v4" />
-            </svg>
-          </div>
-          <h3>Dedicated desktop app</h3>
-          <p>Launches in its own window from the desktop shortcut, with light and dark themes and a responsive layout
-            for smaller screens.</p>
-        </article>
-      </div>
-
-      <div class="phone-banner">
-        <div class="phone-banner__left">
-          <div class="feat-card__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="5" y="2" width="14" height="20" rx="2.5" />
-              <path d="M12 18h.01" />
-            </svg>
-          </div>
-          <div>
-            <h3>Direct import from Android &amp; iPhone</h3>
-            <p>Plug your phone into your PC over USB, pick folders and copy photos and videos locally: your phone stays
-              read-only, already-copied files are skipped automatically, and transfers can be resumed anytime.</p>
-          </div>
-        </div>
-        <div class="phone-banner__tags">
-          <span class="phone-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M20 6L9 17l-5-5" />
-            </svg>Android (MTP)</span>
-          <span class="phone-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M20 6L9 17l-5-5" />
-            </svg>iPhone (USB / HEIC)</span>
-          <span class="phone-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M20 6L9 17l-5-5" />
-            </svg>Read-only</span>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section id="features" class="section--alt">
-    <div class="wrap">
-      <div class="sec-head">
-        <span class="sec-eyebrow">Preview</span>
-        <h2>Explore the interface</h2>
-        <p>Click any screenshot to inspect it full-screen. Captured on a sample library built with Unsplash photos.</p>
-      </div>
-      <div class="shots">
-        <figure class="shot">
-          <div class="shot__media" data-lightbox
-            data-caption="Home: archive overview, memories and quick actions at a glance">
-            <img src="../img/01-home.png" alt="PhotoScan home page" loading="lazy">
-            <span class="shot__zoom" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                stroke-width="2">
-                <circle cx="11" cy="11" r="7" />
-                <path d="M21 21l-4.35-4.35M11 8v6M8 11h6" />
-              </svg></span>
-          </div>
-          <figcaption><span class="shot__title">Home</span><span class="shot__desc">Archive status at a glance</span>
-          </figcaption>
-        </figure>
-
-        <figure class="shot">
-          <div class="shot__media" data-lightbox
-            data-caption="Chronological gallery with fast year and month scrubbing">
-            <img src="../img/02-galleria.png" alt="Photo gallery sorted by date" loading="lazy">
-            <span class="shot__zoom" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                stroke-width="2">
-                <circle cx="11" cy="11" r="7" />
-                <path d="M21 21l-4.35-4.35M11 8v6M8 11h6" />
-              </svg></span>
-          </div>
-          <figcaption><span class="shot__title">Gallery</span><span class="shot__desc">Fast scrubbing by year and
-              month</span></figcaption>
-        </figure>
-
-        <figure class="shot">
-          <div class="shot__media" data-lightbox data-caption="Semantic search by words, such as 'sunset' or 'snow'">
-            <img src="../img/03-cerca.png" alt="Search by words" loading="lazy">
-            <span class="shot__zoom" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                stroke-width="2">
-                <circle cx="11" cy="11" r="7" />
-                <path d="M21 21l-4.35-4.35M11 8v6M8 11h6" />
-              </svg></span>
-          </div>
-          <figcaption><span class="shot__title">AI Search</span><span class="shot__desc">Find photos by describing
-              them</span></figcaption>
-        </figure>
-
-        <figure class="shot">
-          <div class="shot__media" data-lightbox
-            data-caption="Full-screen viewer with zoom, EXIF details, favorites and albums">
-            <img src="../img/05-visualizzatore.png" alt="Full-screen viewer" loading="lazy">
-            <span class="shot__zoom" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                stroke-width="2">
-                <circle cx="11" cy="11" r="7" />
-                <path d="M21 21l-4.35-4.35M11 8v6M8 11h6" />
-              </svg></span>
-          </div>
-          <figcaption><span class="shot__title">Viewer</span><span class="shot__desc">Zoom, EXIF info, favorites &amp;
-              albums</span></figcaption>
-        </figure>
-
-        <figure class="shot">
-          <div class="shot__media" data-lightbox
-            data-caption="Places: browse your geotagged photos on an interactive map">
-            <img src="../img/06-luoghi.png" alt="Places map" loading="lazy">
-            <span class="shot__zoom" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                stroke-width="2">
-                <circle cx="11" cy="11" r="7" />
-                <path d="M21 21l-4.35-4.35M11 8v6M8 11h6" />
-              </svg></span>
-          </div>
-          <figcaption><span class="shot__title">Places</span><span class="shot__desc">Your photos on a GPS map</span>
-          </figcaption>
-        </figure>
-
-        <figure class="shot">
-          <div class="shot__media" data-lightbox
-            data-caption="Duplicates: exact and near-identical groups with side-by-side comparison">
-            <img src="../img/09-duplicati.png" alt="Duplicate management" loading="lazy">
-            <span class="shot__zoom" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                stroke-width="2">
-                <circle cx="11" cy="11" r="7" />
-                <path d="M21 21l-4.35-4.35M11 8v6M8 11h6" />
-              </svg></span>
-          </div>
-          <figcaption><span class="shot__title">Duplicates</span><span class="shot__desc">Compare exact and similar
-              copies</span></figcaption>
-        </figure>
-
-        <figure class="shot">
-          <div class="shot__media" data-lightbox data-caption="Full dark theme synced with Windows">
-            <img src="../img/13-home-scuro.png" alt="Dark theme" loading="lazy">
-            <span class="shot__zoom" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                stroke-width="2">
-                <circle cx="11" cy="11" r="7" />
-                <path d="M21 21l-4.35-4.35M11 8v6M8 11h6" />
-              </svg></span>
-          </div>
-          <figcaption><span class="shot__title">Dark theme</span><span class="shot__desc">Follows system or manual
-              toggle</span></figcaption>
-        </figure>
-
-        <figure class="shot shot--mobile">
-          <div class="shot__media" data-lightbox data-caption="Adaptive layout that works cleanly on phone screens too">
-            <img src="../img/14-telefono-galleria.png" alt="Gallery on a phone" loading="lazy">
-            <span class="shot__zoom" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                stroke-width="2">
-                <circle cx="11" cy="11" r="7" />
-                <path d="M21 21l-4.35-4.35M11 8v6M8 11h6" />
-              </svg></span>
-          </div>
-          <figcaption><span class="shot__title">Responsive</span><span class="shot__desc">Usable on phone screens as
-              well</span></figcaption>
-        </figure>
-      </div>
-    </div>
-  </section>
-
-  <section id="how">
-    <div class="wrap">
-      <div class="sec-head">
-        <span class="sec-eyebrow">Guided workflow</span>
-        <h2>Four steps, always under your control</h2>
-        <p>Pause and resume whenever you like — files already processed are never scanned twice.</p>
-      </div>
-      <ol class="steps">
-        <li>
-          <strong>Choose your archive</strong>
-          <span>Point PhotoScan to your original photos folder. It is only ever read, never modified.</span>
-        </li>
-        <li>
-          <strong>Local analysis</strong>
-          <span>Reads dates, GPS and image content using an AI model running on your PC. Fully resumable.</span>
-        </li>
-        <li>
-          <strong>Review duplicates &amp; plan</strong>
-          <span>Inspect exact or similar copies and preview the suggested folder tree. Nothing on disk has changed
-            yet.</span>
-        </li>
-        <li>
-          <strong>Apply when ready</strong>
-          <span>Only after your explicit confirmation does PhotoScan build the new folder tree (via links or copies) or
-            move chosen copies to the Recycle Bin.</span>
-        </li>
-      </ol>
-    </div>
-  </section>
-
-  <section id="safety" class="section--alt">
-    <div class="wrap">
-      <div class="safety-box">
-        <div>
-          <div class="safety-box__badge" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-              <path d="M9 12l2 2 4-4" />
-            </svg>
-          </div>
-          <h2>Your memories stay safe</h2>
-          <p class="safety-box__lead">PhotoScan's core rule is simple: no silent edits, no cloud uploads, and no
-            automatic deletion.</p>
-        </div>
-        <ul class="safety-list">
-          <li>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M20 6L9 17l-5-5" />
-            </svg>
-            <span>Your original photos folder is always treated as <strong>read-only</strong>.</span>
-          </li>
-          <li>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M20 6L9 17l-5-5" />
-            </svg>
-            <span>Everything starts in <strong>simulation</strong>: preview the entire plan first, then decide.</span>
-          </li>
-          <li>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M20 6L9 17l-5-5" />
-            </svg>
-            <span>Duplicates are separated into <code>_Duplicati</code>; any files you choose to remove go to the
-              <strong>Windows Recycle Bin</strong>.</span>
-          </li>
-          <li>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M20 6L9 17l-5-5" />
-            </svg>
-            <span>No online service for your photos — the only network request is the optional update check.</span>
-          </li>
-          <li>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M20 6L9 17l-5-5" />
-            </svg>
-            <span>Every folder-creation run writes a detailed log in the destination folder.</span>
-          </li>
-        </ul>
-      </div>
-    </div>
-  </section>
-
-  <section id="installation">
-    <div class="wrap">
-      <div class="sec-head">
-        <span class="sec-eyebrow">Quick start</span>
-        <h2>Installation (Windows)</h2>
-        <p>Requires Python 3.13 and, recommended, an NVIDIA GPU. Also runs CPU-only if no NVIDIA card is present.</p>
-      </div>
-
-      <div class="term">
-        <div class="term__head">
-          <div class="term__left">
-            <span class="window-frame__dots" aria-hidden="true"><i></i><i></i><i></i></span>
-            <span>PowerShell</span>
-          </div>
-          <button type="button" class="term__copy" data-copy-target="install-cmd" data-copied-label="Copied!">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="9" y="9" width="13" height="13" rx="2" />
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-            </svg>
-            <span>Copy</span>
           </button>
         </div>
-        <pre><code id="install-cmd">git clone https://github.com/RedErik21/PhotoScan.git
-cd PhotoScan
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126   # NVIDIA GPU (or: pip install torch torchvision)
-pip install -r requirements.txt
-winget install Gyan.FFmpeg                                                         # optional, for videos</code></pre>
       </div>
+    </header>
 
-      <p class="install-note">
-        On first use, the recognition model (~400 MB) is downloaded once.
-        Start PhotoScan with <code>.\.venv\Scripts\pythonw.exe -m fotoscan.desktop</code> or from the desktop shortcut.
-      </p>
-    </div>
-  </section>
+    <section id="screenshots" class="showcase">
+      <div class="wrap">
+        <div class="sec-row">
+          <h2>Inside the app</h2>
+          <p>Switch views below, or click the preview to inspect full-screen.</p>
+        </div>
 
-  <section id="faq" class="section--alt">
-    <div class="wrap">
-      <div class="sec-head">
-        <span class="sec-eyebrow">FAQ</span>
-        <h2>Frequently asked questions</h2>
-      </div>
-      <div class="faq-list">
-        <details>
-          <summary>Are my photos uploaded online?</summary>
-          <p>No. Analysis, search and organization run entirely on your computer. The only network connection is
-            checking GitHub for new releases, which you can disable in Settings.</p>
-        </details>
-        <details>
-          <summary>Does it delete my photos?</summary>
-          <p>No. Originals remain read-only and duplicates are separated rather than auto-deleted. If you choose to free
-            up space, selected files are moved to the Windows Recycle Bin after explicit confirmation.</p>
-        </details>
-        <details>
-          <summary>How much disk space does it need?</summary>
-          <p>Beyond the app and the recognition model, the catalog and thumbnail cache scale with your library size.
-            PhotoScan is designed for archives around 200 GB and 14,000+ files.</p>
-        </details>
-        <details>
-          <summary>Can I pause the analysis?</summary>
-          <p>Yes. Closing the app stops indexing cleanly, and reopening resumes from the files not yet processed.</p>
-        </details>
-        <details>
-          <summary>Can I import photos directly from Android and iPhone?</summary>
-          <p>Yes. Connect your phone via USB: PhotoScan supports both Android (MTP) and iPhone, reads your device in
-            read-only mode, skips already-copied files automatically, and handles HEIC photos and videos.</p>
-        </details>
-        <details>
-          <summary>Which formats are supported?</summary>
-          <p>JPEG, PNG, WebP, TIFF, HEIC (built-in support) and videos (MP4, MOV, MKV, etc. via FFmpeg). HEIC and TIFF
-            files are displayed via locally generated JPEG previews.</p>
-        </details>
-        <details>
-          <summary>How do I update PhotoScan?</summary>
-          <p>New versions appear on GitHub Releases and inside Settings &gt; Updates. Updates install on relaunch with
-            an automatic backup.</p>
-        </details>
-        <details>
-          <summary>Is face recognition mandatory?</summary>
-          <p>No. It is disabled by default and can be enabled anytime in Settings.</p>
-        </details>
-      </div>
-    </div>
-  </section>
+        <div class="tabs" role="tablist" aria-label="Application screenshots">
+          <button type="button" class="tab is-active" role="tab" aria-selected="true" data-shot-tab="0">Home</button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-shot-tab="1">AI Search</button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-shot-tab="2">Duplicates</button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-shot-tab="3">Places</button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-shot-tab="4">Gallery</button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-shot-tab="5">Viewer</button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-shot-tab="6">Dark theme</button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-shot-tab="7">Mobile</button>
+        </div>
 
-  <section id="requirements">
-    <div class="wrap">
-      <div class="sec-head">
-        <span class="sec-eyebrow">Specs</span>
-        <h2>System requirements</h2>
+        <div class="stage">
+          <button type="button" class="stage__frame" id="stage-trigger" aria-label="Enlarge screenshot">
+            <img id="stage-img" src="../img/01-home.png" alt="PhotoScan home page">
+            <span class="stage__zoom" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="7" />
+                <path d="M21 21l-4.35-4.35M11 8v6M8 11h6" />
+              </svg>
+            </span>
+          </button>
+          <div class="stage__bar">
+            <p class="stage__caption" id="stage-caption">Home: archive overview, memories and quick actions at a glance.</p>
+            <div class="stage__nav">
+              <button type="button" class="icon-btn" id="stage-prev" aria-label="Previous screenshot">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M15 18l-6-6 6-6" />
+                </svg>
+              </button>
+              <button type="button" class="icon-btn" id="stage-next" aria-label="Next screenshot">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M9 18l6-6-6-6" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="stage__data" hidden>
+            <span data-src="../img/01-home.png" data-alt="PhotoScan home page"
+              data-caption="Home: archive overview, memories and quick actions at a glance."></span>
+            <span data-src="../img/03-cerca.png" data-alt="Local AI search by words"
+              data-caption="AI Search: type 'sunset', 'birthday cake' or 'dog in snow' to find matching photos even without tags."></span>
+            <span data-src="../img/09-duplicati.png" data-alt="Duplicate and similar shot comparison"
+              data-caption="Duplicates: compare exact copies and near-identical shots, and decide what to keep or send to the Recycle Bin."></span>
+            <span data-src="../img/06-luoghi.png" data-alt="Interactive GPS places map"
+              data-caption="Places: browse your geotagged photos on an interactive map to rediscover past trips."></span>
+            <span data-src="../img/02-galleria.png" data-alt="Chronological photo gallery"
+              data-caption="Gallery: fast chronological scrubbing by year and month, built for libraries with tens of thousands of files."></span>
+            <span data-src="../img/05-visualizzatore.png" data-alt="Full-screen photo viewer"
+              data-caption="Viewer: full-screen zoom, EXIF details, favorites and album management."></span>
+            <span data-src="../img/13-home-scuro.png" data-alt="PhotoScan dark theme"
+              data-caption="Dark theme: full dark mode synced with Windows system settings."></span>
+            <span data-src="../img/14-telefono-galleria.png" data-alt="Adaptive layout on phone screens" data-mobile="true"
+              data-caption="Responsive: adaptive layout that works cleanly on narrow windows and phone screens too."></span>
+          </div>
+        </div>
+
+        <div class="highlights">
+          <div class="highlight">
+            <h3>Folders by year &amp; event</h3>
+            <p>Suggests clean folders like <em>2024/03 - Seaside holiday</em>. Review the full plan in simulation before applying with links or copies.</p>
+          </div>
+          <div class="highlight">
+            <h3>Import from Android &amp; iPhone</h3>
+            <p>Plug your phone in over USB: PhotoScan reads in read-only mode, handles HEIC photos and videos, and skips already-copied files.</p>
+          </div>
+          <div class="highlight">
+            <h3>People (optional)</h3>
+            <p>Groups recurring faces locally so you can name them. Disabled by default and only runs if you enable it in Settings.</p>
+          </div>
+        </div>
       </div>
-      <div class="req-grid">
-        <div class="req-card">
-          <div class="req-card__label">OS</div>
-          <div class="req-card__val">Windows 10 or 11</div>
+    </section>
+
+    <section id="how" class="editorial">
+      <div class="wrap editorial__grid">
+        <div>
+          <h2>How it works</h2>
+          <p class="editorial__lead">Four resumable steps — files already processed are never scanned twice.</p>
+          <ol class="flow">
+            <li>
+              <span class="flow__n">01</span>
+              <div>
+                <strong>Choose your archive</strong>
+                <p>Point PhotoScan to your original photos folder. It is only ever read, never modified.</p>
+              </div>
+            </li>
+            <li>
+              <span class="flow__n">02</span>
+              <div>
+                <strong>Local AI analysis</strong>
+                <p>Reads dates, GPS and image content right on your PC with SigLIP2 (NVIDIA GPU or CPU).</p>
+              </div>
+            </li>
+            <li>
+              <span class="flow__n">03</span>
+              <div>
+                <strong>Review duplicates &amp; plan</strong>
+                <p>Inspect similar copies and the proposed folder tree in preview: nothing on disk has changed yet.</p>
+              </div>
+            </li>
+            <li>
+              <span class="flow__n">04</span>
+              <div>
+                <strong>Apply when ready</strong>
+                <p>Builds the new structure only after your explicit confirmation, writing a detailed log in the destination.</p>
+              </div>
+            </li>
+          </ol>
         </div>
-        <div class="req-card">
-          <div class="req-card__label">Python</div>
-          <div class="req-card__val">Python 3.13</div>
+
+        <aside class="safety-panel" aria-label="Safety guarantees">
+          <h3>Your memories stay safe</h3>
+          <p>No silent edits, no cloud uploads, and no automatic deletion.</p>
+          <ul>
+            <li>Originals folder is always treated as <strong>read-only</strong>.</li>
+            <li>Everything starts in <strong>simulation</strong> first.</li>
+            <li>Duplicates are separated into <code>_Duplicati</code>; any files you choose to remove go to the <strong>Windows Recycle Bin</strong>.</li>
+            <li>No photos leave your PC — the only network request is the optional update check.</li>
+          </ul>
+        </aside>
+      </div>
+    </section>
+
+    <section id="installation" class="download">
+      <div class="wrap">
+        <div class="download__band">
+          <div class="download__text">
+            <h2>Install on Windows</h2>
+            <p>A single guided installer: checks your PC, picks the best configuration automatically (NVIDIA GPU or CPU), and creates a Desktop icon.</p>
+            <p class="download__steps">
+              <span><strong>1.</strong> Download <code>PhotoScan-Setup.exe</code></span>
+              <span><strong>2.</strong> Follow the setup wizard</span>
+              <span><strong>3.</strong> Launch from your Desktop</span>
+            </p>
+          </div>
+          <div class="download__cta">
+            <a class="btn btn--primary" href="https://github.com/RedErik21/PhotoScan/releases/latest" target="_blank"
+              rel="noopener">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              Download PhotoScan-Setup.exe
+            </a>
+            <span class="download__note">The AI model downloads once, on first launch.</span>
+          </div>
         </div>
-        <div class="req-card">
-          <div class="req-card__label">Graphics</div>
-          <div class="req-card__val">NVIDIA GPU recommended (CPU-only supported)</div>
-        </div>
-        <div class="req-card">
-          <div class="req-card__label">App window</div>
-          <div class="req-card__val">WebView2 / Edge or Google Chrome</div>
-        </div>
-        <div class="req-card">
-          <div class="req-card__label">Phone import</div>
-          <div class="req-card__val">Android (MTP) &amp; iPhone via USB cable</div>
-        </div>
-        <div class="req-card">
-          <div class="req-card__label">Disk space</div>
-          <div class="req-card__val">A few GB for app &amp; model + catalog</div>
+
+        <dl class="specs">
+          <div>
+            <dt>System</dt>
+            <dd>Windows 10 or 11</dd>
+          </div>
+          <div>
+            <dt>Hardware</dt>
+            <dd>NVIDIA GPU recommended (CPU-only supported)</dd>
+          </div>
+          <div>
+            <dt>Formats</dt>
+            <dd>JPEG, PNG, WebP, TIFF, HEIC &amp; videos</dd>
+          </div>
+          <div>
+            <dt>Phone import</dt>
+            <dd>Android (MTP) &amp; iPhone via USB</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+
+    <section id="faq" class="faq">
+      <div class="wrap">
+        <div class="faq__layout">
+          <div>
+            <h2>Frequently asked questions</h2>
+            <p class="faq__lead">Quick answers before you try it.</p>
+          </div>
+          <div class="faq__list">
+            <details>
+              <summary>Are my photos uploaded online?</summary>
+              <p>No. Analysis, search and organization run entirely on your computer. The only network connection is checking GitHub for new releases, which you can disable in Settings.</p>
+            </details>
+            <details>
+              <summary>Can it delete my photos?</summary>
+              <p>No. Originals stay read-only and duplicates are separated rather than deleted. If you choose to free up space, selected files move to the Windows Recycle Bin after explicit confirmation.</p>
+            </details>
+            <details>
+              <summary>How much space does it need and can I pause it?</summary>
+              <p>A few GB for the app, AI model and thumbnail cache. PhotoScan is designed for real ~200 GB / 14,000+ file libraries, and you can close and resume indexing anytime.</p>
+            </details>
+            <details>
+              <summary>How does Android &amp; iPhone import work?</summary>
+              <p>Connect your phone via USB: PhotoScan reads your device in read-only mode, skips already-copied files automatically, and supports HEIC photos and videos.</p>
+            </details>
+            <details>
+              <summary>How do I update PhotoScan?</summary>
+              <p>New versions appear on GitHub Releases and in Settings &gt; Updates. Updates install on relaunch with an automatic backup.</p>
+            </details>
+          </div>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
+  </main>
 
   <footer>
     <div class="wrap footer__inner">
-      <div>PhotoScan · Released under the <strong>MIT</strong> license. Bundled libraries and downloaded models retain
-        their respective licenses.</div>
+      <span>PhotoScan · <strong>MIT</strong> license · Bundled libraries and downloaded models retain their respective licenses.</span>
       <div class="footer__links">
         <a href="https://github.com/RedErik21/PhotoScan" target="_blank" rel="noopener">GitHub</a>
         <a href="https://github.com/RedErik21/PhotoScan/releases" target="_blank" rel="noopener">Releases</a>
