@@ -1,4 +1,4 @@
-// PhotoScan site enhancements: mobile nav drawer, light/dark theme toggle, copy-to-clipboard, and touch-enabled screenshot lightbox.
+// PhotoScan site: theme toggle, mobile nav drawer, interactive screenshot tabs, video control, and touch lightbox.
 (() => {
   const THEME_KEY = 'photoscan.site.theme';
   const root = document.documentElement;
@@ -13,7 +13,7 @@
   }
 
   function syncThemeColor() {
-    const color = isDark() ? '#0f0e17' : '#f6f6fb';
+    const color = isDark() ? '#111114' : '#fafaf9';
     let meta = document.querySelector('meta[name="theme-color"]:not([media])');
     if (!meta) {
       meta = document.createElement('meta');
@@ -21,13 +21,6 @@
       document.head.append(meta);
     }
     meta.content = color;
-  }
-
-  function syncHeroImage() {
-    const heroImg = document.querySelector('[data-hero-img]');
-    if (!heroImg) return;
-    const next = isDark() ? heroImg.dataset.darkSrc : heroImg.dataset.lightSrc;
-    if (next && heroImg.getAttribute('src') !== next) heroImg.setAttribute('src', next);
   }
 
   function syncThemeBtn() {
@@ -47,16 +40,14 @@
   } catch { /* ignore */ }
 
   syncThemeBtn();
-  syncHeroImage();
   syncThemeColor();
-  mqDark.addEventListener('change', () => { syncThemeBtn(); syncHeroImage(); syncThemeColor(); });
+  mqDark.addEventListener('change', () => { syncThemeBtn(); syncThemeColor(); });
 
   document.getElementById('theme-toggle')?.addEventListener('click', () => {
     const next = isDark() ? 'light' : 'dark';
     root.setAttribute('data-theme', next);
     try { localStorage.setItem(THEME_KEY, next); } catch { /* ignore */ }
     syncThemeBtn();
-    syncHeroImage();
     syncThemeColor();
   });
 
@@ -92,33 +83,14 @@
         menuBtn.focus();
       }
     });
-    window.matchMedia('(min-width: 861px)').addEventListener('change', (e) => {
+    window.matchMedia('(min-width: 761px)').addEventListener('change', (e) => {
       if (e.matches && !mobileMenu.hidden) setMenuOpen(false);
     });
   }
 
-  // Copy command button
-  document.querySelectorAll('[data-copy-target]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const target = document.getElementById(btn.dataset.copyTarget);
-      if (!target) return;
-      try {
-        await navigator.clipboard.writeText(target.textContent.trim());
-        const label = btn.querySelector('span');
-        const orig = label?.textContent || '';
-        if (label) label.textContent = btn.dataset.copiedLabel || 'Copied!';
-        btn.classList.add('is-copied');
-        setTimeout(() => {
-          if (label) label.textContent = orig;
-          btn.classList.remove('is-copied');
-        }, 1800);
-      } catch { /* ignore */ }
-    });
-  });
-
-  // Hero video play/pause + prefers-reduced-motion support
+  // Hero video play/pause + prefers-reduced-motion
   document.querySelectorAll('[data-video-toggle]').forEach((btn) => {
-    const video = btn.closest('.window-frame__media')?.querySelector('video');
+    const video = btn.closest('.hero__media')?.querySelector('video');
     if (!video) return;
     const icPause = btn.querySelector('.ic-pause');
     const icPlay = btn.querySelector('.ic-play');
@@ -128,9 +100,7 @@
       if (icPlay) icPlay.style.display = paused ? 'block' : 'none';
       btn.setAttribute('aria-pressed', String(!paused));
     };
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      video.pause();
-    }
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) video.pause();
     video.addEventListener('play', sync);
     video.addEventListener('pause', sync);
     btn.addEventListener('click', () => {
@@ -140,10 +110,64 @@
     sync();
   });
 
-  // Lightbox for screenshots + hero
-  const triggers = [...document.querySelectorAll('[data-lightbox]')];
-  if (!triggers.length) return;
+  // Interactive screenshot showcase + lightbox
+  const shots = [...document.querySelectorAll('.stage__data span')].map((el) => ({
+    src: el.dataset.src,
+    alt: el.dataset.alt || '',
+    caption: el.dataset.caption || '',
+    mobile: el.dataset.mobile === 'true',
+  }));
+  if (!shots.length) return;
 
+  const tabs = [...document.querySelectorAll('[data-shot-tab]')];
+  const stageTrigger = document.getElementById('stage-trigger');
+  const stageImg = document.getElementById('stage-img');
+  const stageCap = document.getElementById('stage-caption');
+  let active = 0;
+
+  function selectShot(i, scrollTab = false) {
+    active = (i + shots.length) % shots.length;
+    const s = shots[active];
+    if (stageImg) {
+      stageImg.src = s.src;
+      stageImg.alt = s.alt;
+    }
+    if (stageCap) stageCap.textContent = s.caption;
+    if (stageTrigger) stageTrigger.classList.toggle('is-mobile-shot', s.mobile);
+    tabs.forEach((t, idx) => {
+      const on = idx === active;
+      t.classList.toggle('is-active', on);
+      t.setAttribute('aria-selected', String(on));
+      if (on && scrollTab) t.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    });
+  }
+
+  tabs.forEach((tab) => {
+    tab.addEventListener('click', () => selectShot(Number(tab.dataset.shotTab)));
+  });
+  document.getElementById('stage-prev')?.addEventListener('click', () => selectShot(active - 1, true));
+  document.getElementById('stage-next')?.addEventListener('click', () => selectShot(active + 1, true));
+
+  // Touch swipe on the stage itself
+  if (stageTrigger) {
+    let sx = 0;
+    let sy = 0;
+    stageTrigger.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) return;
+      sx = e.touches[0].clientX;
+      sy = e.touches[0].clientY;
+    }, { passive: true });
+    stageTrigger.addEventListener('touchend', (e) => {
+      if (e.changedTouches.length !== 1) return;
+      const dx = e.changedTouches[0].clientX - sx;
+      const dy = e.changedTouches[0].clientY - sy;
+      if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+        selectShot(dx > 0 ? active - 1 : active + 1, true);
+      }
+    }, { passive: true });
+  }
+
+  // Lightbox
   const lb = document.createElement('div');
   lb.className = 'lightbox';
   lb.setAttribute('role', 'dialog');
@@ -167,56 +191,51 @@
   const lbImg = lb.querySelector('.lightbox__img');
   const lbCap = lb.querySelector('.lightbox__caption');
   const lbCounter = lb.querySelector('.lightbox__counter');
-  let cur = 0;
 
-  function show(i) {
-    cur = (i + triggers.length) % triggers.length;
-    const el = triggers[cur];
-    const img = el.tagName === 'IMG' ? el : el.querySelector('img');
-    lbImg.src = img.currentSrc || img.src;
-    lbImg.alt = img.alt || '';
-    lbCap.textContent = el.dataset.caption || img.alt || '';
-    lbCounter.textContent = `${cur + 1} / ${triggers.length}`;
+  function openLightbox(i) {
+    selectShot(i);
+    const s = shots[active];
+    lbImg.src = s.src;
+    lbImg.alt = s.alt;
+    lbCap.textContent = s.caption;
+    lbCounter.textContent = `${active + 1} / ${shots.length}`;
     lb.classList.add('is-open');
     lb.setAttribute('aria-hidden', 'false');
     document.body.style.overflow = 'hidden';
   }
 
-  function close() {
+  function closeLightbox() {
     lb.classList.remove('is-open');
     lb.setAttribute('aria-hidden', 'true');
     document.body.style.overflow = '';
   }
 
-  triggers.forEach((el, i) => {
-    el.addEventListener('click', () => show(i));
-  });
-  lb.addEventListener('click', (e) => { if (e.target === lb) close(); });
-  lb.querySelector('.lightbox__close').addEventListener('click', close);
-  lb.querySelector('.lightbox__prev').addEventListener('click', () => show(cur - 1));
-  lb.querySelector('.lightbox__next').addEventListener('click', () => show(cur + 1));
+  stageTrigger?.addEventListener('click', () => openLightbox(active));
+  lb.addEventListener('click', (e) => { if (e.target === lb) closeLightbox(); });
+  lb.querySelector('.lightbox__close').addEventListener('click', closeLightbox);
+  lb.querySelector('.lightbox__prev').addEventListener('click', () => openLightbox(active - 1));
+  lb.querySelector('.lightbox__next').addEventListener('click', () => openLightbox(active + 1));
 
-  // Touch swipe navigation inside lightbox
-  let touchStartX = 0;
-  let touchStartY = 0;
+  let lbX = 0;
+  let lbY = 0;
   lb.addEventListener('touchstart', (e) => {
     if (e.touches.length !== 1) return;
-    touchStartX = e.touches[0].clientX;
-    touchStartY = e.touches[0].clientY;
+    lbX = e.touches[0].clientX;
+    lbY = e.touches[0].clientY;
   }, { passive: true });
   lb.addEventListener('touchend', (e) => {
     if (!lb.classList.contains('is-open') || e.changedTouches.length !== 1) return;
-    const dx = e.changedTouches[0].clientX - touchStartX;
-    const dy = e.changedTouches[0].clientY - touchStartY;
+    const dx = e.changedTouches[0].clientX - lbX;
+    const dy = e.changedTouches[0].clientY - lbY;
     if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.2) {
-      show(dx > 0 ? cur - 1 : cur + 1);
+      openLightbox(dx > 0 ? active - 1 : active + 1);
     }
   }, { passive: true });
 
   document.addEventListener('keydown', (e) => {
     if (!lb.classList.contains('is-open')) return;
-    if (e.key === 'Escape') close();
-    else if (e.key === 'ArrowLeft') show(cur - 1);
-    else if (e.key === 'ArrowRight') show(cur + 1);
+    if (e.key === 'Escape') closeLightbox();
+    else if (e.key === 'ArrowLeft') openLightbox(active - 1);
+    else if (e.key === 'ArrowRight') openLightbox(active + 1);
   });
 })();
