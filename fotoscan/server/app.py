@@ -13,10 +13,10 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import jobs
-from ..config import ROOT
+from ..config import CODE_ROOT
 from ..version import __version__
 
-FRONTEND = ROOT / "frontend"
+FRONTEND = CODE_ROOT / "frontend"
 core = APIRouter(prefix="/api", tags=["core"])
 
 

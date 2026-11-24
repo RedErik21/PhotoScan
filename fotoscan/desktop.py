@@ -20,7 +20,8 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from .config import CODE_ROOT, FROZEN, ROOT
+
 LOG = ROOT / "fotoscan_ui.log"
 CACHE = ROOT / "cache"
 STATE = CACHE / "desktop_server.json"   # {"port", "pid"} del server avviato da questo launcher
@@ -28,7 +29,7 @@ PROFILE = CACHE / "webprofile"          # profilo dedicato: finestra separata da
 PREFERRED_PORT = 8765
 WINDOW_SIZE = "1400,900"
 APP_NAME = "PhotoScan"
-APP_ICON = Path(__file__).resolve().parent / "photoscan.ico"
+APP_ICON = CODE_ROOT / "fotoscan" / "photoscan.ico"
 APP_USER_MODEL_ID = "FotoScan.App"       # identità nella barra delle applicazioni (raggruppa e mostra il nome)
 START_TIMEOUT = 120  # secondi: il primo avvio puo' importare torch
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -172,6 +173,8 @@ def _install_pending_update() -> None:
         from .config import load_config
 
         cfg = load_config()
+        if FROZEN:  # PhotoScan.exe: nessun file del programma da sostituire (vedi routes_update)
+            return
         if not updater.read_pending(cfg.cache_dir):
             return
         res = updater.apply_pending(ROOT, cfg.cache_dir, force=cfg.update_auto_install, logger=_log_line)
@@ -193,7 +196,8 @@ def _install_pending_update() -> None:
 def _relaunch() -> None:
     """Nuova istanza del launcher (dopo «Installa e riavvia»): installa l'aggiornamento e riapre la finestra."""
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    subprocess.Popen([sys.executable, "-m", "fotoscan.desktop"], cwd=str(ROOT), stdin=subprocess.DEVNULL,
+    cmd = [sys.executable] if FROZEN else [sys.executable, "-m", "fotoscan.desktop"]
+    subprocess.Popen(cmd, cwd=str(ROOT), stdin=subprocess.DEVNULL,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags, close_fds=True)
 
 

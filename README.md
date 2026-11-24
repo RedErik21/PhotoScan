@@ -1,4 +1,4 @@
-# FotoScan 2
+# FotoScan
 
 FotoScan è un'applicazione locale (nessun servizio online: solo il controllo degli aggiornamenti, disattivabile) che indicizza un archivio di foto e video
 (pensato per circa 200 GB, ~14.000 file), riconosce il contenuto delle immagini con un modello di
@@ -106,7 +106,7 @@ Una copia ottenuta con `git clone` può cercare gli aggiornamenti ma non install
 
 1. Una volta sola: in `fotoscan/version.py` impostare `UPDATE_REPO = "proprietario/repository"`.
 2. Alzare `__version__` in `fotoscan/version.py` e fare commit.
-3. Creare e spingere il tag: `git tag v2.1.0` e `git push origin v2.1.0` (con `-beta.1` diventa una versione di prova).
+3. Creare e spingere il tag: `git tag v0.1.3` e `git push origin v0.1.3` (con `-beta.1` diventa una versione di prova).
 
 Il workflow `.github/workflows/release.yml` verifica che il tag corrisponda a `__version__` e crea la Release;
 le note sono generate dai commit e compaiono nell'app.

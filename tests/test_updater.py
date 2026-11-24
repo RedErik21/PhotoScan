@@ -110,14 +110,14 @@ def test_check_saves_state_and_errors():
     cache = _TMP / "cache_check"
     orig = updater.fetch_releases
     try:
-        updater.fetch_releases = lambda repo: [_release("v1.0.0"), _release(f"v{NEW}")]
+        updater.fetch_releases = lambda repo: [_release("v0.0.1"), _release(f"v{NEW}")]
         st = updater.check(cache)
         assert st["available"] and st["latest"]["version"] == NEW and st["error"] is None, st
         assert updater.read_state(cache)["latest"]["version"] == NEW
 
-        updater.fetch_releases = lambda repo: [_release("v1.0.0")]
+        updater.fetch_releases = lambda repo: [_release("v0.0.1")]
         st = updater.check(cache)
-        assert not st["available"] and st["latest"]["version"] == "1.0.0"
+        assert not st["available"] and st["latest"]["version"] == "0.0.1"
 
         def boom(repo):
             raise TimeoutError("lento")
@@ -167,7 +167,7 @@ def test_download_stages_and_verifies():
             assert "non contiene FotoScan" in str(e)
 
         # versione non piu' recente
-        updater.fetch_zip = _fake_fetch_zip(_zip_bytes(version="1.0.0"))
+        updater.fetch_zip = _fake_fetch_zip(_zip_bytes(version="0.0.1"))
         try:
             updater.download(_TMP / "cache_dl3", info)
             raise AssertionError("versione vecchia accettata")

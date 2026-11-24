@@ -13,7 +13,7 @@ import time
 from fastapi import APIRouter, HTTPException
 
 from .. import updater
-from ..config import ROOT, Config
+from ..config import FROZEN, ROOT, Config
 from ..version import __version__, update_repo
 from . import jobs
 from .deps import get_cfg
@@ -41,6 +41,7 @@ def status(cfg: Config | None = None) -> dict:
         "repo": update_repo() or None,
         "configured": bool(update_repo()),
         "git_checkout": updater.is_git_checkout(ROOT),
+        "frozen": FROZEN,
         "settings": {k: getattr(cfg, k) for k in SETTING_KEYS},
         "checking": _check_lock.locked(),
         "check": None if not state else {
@@ -94,7 +95,7 @@ def run_check(cfg: Config | None = None, auto: bool = False) -> dict:
         _check_lock.release()
     latest = state.get("latest")
     pending = updater.read_pending(cfg.cache_dir)
-    if (state.get("available") and cfg.update_auto_download and not updater.is_git_checkout(ROOT)
+    if (state.get("available") and cfg.update_auto_download and not _self_update_off()
             and not (pending and pending.get("version") == latest.get("version"))):
         log.info("aggiornamento %s disponibile: download automatico", latest.get("version"))
         _start_download(cfg, latest)
@@ -117,6 +118,17 @@ def startup_check() -> None:
     threading.Thread(target=run, daemon=True, name="update-check").start()
 
 
+def _self_update_off() -> bool:
+    """Nell'eseguibile (PhotoScan.exe) o in una copia git l'app non sostituisce i propri file."""
+    return FROZEN or updater.is_git_checkout(ROOT)
+
+
+def _self_update_msg() -> str:
+    if FROZEN:
+        return "Questa copia è l'eseguibile di PhotoScan: scarica la nuova versione dalla pagina Release e sostituiscilo."
+    return "Questa copia di FotoScan viene da git: aggiornala con «git pull»."
+
+
 # ------------------------------------------------------------------ API
 @router.get("/update")
 def update_status():
@@ -133,8 +145,8 @@ def update_check():
 @router.post("/update/download")
 def update_download():
     cfg = get_cfg()
-    if updater.is_git_checkout(ROOT):
-        raise HTTPException(409, "Questa copia di FotoScan viene da git: aggiornala con «git pull».")
+    if _self_update_off():
+        raise HTTPException(409, _self_update_msg())
     st = status(cfg)
     if not (st["check"] and st["check"]["available"]):
         raise HTTPException(400, "Nessun aggiornamento disponibile. Cerca prima gli aggiornamenti.")
@@ -146,8 +158,8 @@ def update_download():
 def update_install():
     """Approva l'installazione dell'aggiornamento scaricato: avviene al prossimo avvio di FotoScan."""
     cfg = get_cfg()
-    if updater.is_git_checkout(ROOT):
-        raise HTTPException(409, "Questa copia di FotoScan viene da git: aggiornala con «git pull».")
+    if _self_update_off():
+        raise HTTPException(409, _self_update_msg())
     try:
         updater.set_approved(cfg.cache_dir, True)
     except updater.UpdateError as e:

@@ -1,4 +1,4 @@
-# Crea la Release GitHub quando si spinge un tag v<versione> (es. v2.1.0 o v2.2.0-beta.1).
+# Crea la Release GitHub quando si spinge un tag v<versione> (es. v0.1.3 o v0.2.0-beta.1).
 # FotoScan controlla le Release per gli aggiornamenti (fotoscan/updater.py) e scarica lo zip del sorgente.
 name: Release
 

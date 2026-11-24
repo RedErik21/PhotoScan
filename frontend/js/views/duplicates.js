@@ -267,8 +267,23 @@ export async function mount(root, { query = {}, signal } = {}) {
 
     if (hasSel) {
       let bytes = 0;
-      for (const id of selIds) bytes += Number(state.fileById.get(id)?.file?.size || 0);
+      const touchedEntries = new Set();
+      for (const id of selIds) {
+        const ref = state.fileById.get(id);
+        bytes += Number(ref?.file?.size || 0);
+        if (ref?.entry) touchedEntries.add(ref.entry);
+      }
       const fullGroups = countFullSelectedGroups();
+      // Se e' selezionata 1 sola foto non-master, offri "Imposta come originale"
+      const singleRef = selIds.length === 1 ? state.fileById.get(selIds[0]) : null;
+      const canSetMaster = !!(state.canKeep && singleRef && singleRef.entry.data.master.id !== singleRef.file.id);
+      // Se tutte le foto selezionate appartengono a 1 gruppo (o piu' gruppi), "Conserva interi gruppi" tiene tutte le copie di quei gruppi
+      const groupCopyIds = [];
+      for (const entry of touchedEntries) {
+        for (const m of shownMembers(entry.data)) groupCopyIds.push(m.id);
+      }
+      const showKeepWholeGroups = groupCopyIds.length > 0 && groupCopyIds.some((id) => !state.selected.has(id));
+
       actionInfo.replaceChildren(
         h('strong', {}, `${plural(selIds.length, 'foto selezionata', 'foto selezionate')} · ${formatBytes(bytes)}`),
         fullGroups > 0
@@ -278,16 +293,34 @@ export async function mount(root, { query = {}, signal } = {}) {
           : null);
       actionButtons.replaceChildren(
         h('md-text-button', { disabled: state.bulkBusy, onclick: () => clearSelection() }, 'Deseleziona'),
+        canSetMaster
+          ? h('md-outlined-button', {
+            disabled: state.bulkBusy,
+            onclick: async () => {
+              await commit(singleRef.entry, singleRef.file.id);
+              clearSelection();
+            },
+          }, icon('bookmark_added', { slot: 'icon' }), 'Imposta come originale')
+          : null,
+        showKeepWholeGroups
+          ? h('md-outlined-button', {
+            disabled: state.bulkBusy,
+            title: 'Conserva tutte le foto dei gruppi coinvolti come foto separate',
+            onclick: () => keepMany(groupCopyIds, touchedEntries.size === 1
+              ? 'Tutte le foto del gruppo conservate.'
+              : `Tutte le foto di ${plural(touchedEntries.size, 'gruppo', 'gruppi')} conservate.`),
+          }, icon('library_add_check', { slot: 'icon' }), touchedEntries.size === 1 ? 'Conserva tutto il gruppo' : 'Conserva gruppi')
+          : null,
         h('md-outlined-button', {
           disabled: state.bulkBusy,
           title: 'Marca le foto selezionate come foto normali da conservare (escono dai duplicati)',
           onclick: () => keepMany(selIds),
-        }, icon('library_add_check', { slot: 'icon' }), 'Conserva (non duplicati)'),
+        }, icon('add_photo_alternate', { slot: 'icon' }), 'Conserva'),
         h('md-filled-button', {
           class: 'dup-btn-danger',
           disabled: state.bulkBusy,
           onclick: () => trashSelected(),
-        }, icon('delete', { slot: 'icon' }), `Sposta nel Cestino (${formatBytes(bytes)})`));
+        }, icon('delete', { slot: 'icon' }), `Cestino (${formatBytes(bytes)})`));
       return;
     }
 
@@ -796,68 +829,15 @@ export async function mount(root, { query = {}, signal } = {}) {
       'data-master': isMaster ? '1' : '0',
     },
       h('div', { class: 'dup-item__media-wrap' }, media, selBtn),
-      h('figcaption', { class: 'dup-item__body' },
+      h('figcaption', {
+        class: 'dup-item__body',
+        onclick: () => toggleSelect(f.id),
+      },
         h('div', { class: 'dup-item__status' }, isSel ? badgeTrash() : (isMaster ? badgeOriginale() : null)),
         h('p', { class: 'dup-item__name', title: f.name }, middleEllipsis(f.name)),
         isMaster ? null : h('p', { class: 'dup-item__reason muted' }, motivo(f, data)),
         metaInline(f),
-        metaList(f),
-        isMaster ? null : keepAction(entry, f)));
-  }
-
-  /** Azioni sul duplicato: "Tieni come originale" o "Conserva anche" (per tenere piu' foto dello stesso gruppo). */
-  function keepAction(entry, f) {
-    const keepAlsoBtn = h('md-text-button', {
-      class: 'dup-item__keep',
-      title: 'Conserva anche questa foto come foto normale (non verrà considerata duplicato)',
-      onclick: () => keepMany([f.id], `«${middleEllipsis(f.name, 28)}» conservata come foto normale.`),
-    }, icon('add_photo_alternate', { slot: 'icon' }), 'Conserva anche');
-
-    if (state.canKeep) {
-      return h('div', { class: 'dup-item__actions' },
-        h('md-text-button', {
-          class: 'dup-item__keep',
-          title: 'Imposta questa foto come originale del gruppo',
-          onclick: () => commit(entry, f.id),
-        }, icon('bookmark_added', { slot: 'icon' }), 'Originale'),
-        keepAlsoBtn);
-    }
-    return h('div', { class: 'dup-item__actions' },
-      keepAlsoBtn,
-      h('p', { class: 'dup-item__locked muted' }, icon('lock'),
-        h('span', {}, 'Scambio originale disattivato. '),
-        h('a', { href: '#/settings?tab=general' }, 'Impostazioni')));
-  }
-
-  async function trashCopies(entry, shown) {
-    if (entry.busy || !shown.length) return;
-    const ids = shown.map((m) => m.id);
-    const bytes = shown.reduce((s, m) => s + Number(m.size || 0), 0);
-    const ok = await confirmDialog({
-      title: `Spostare ${shown.length === 1 ? '1 copia' : `${formatNumber(shown.length)} copie`} nel Cestino?`,
-      message: `L’originale «${entry.data.master.name}» resta al sicuro. Libererai circa ${formatBytes(bytes)}; potrai recuperare le copie dal Cestino di Windows.`,
-      confirmLabel: 'Sposta nel Cestino',
-      danger: true,
-    });
-    if (!ok || !state.alive) return;
-    entry.busy = true;
-    try {
-      const r = await api.post('/cleanup/trash', { file_ids: ids, confirm: true });
-      if (!state.alive) return;
-      if (r.trashed) {
-        const failedIds = new Set((r.errors || []).map((e) => e.id));
-        const trashedSet = new Set(ids.filter((id) => !failedIds.has(id)));
-        pruneFilesInPlace(trashedSet);
-        showSnackbar(`${r.trashed === 1 ? '1 copia spostata' : `${formatNumber(r.trashed)} copie spostate`} nel Cestino (${formatBytes(r.freed_bytes)} liberati).`);
-        refreshSummary();
-        window.dispatchEvent(new CustomEvent('fotoscan:cleanup-changed'));
-      }
-      if (r.errors?.length) showSnackbar('Alcune copie non sono state spostate nel Cestino.', { error: true });
-    } catch (e) {
-      if (!isAbort(e) && state.alive) showSnackbar(errMsg(e), { error: true });
-    } finally {
-      entry.busy = false;
-    }
+        metaList(f)));
   }
 
   function groupEl(entry) {
@@ -865,25 +845,11 @@ export async function mount(root, { query = {}, signal } = {}) {
     const gi = state.groups.indexOf(entry);
     const shown = shownMembers(data);
     const copiesBytes = shown.reduce((s, m) => s + Number(m.size || 0), 0);
-    const keepAllBtn = shown.length
-      ? h('md-text-button', {
-        title: 'Conserva tutte le foto di questo gruppo come foto separate (non duplicati)',
-        onclick: () => keepMany(shown.map((m) => m.id), `Tutte le ${formatNumber(shown.length + 1)} foto del gruppo conservate.`),
-      }, icon('library_add_check', { slot: 'icon' }), 'Conserva tutte')
-      : null;
-    const trashBtn = shown.length
-      ? h('md-text-button', {
-        class: 'dup-group__trash',
-        onclick: () => trashCopies(entry, shown),
-      }, icon('delete', { slot: 'icon' }), `Elimina copie (${formatBytes(copiesBytes)})`)
-      : null;
     const card = h('article', { class: 'card dup-group', tabindex: '-1', 'aria-label': `Gruppo ${gi + 1}` },
       h('header', { class: 'dup-group__head' },
-        h('div', {},
-          h('h2', { class: 'dup-group__title t-title' }, `Gruppo ${gi + 1}`),
-          h('p', { class: 'dup-group__sub muted' },
-            `${REASON[data.reason] || 'Foto simili'} · ${formatNumber(shown.length)} file in più`)),
-        h('div', { class: 'dup-group__actions' }, keepAllBtn, trashBtn)),
+        h('h2', { class: 'dup-group__title t-title' }, `Gruppo ${gi + 1}`),
+        h('p', { class: 'dup-group__sub muted' },
+          `${REASON[data.reason] || 'Foto simili'} · ${plural(shown.length, 'copia', 'copie')} · ${formatBytes(copiesBytes)}`)),
       h('div', { class: 'compare dup-compare' },
         itemEl(entry, data.master, data, 0, true),
         ...shown.map((m, i) => itemEl(entry, m, data, i, false))));

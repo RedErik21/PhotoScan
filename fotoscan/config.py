@@ -5,11 +5,20 @@ import glob
 import json
 import os
 import shutil
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-CONFIG_FILE = Path(os.environ["FOTOSCAN_CONFIG"]) if os.environ.get("FOTOSCAN_CONFIG") else ROOT / "config.json"  # override per test isolati
+# Eseguibile PyInstaller (PhotoScan.exe): il codice e le risorse stanno nella cartella temporanea _MEIPASS
+# (sola lettura), mentre catalogo, cache, config e log vanno in %LOCALAPPDATA%\PhotoScan.
+FROZEN = bool(getattr(sys, "frozen", False))
+CODE_ROOT = Path(getattr(sys, "_MEIPASS", "")) if FROZEN else Path(__file__).resolve().parent.parent
+if FROZEN:
+    ROOT = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "PhotoScan"
+    ROOT.mkdir(parents=True, exist_ok=True)
+else:
+    ROOT = CODE_ROOT
+CONFIG_FILE =Path(os.environ["FOTOSCAN_CONFIG"]) if os.environ.get("FOTOSCAN_CONFIG") else ROOT / "config.json"  # override per test isolati
 
 IMAGE_EXT = (".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".bmp", ".tif", ".tiff")
 VIDEO_EXT = (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".3gp", ".wmv")

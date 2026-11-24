@@ -43,3 +43,8 @@ _privato/
 # Varie
 node_modules/
 .claude/
+
+# Build locali PyInstaller (eseguibile e pacchetti di distribuzione)
+build_out/
+build/
+dist/
