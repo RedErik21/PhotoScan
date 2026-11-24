@@ -5,6 +5,7 @@ FotoScan è un'applicazione locale (nessun servizio online: solo il controllo de
 intelligenza artificiale (SigLIP2, eseguito sul proprio PC) e propone un'organizzazione in cartelle
 per anno, mese ed evento. Permette di sfogliare, cercare a parole ("tramonto", "torta"), gestire
 duplicati, album e preferiti, e infine di creare la nuova struttura di cartelle.
+Può anche importare foto e video da un telefono Android collegato via USB: il telefono viene solo letto e nulla viene cancellato.
 
 **Regola fondamentale: FotoScan non cancella mai nulla.** La cartella delle foto originali è
 sempre in sola lettura.
