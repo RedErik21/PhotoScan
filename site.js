@@ -65,6 +65,30 @@
     });
   });
 
+  // Hero video play/pause + prefers-reduced-motion support
+  document.querySelectorAll('[data-video-toggle]').forEach((btn) => {
+    const video = btn.closest('.window-frame__media')?.querySelector('video');
+    if (!video) return;
+    const icPause = btn.querySelector('.ic-pause');
+    const icPlay = btn.querySelector('.ic-play');
+    const sync = () => {
+      const paused = video.paused;
+      if (icPause) icPause.style.display = paused ? 'none' : 'block';
+      if (icPlay) icPlay.style.display = paused ? 'block' : 'none';
+      btn.setAttribute('aria-pressed', String(!paused));
+    };
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      video.pause();
+    }
+    video.addEventListener('play', sync);
+    video.addEventListener('pause', sync);
+    btn.addEventListener('click', () => {
+      if (video.paused) video.play().catch(() => {});
+      else video.pause();
+    });
+    sync();
+  });
+
   // Lightbox for screenshots + hero
   const triggers = [...document.querySelectorAll('[data-lightbox]')];
   if (!triggers.length) return;
