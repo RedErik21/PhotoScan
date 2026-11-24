@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PhotoScan: organize your photo archive, locally</title>
+<meta name="description" content="PhotoScan indexes the photo and video archive on your PC, recognizes what is in each picture with AI and suggests an organization by year, month and event. No data leaves your computer.">
+<style>
+  :root {
+    --bg: #f7f7fb; --surface: #ffffff; --ink: #1c1b25; --muted: #5d5b6b;
+    --brand: #4b47c9; --brand-soft: #e6e5ff; --line: #e2e1ec; --ok: #137a4b;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14131c; --surface: #1d1c27; --ink: #ecebf5; --muted: #a8a6ba;
+            --brand: #9b97ff; --brand-soft: #2b2a48; --line: #2e2d3d; --ok: #5fd39c; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+         background: var(--bg); color: var(--ink); line-height: 1.6; }
+  a { color: var(--brand); }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 24px; }
+  .topbar { display: flex; justify-content: flex-end; padding: 16px 24px 0; max-width: 1060px; margin: 0 auto; }
+  .lang { font-size: 14px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line);
+          background: var(--surface); text-decoration: none; }
+  header.hero { padding: 48px 0 56px; background: linear-gradient(180deg, var(--brand-soft), var(--bg)); }
+  .badge { display: inline-block; padding: 4px 12px; border-radius: 999px; background: var(--surface);
+           border: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+  h1 { font-size: clamp(36px, 6vw, 56px); line-height: 1.1; margin: 18px 0 12px; letter-spacing: -0.02em; }
+  .lead { font-size: 20px; color: var(--muted); max-width: 720px; margin: 0 0 28px; }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; }
+  .btn { display: inline-block; padding: 12px 20px; border-radius: 12px; text-decoration: none;
+         font-weight: 600; border: 1px solid var(--brand); }
+  .btn.primary { background: var(--brand); color: #fff; }
+  .btn.ghost { color: var(--brand); background: var(--surface); }
+  section { padding: 56px 0; }
+  section h2 { font-size: 30px; margin: 0 0 8px; letter-spacing: -0.01em; }
+  section > .wrap > p.sub { color: var(--muted); margin: 0 0 28px; max-width: 760px; }
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 22px; }
+  .card h3 { margin: 0 0 6px; font-size: 18px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  .icon { font-size: 26px; margin-bottom: 8px; }
+  .shots { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  figure { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+  figure img { display: block; width: 100%; height: auto; }
+  figcaption { padding: 12px 16px; color: var(--muted); font-size: 14px; }
+  .safe { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 28px; }
+  .safe ul { margin: 0; padding-left: 20px; }
+  .safe li { margin: 8px 0; }
+  .steps { counter-reset: step; list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
+  .steps li { counter-increment: step; background: var(--surface); border: 1px solid var(--line);
+              border-radius: 14px; padding: 18px 20px 18px 64px; position: relative; }
+  .steps li::before { content: counter(step); position: absolute; left: 18px; top: 16px; width: 32px; height: 32px;
+                      border-radius: 50%; background: var(--brand); color: #fff; display: grid; place-items: center; font-weight: 700; }
+  .steps strong { display: block; }
+  .steps span { color: var(--muted); font-size: 15px; }
+  pre { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+        overflow-x: auto; font-size: 14px; }
+  code { font-family: Consolas, "Cascadia Mono", monospace; }
+  table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 12px; overflow: hidden; }
+  th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: 15px; }
+  th { color: var(--muted); font-weight: 600; }
+  details { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; margin: 10px 0; }
+  summary { cursor: pointer; font-weight: 600; }
+  details p { color: var(--muted); margin: 10px 0 0; }
+  footer { padding: 32px 0 48px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+
+<div class="topbar"><a class="lang" href="../index.html" lang="it">Italiano</a></div>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="badge">Version 2.0 · Windows · Free and open source (MIT)</span>
+    <h1>PhotoScan</h1>
+    <p class="lead">Bring order to years of photos and videos. PhotoScan finds duplicates, recognizes what is in each picture
+      and proposes a folder structure by year, month and event. Everything runs on your PC: no photo is uploaded online.</p>
+    <div class="cta">
+      <a class="btn primary" href="#installation">How to install</a>
+      <a class="btn ghost" href="#features">What it does</a>
+      <a class="btn ghost" href="#safety">Keeping your files safe</a>
+    </div>
+  </div>
+</header>
+
+<section id="why">
+  <div class="wrap">
+    <h2>Why PhotoScan</h2>
+    <p class="sub">Built for large archives: thousands of files scattered across folders with unhelpful names.</p>
+    <div class="grid">
+      <div class="card"><div class="icon">🗂️</div><h3>Automatic order</h3>
+        <p>Creates a folder for each period and context, for example <em>2024/03 - Seaside holiday</em>. You decide what to apply.</p></div>
+      <div class="card"><div class="icon">🔎</div><h3>Search by words</h3>
+        <p>Type "sunset", "cake" or "snow" and find the right photos, even without tags or meaningful file names.</p></div>
+      <div class="card"><div class="icon">♊</div><h3>Duplicates and similar photos</h3>
+        <p>Finds exact copies and near-identical photos. You choose which one to keep: nothing is deleted for you.</p></div>
+      <div class="card"><div class="icon">📍</div><h3>Places on a map</h3>
+        <p>Uses the GPS data in your photos to show them on a map and rediscover forgotten trips.</p></div>
+      <div class="card"><div class="icon">🧑‍🤝‍🧑</div><h3>People (optional)</h3>
+        <p>Groups recurring faces and lets you name them. Face recognition is off unless you turn it on.</p></div>
+      <div class="card"><div class="icon">🖥️</div><h3>Works like an app</h3>
+        <p>Opens in its own window from the desktop icon. Light or dark theme, also usable on a phone screen.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <h2>Screenshots</h2>
+    <p class="sub">Some screens of the app, built on a sample library with Unsplash photos.</p>
+    <div class="shots">
+      <figure><img src="../img/01-home.png" alt="PhotoScan home page" loading="lazy"><figcaption>Home: the state of your archive at a glance</figcaption></figure>
+      <figure><img src="../img/02-galleria.png" alt="Photo gallery sorted by date" loading="lazy"><figcaption>Gallery by date, with quick scrolling by year and month</figcaption></figure>
+      <figure><img src="../img/03-cerca.png" alt="Search by words" loading="lazy"><figcaption>Search by words, such as "sunset"</figcaption></figure>
+      <figure><img src="../img/05-visualizzatore.png" alt="Full-screen viewer" loading="lazy"><figcaption>Viewer: zoom, info, favorites, albums</figcaption></figure>
+      <figure><img src="../img/06-luoghi.png" alt="Places map" loading="lazy"><figcaption>Places: your photos on a map based on GPS</figcaption></figure>
+      <figure><img src="../img/09-duplicati.png" alt="Duplicate management" loading="lazy"><figcaption>Duplicates: groups of exact and similar copies</figcaption></figure>
+      <figure><img src="../img/13-home-scuro.png" alt="Dark theme" loading="lazy"><figcaption>Dark theme</figcaption></figure>
+      <figure><img src="../img/14-telefono-galleria.png" alt="Gallery on a phone" loading="lazy"><figcaption>Also on a phone screen</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <h2>How it works</h2>
+    <p class="sub">Four steps, always in order. You can stop and resume whenever you like.</p>
+    <ol class="steps">
+      <li><strong>Choose your archive</strong><span>Point it to the folder with your original photos. It is only read.</span></li>
+      <li><strong>Analysis</strong><span>PhotoScan reads date, GPS and content of each file with an AI model running on your PC.
+        It can be resumed: files already analyzed are not processed again.</span></li>
+      <li><strong>Review duplicates and folders</strong><span>Check the copies and the preview of the new structure. Nothing has changed yet.</span></li>
+      <li><strong>Create the folders</strong><span>Only after your explicit confirmation does PhotoScan create the new structure, using links or copies.</span></li>
+    </ol>
+  </div>
+</section>
+
+<section id="safety">
+  <div class="wrap">
+    <h2>Your files stay safe</h2>
+    <p class="sub">The basic rule: PhotoScan never deletes anything.</p>
+    <div class="safe">
+      <ul>
+        <li>The folder with your original photos is always <strong>read-only</strong>.</li>
+        <li>Everything starts as a <strong>simulation</strong>: you see the plan first, then decide.</li>
+        <li>Duplicates are moved to a dedicated folder (<code>_Duplicati</code>), never deleted.</li>
+        <li>No online service for your photos. The only internet connection is the update check, which you can turn off.</li>
+        <li>Every folder-creation operation leaves a log in the destination folder.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="installation">
+  <div class="wrap">
+    <h2>Installation (Windows)</h2>
+    <p class="sub">You need Python 3.13 and, recommended, an NVIDIA graphics card. Without NVIDIA it still works, just more slowly.</p>
+    <pre><code>cd PhotoScan                        # folder extracted from the download
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126   # NVIDIA GPU
+pip install -r requirements.txt
+winget install Gyan.FFmpeg          # optional, for videos</code></pre>
+    <p class="sub">On first use, the recognition model is downloaded (about 400 MB, one time only).
+      Then start PhotoScan with <code>.\.venv\Scripts\pythonw.exe -m fotoscan.desktop</code> or from the desktop icon.</p>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <h2>Frequently asked questions</h2>
+    <details><summary>Are my photos uploaded online?</summary>
+      <p>No. Analysis, search and organization happen on your computer. The only connection is the check for new versions, which you can turn off.</p></details>
+    <details><summary>Does it delete my photos?</summary>
+      <p>No. Originals are read-only and duplicates are moved, not deleted. You decide what to keep.</p></details>
+    <details><summary>How much space does it need?</summary>
+      <p>Beyond the program and the recognition model, the catalog and cache grow with the number of files. The project is designed for archives of about 200 GB and 14,000 files.</p></details>
+    <details><summary>Can I stop the analysis?</summary>
+      <p>Yes. Closing the app stops it, and when you reopen it, it resumes from the files not yet processed.</p></details>
+    <details><summary>Which formats are supported?</summary>
+      <p>JPEG, PNG, HEIC (support included) and videos. Videos require FFmpeg. HEIC and TIFF files are shown in the browser as JPEG versions generated by the program.</p></details>
+    <details><summary>How do I update PhotoScan?</summary>
+      <p>New versions are listed in the GitHub Releases and in the app's Settings. The update is installed when you reopen the app, with a backup copy kept.</p></details>
+    <details><summary>Is face recognition mandatory?</summary>
+      <p>No. It is off by default and can be turned on in Settings.</p></details>
+  </div>
+</section>
+
+<section id="requirements">
+  <div class="wrap">
+    <h2>Requirements</h2>
+    <table>
+      <tr><th>System</th><td>Windows 10 or 11</td></tr>
+      <tr><th>Python</th><td>3.13</td></tr>
+      <tr><th>Graphics card</th><td>NVIDIA recommended. Also works CPU-only, more slowly.</td></tr>
+      <tr><th>Browser</th><td>Microsoft Edge (already on Windows) or Google Chrome</td></tr>
+      <tr><th>Disk space</th><td>A few GB for the program and model, plus space for the catalog</td></tr>
+    </table>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    PhotoScan is released under the MIT license. Bundled libraries and downloaded models have their own licenses.
+    · <a href="https://github.com/RedErik21/PhotoScan">Source code on GitHub</a>
+  </div>
+</footer>
+
+</body>
+</html>
