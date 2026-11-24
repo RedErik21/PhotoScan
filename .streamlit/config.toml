@@ -1,0 +1,11 @@
+[theme]
+# Tema neutro: l'utente puo' passare da chiaro a scuro dal menu Impostazioni di Streamlit.
+primaryColor = "#1a73e8"
+font = "sans serif"
+
+[server]
+headless = true
+fileWatcherType = "none"
+
+[browser]
+gatherUsageStats = false

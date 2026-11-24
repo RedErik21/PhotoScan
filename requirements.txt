@@ -1,0 +1,31 @@
+# PyTorch con CUDA (GPU NVIDIA): installare PRIMA con
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+# Solo CPU: pip install torch torchvision
+transformers>=4.49
+accelerate
+sentencepiece
+protobuf
+numpy
+pillow
+pillow-heif
+xxhash
+pandas
+streamlit>=1.40
+
+# Riconoscimento volti (enable_faces=true in config.json).
+# Usa direttamente onnxruntime-gpu con i modelli ONNX buffalo_l (nessun compilatore C++ richiesto).
+# Su PC senza GPU NVIDIA sostituire con: onnxruntime
+onnxruntime-gpu
+
+# Finestra dell'app senza bordi (fotoscan/desktop.py). Su Windows usa WebView2 (gia' presente con Edge).
+pywebview
+
+# Server API + interfaccia (FastAPI). uvicorn[standard] include websocket/uvloop opzionali.
+fastapi
+uvicorn[standard]
+
+# Facoltativo: client HTTP (test con TestClient). Gia' presente nel venv come dipendenza indiretta.
+# httpx
+
+# Solo sviluppo: screenshot con tools/shot.py (Edge via Playwright, nessun download di browser).
+# playwright

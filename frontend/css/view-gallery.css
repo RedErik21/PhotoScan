@@ -1,0 +1,398 @@
+/* Vista Foto (galleria cronologica). Caricato da js/views/gallery.js.
+   Struttura: testata (titolo, contatore, salto, densita', filtri) / barra selezione / corpo (griglia + scrubber). */
+
+.gallery {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.gallery-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--page-margin, var(--sp-4)) var(--sp-2);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+}
+
+/* Riga 1: filtri a sinistra, strumenti (persone, calendario, densita') a destra — mai troncati. */
+.gallery-head-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  min-height: 40px;
+}
+
+/* Riga 2: barra info discreta (conteggio, duplicati, danneggiati, persona attiva) — sempre leggibile. */
+.gallery-meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  min-height: 28px;
+}
+
+/* Conteggio + note compatte */
+.gallery-count-wrap {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+  min-width: 0;
+}
+
+.gallery-count {
+  color: var(--md-sys-color-on-surface-variant);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Pulsante di testo: "· 1.253 duplicati" -> filtro Duplicati (visibile solo se ce ne sono). */
+.gallery .gallery-count-note {
+  --md-text-button-label-text-color: var(--md-sys-color-on-surface-variant);
+  --md-text-button-hover-label-text-color: var(--md-sys-color-primary);
+  --md-text-button-pressed-label-text-color: var(--md-sys-color-primary);
+  --md-text-button-container-height: 30px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.gallery .gallery-count-note[hidden],
+.gallery .gallery-dup-hint[hidden] {
+  display: none !important;
+}
+
+/* Filtro Duplicati: rimando alla revisione con il confronto. */
+.gallery .gallery-dup-hint {
+  --md-text-button-label-text-color: var(--md-sys-color-primary);
+  --md-text-button-container-height: 30px;
+  white-space: nowrap;
+}
+
+.gallery-head-row > md-chip-set {
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.gallery-head-row > md-chip-set::-webkit-scrollbar {
+  display: none;
+}
+.gallery-head-row > md-chip-set > * {
+  flex: none;
+}
+
+.gallery-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: none;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.gallery-density {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: var(--sp-2);
+  margin-left: var(--sp-1);
+  border-left: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.gallery-density md-slider {
+  width: 96px;
+}
+
+.gallery-density .material-symbols-outlined,
+.gallery-tools > md-icon .material-symbols-outlined {
+  font-size: 20px;
+}
+
+.gallery-broken-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: auto;
+}
+.gallery-broken-wrap[hidden] { display: none !important; }
+.gallery-broken {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 0.8125rem;
+}
+.gallery-broken__remove {
+  --md-text-button-container-height: 28px;
+}
+
+.gallery-bar-slot {
+  padding: 0 var(--sp-4);
+}
+
+.gallery-bar-slot:empty {
+  display: none;
+}
+
+.gallery-body {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+  position: relative;
+}
+
+.gallery-body > .empty-state,
+.gallery-body > .empty-state--error {
+  margin: auto;
+}
+
+.gallery-skeleton {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 var(--sp-4);
+}
+
+.gallery-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 0 var(--sp-6) var(--sp-4);
+  outline: none;
+}
+
+/* Colonna dello scrubber: a destra, fuori dal flusso della griglia. */
+.gallery-rail {
+  position: relative;
+  flex: 0 0 56px;
+  width: 56px;
+}
+
+@media (max-width: 599.98px) {
+  .gallery-scroll {
+    padding-left: var(--sp-2);
+  }
+  .gallery-rail {
+    flex-basis: 48px;
+    width: 48px;
+  }
+  /* Telefono: slider nascosto (densita' predefinita); filtri in una riga unica scorrevole. */
+  .gallery-density {
+    display: none;
+  }
+  .gallery-head-row > md-chip-set {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding: var(--sp-1) 0;
+  }
+  .gallery-head-row > md-chip-set::-webkit-scrollbar {
+    display: none;
+  }
+  .gallery-head-row > md-chip-set > * {
+    flex: none;
+  }
+}
+
+/* Intestazione di giorno o di mese (altezza fissa, vedi VirtualGrid HEADER_H = 48px). */
+/* Allineata al bordo sinistro delle miniature (come .gallery-scroll). */
+.gallery .gallery-group {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 48px;
+  box-sizing: border-box;
+  padding: 0;
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+}
+
+.gallery .gallery-group-title {
+  margin: 0;
+  font: 500 var(--md-sys-typescale-title-medium-size) / var(--md-sys-typescale-title-medium-line-height) var(--md-ref-typeface-plain);
+  color: var(--md-sys-color-on-surface);
+}
+
+/* Conteggio come piccola pillola tonale (surface-container-high), non testo grigio nudo. */
+.gallery .gallery-group-count {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--shape-full);
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface-variant);
+  font: 500 var(--md-sys-typescale-label-medium-size) / var(--md-sys-typescale-label-medium-line-height) var(--md-ref-typeface-plain);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Scrubber: etichette su superficie tonale piu' alta, testo a contrasto pieno. */
+.gallery-rail .scrubber__label {
+  background: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-on-surface);
+}
+.gallery-rail .scrubber__thumb {
+  background: var(--md-sys-color-primary);
+}
+
+/* Popover calendario compatto: anni + griglia 12 mesi */
+.gallery-jump-wrap {
+  position: relative;
+}
+.gallery-jump-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: var(--z-overlay);
+  width: min(330px, calc(100vw - 24px));
+  padding: var(--sp-3);
+  border-radius: var(--shape-lg);
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  box-shadow: var(--elev-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.gallery-jump-popover[hidden] { display: none; }
+
+.gallery-jump-years {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+.gallery-jump-year-pill {
+  flex: none;
+  padding: 6px 12px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--shape-full);
+  background: transparent;
+  color: var(--md-sys-color-on-surface-variant);
+  font: 600 0.8125rem/1 var(--md-ref-typeface-plain);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background-color var(--dur-short), color var(--dur-short), border-color var(--dur-short);
+}
+.gallery-jump-year-pill:hover {
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+  color: var(--md-sys-color-on-surface);
+}
+.gallery-jump-year-pill.is-active {
+  background: var(--md-sys-color-primary);
+  border-color: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+}
+
+.gallery-jump-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  font-variant-numeric: tabular-nums;
+}
+.gallery-jump-head md-text-button {
+  --md-text-button-container-height: 30px;
+}
+
+.gallery-jump-months {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.gallery-jump-month {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 4px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--shape-sm);
+  background: var(--md-sys-color-surface-container);
+  color: var(--md-sys-color-on-surface);
+  cursor: pointer;
+  transition: background-color var(--dur-short), border-color var(--dur-short), transform var(--dur-short);
+}
+.gallery-jump-month:hover:not(:disabled) {
+  background: var(--md-sys-color-primary-container);
+  border-color: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary-container);
+}
+.gallery-jump-month.is-empty {
+  opacity: 0.35;
+  cursor: default;
+  background: transparent;
+}
+.gallery-jump-month__name {
+  font: 600 0.8125rem/1.1 var(--md-ref-typeface-plain);
+}
+.gallery-jump-month__count {
+  font: 400 0.6875rem/1 var(--md-ref-typeface-plain);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.78;
+}
+
+.gallery-jump-specials {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+.gallery-jump-special {
+  padding: 4px 10px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--shape-full);
+  background: transparent;
+  color: var(--md-sys-color-on-surface-variant);
+  font: 500 0.75rem/1.2 var(--md-ref-typeface-plain);
+  cursor: pointer;
+}
+.gallery-jump-special:hover {
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+  color: var(--md-sys-color-on-surface);
+}
+
+.gallery-jump-menu {
+  --md-menu-container-max-height: min(60vh, 520px);
+}
+
+/* Tocco: feedback immediato durante la pressione lunga (selezione), senza effetti col mouse. */
+@media (pointer: coarse) {
+  .gallery-scroll .photo-tile {
+    transition: transform var(--dur-short) var(--motion-standard);
+    -webkit-touch-callout: none;
+  }
+  .gallery-scroll .photo-tile:active {
+    transform: scale(0.96);
+  }
+}
+
+/* File danneggiati: spunta compatta "Nascondi danneggiati (N)" + "Rimuovi" */
+.gallery-broken-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0 var(--sp-1);
+  white-space: nowrap;
+}
+.gallery-broken-wrap[hidden] { display: none; }
+.gallery-broken {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  cursor: pointer;
+  color: var(--md-sys-color-on-surface-variant);
+  font: var(--md-sys-typescale-label-large-weight, 500) var(--md-sys-typescale-label-large-size, 0.875rem) / 1.25rem var(--md-ref-typeface-plain, inherit);
+  white-space: nowrap;
+}
+.gallery-broken__remove { white-space: nowrap; }

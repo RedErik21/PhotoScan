@@ -1,0 +1,534 @@
+"""Gruppo "status": stato dell'app, impostazioni (config.json), dialoghi e apertura cartelle, spazio disco."""
+from __future__ import annotations
+
+import dataclasses
+import os
+import re
+import shutil
+import string
+import subprocess
+import sys
+import threading
+from pathlib import Path
+from typing import Any, Callable
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
+
+from .. import db as dbm
+from ..config import CONFIG_FILE, DEFAULT_LABELS, Config, all_models
+from ..version import __version__ as APP_VERSION
+from .deps import get_cfg, get_db, reload_cfg
+
+router = APIRouter(prefix="/api", tags=["status"])
+
+SETTING_KEYS = [
+    "source_dir", "output_dir", "model_name", "device", "batch_size", "workers", "score_threshold",
+    "score_temperature", "event_gap_hours", "max_event_days", "min_event_size", "event_burst_ratio", "event_names", "min_context_size", "near_dup_threshold",
+    "near_dup_seconds", "near_dup_name_rule", "dup_mode", "link_mode", "folder_template", "labels",
+    "null_prompts", "video_fractions", "enable_faces", "faces_threshold", "faces_assign_threshold",
+    "faces_min_photos", "faces_det_size",
+    "update_check_on_start", "update_auto_download", "update_auto_install", "update_prerelease",
+]
+_save_lock = threading.Lock()
+_dialog_lock = threading.Lock()
+
+
+# ---------------------------------------------------------------- utilita'
+def _effective_source(cfg: Config, conn) -> str:
+    """Sorgente da config.json; se assente, quella registrata nel catalogo dall'ultima indicizzazione."""
+    return cfg.source_dir or dbm.get_meta(conn, "source_dir", "") or ""
+
+
+def _inside(child: Path, parent: Path) -> bool:
+    """True se child coincide con parent o ne e' sottocartella (confronto per identita' di cartella:
+    i nomi 8.3 di Windows come ANDREA~1 non sono normalizzati da resolve())."""
+    for p in [child, *child.parents]:
+        try:
+            if p.exists() and os.path.samefile(p, parent):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _nearest_existing(p: Path) -> Path | None:
+    for c in [p, *p.parents]:
+        if c.exists():
+            return c
+    return None
+
+
+def _model_cached(model_name: str) -> bool:
+    """Il modello HuggingFace e' gia' nella cache locale (nessun download necessario)."""
+    home = os.environ.get("HF_HUB_CACHE") or os.path.join(
+        os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface"), "hub")
+    snaps = Path(home) / ("models--" + model_name.replace("/", "--")) / "snapshots"
+    try:
+        return snaps.is_dir() and any(snaps.iterdir())
+    except OSError:
+        return False
+
+
+def _catalog_bytes(db_path: str) -> int | None:
+    """Dimensione del catalogo (file SQLite + WAL), None se non ancora creato."""
+    total = 0
+    for suffix in ("", "-wal"):
+        try:
+            total += os.path.getsize(db_path + suffix)
+        except OSError:
+            pass
+    return total or None
+
+
+def _settings_view(cfg: Config, conn) -> dict[str, Any]:
+    out: dict[str, Any] = {k: getattr(cfg, k) for k in SETTING_KEYS}
+    out["source_dir"] = _effective_source(cfg, conn)
+    out["labels"] = [{"name": x.get("name", ""), "prompt": x.get("prompt", "")} for x in cfg.labels]
+    out["null_prompts"] = list(cfg.null_prompts)
+    out["video_fractions"] = list(cfg.video_fractions)
+    return out
+
+
+def _write_config(new: Config) -> None:
+    """Scrittura atomica di config.json (file temporaneo + replace), poi ricarica la config in memoria."""
+    tmp = CONFIG_FILE.with_name(CONFIG_FILE.name + ".tmp")
+    new.save(tmp)
+    os.replace(tmp, CONFIG_FILE)
+    reload_cfg()
+
+
+# ---------------------------------------------------------------- validazione impostazioni
+def _text(label: str, max_len: int = 200) -> Callable[[Any], str]:
+    def check(v: Any) -> str:
+        s = v.strip() if isinstance(v, str) else ""
+        if not s:
+            raise ValueError(f"{label} non puo' essere vuoto.")
+        if len(s) > max_len:
+            raise ValueError(f"{label} e' troppo lungo (massimo {max_len} caratteri).")
+        return s
+    return check
+
+
+def _num(label: str, lo: float, hi: float, integer: bool = False) -> Callable[[Any], float | int]:
+    def check(v: Any) -> float | int:
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise ValueError(f"{label} deve essere un numero.")
+        if integer and not float(v).is_integer():
+            raise ValueError(f"{label} deve essere un numero intero.")
+        if not lo <= v <= hi:
+            raise ValueError(f"{label} deve essere tra {_fmt(lo)} e {_fmt(hi)}.")
+        return int(v) if integer else float(v)
+    return check
+
+
+def _fmt(x: float) -> str:
+    return str(int(x)) if float(x).is_integer() else str(x).replace(".", ",")
+
+
+def _choice(label: str, options: tuple[str, ...]) -> Callable[[Any], str]:
+    def check(v: Any) -> str:
+        if v not in options:
+            raise ValueError(f"{label} non valido (valori ammessi: {', '.join(options)}).")
+        return v
+    return check
+
+
+def _int_choice(label: str, options: tuple[int, ...]) -> Callable[[Any], int]:
+    def check(v: Any) -> int:
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not float(v).is_integer() or int(v) not in options:
+            raise ValueError(f"{label} non valido (valori ammessi: {', '.join(str(x) for x in options)}).")
+        return int(v)
+    return check
+
+
+def _flag(label: str) -> Callable[[Any], bool]:
+    def check(v: Any) -> bool:
+        if not isinstance(v, bool):
+            raise ValueError(f"{label} deve essere vero o falso.")
+        return v
+    return check
+
+
+def _folder_path(label: str) -> Callable[[Any], str]:
+    """Cartella esistente; stringa vuota = non impostata."""
+    def check(v: Any) -> str:
+        if not isinstance(v, str):
+            raise ValueError(f"{label} non valida.")
+        s = v.strip()
+        if not s:
+            return ""
+        if not os.path.isdir(s):
+            raise ValueError(f"{label} non esiste: {s}")
+        return s
+    return check
+
+
+def _output_path(label: str) -> Callable[[Any], str]:
+    """Cartella di destinazione: puo' non esistere ancora (la crea POST /apply/destination o l'applicazione),
+    purche' il primo antenato esistente sia una cartella. Vuota = non impostata."""
+    def check(v: Any) -> str:
+        if not isinstance(v, str):
+            raise ValueError(f"{label} non valida.")
+        s = v.strip()
+        if not s:
+            return ""
+        near = _nearest_existing(Path(os.path.abspath(s)))
+        if near is None or not near.is_dir():
+            raise ValueError(f"{label} non valida: {s}")
+        return s
+    return check
+
+
+def _text_list(label: str, lo: int, hi: int, max_len: int = 200) -> Callable[[Any], list[str]]:
+    def check(v: Any) -> list[str]:
+        if not isinstance(v, list) or not lo <= len(v) <= hi:
+            raise ValueError(f"{label} deve contenere da {lo} a {hi} voci.")
+        out = []
+        for item in v:
+            s = item.strip() if isinstance(item, str) else ""
+            if not s or len(s) > max_len:
+                raise ValueError(f"{label}: ogni voce deve essere testo non vuoto (massimo {max_len} caratteri).")
+            out.append(s)
+        return out
+    return check
+
+
+def _labels(v: Any) -> list[dict[str, str]]:
+    if not isinstance(v, list) or not 1 <= len(v) <= 60:
+        raise ValueError("Le etichette devono essere da 1 a 60.")
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in v:
+        name = item.get("name", "").strip() if isinstance(item, dict) and isinstance(item.get("name"), str) else ""
+        prompt = item.get("prompt", "").strip() if isinstance(item, dict) and isinstance(item.get("prompt"), str) else ""
+        if not name or not prompt:
+            raise ValueError("Ogni etichetta richiede un nome e una descrizione.")
+        if len(name) > 60 or len(prompt) > 200:
+            raise ValueError(f"Etichetta '{name[:30]}': nome o descrizione troppo lunghi.")
+        if any(c in name for c in "/\\") or name in (".", ".."):
+            raise ValueError(f"Il nome dell'etichetta '{name}' non puo' contenere / o \\.")
+        if name.casefold() in seen:
+            raise ValueError(f"Etichetta duplicata: '{name}'.")
+        seen.add(name.casefold())
+        out.append({"name": name, "prompt": prompt})
+    return out
+
+
+_TEMPLATE_FIELDS = {("anno", ""), ("mese", "02d"), ("contesto", "")}  # stessi token di settings-rules.js
+_TEMPLATE_TOKEN = re.compile(r"\{(anno|mese:02d|contesto)\}")
+
+
+def _folder_template(v: Any) -> str:
+    """Modello di cartella: solo {anno}, {mese:02d}, {contesto}; niente percorsi assoluti o risalite."""
+    if not isinstance(v, str) or not v.strip():
+        raise ValueError("Il modello delle cartelle non puo' essere vuoto.")
+    s = v.strip()
+    if ".." in s:
+        raise ValueError("Il modello delle cartelle non puo' contenere '..'.")
+    if s[0] in "/\\" or re.match(r"^[A-Za-z]:", s):
+        raise ValueError("Il modello delle cartelle deve essere relativo (non puo' iniziare con / o con una lettera di unita').")
+    try:
+        parsed = list(string.Formatter().parse(s))
+    except ValueError:
+        raise ValueError("Modello delle cartelle non valido: usa {anno}, {mese:02d} e {contesto}.")
+    for _lit, field, spec, conv in parsed:
+        if field is None:
+            continue
+        if (field, spec or "") not in _TEMPLATE_FIELDS or conv:
+            raise ValueError("Puoi usare solo {anno}, {mese:02d} e {contesto} nel modello delle cartelle.")
+    if "{anno}" not in s:
+        raise ValueError("Il modello delle cartelle deve contenere {anno}.")
+    rest = _TEMPLATE_TOKEN.sub("", s)
+    if re.search(r'[<>:"|?*]', rest):
+        raise ValueError('Il nome delle cartelle contiene caratteri non ammessi: < > : " | ? *')
+    return s
+
+
+def _fractions(v: Any) -> list[float]:
+    if not isinstance(v, list) or not 1 <= len(v) <= 10:
+        raise ValueError("Le posizioni dei fotogrammi video devono essere da 1 a 10.")
+    out = []
+    for x in v:
+        if isinstance(x, bool) or not isinstance(x, (int, float)) or not 0 < x < 1:
+            raise ValueError("Le posizioni dei fotogrammi video devono essere numeri tra 0 e 1 (esclusi).")
+        out.append(float(x))
+    return out
+
+
+_CHECKS: dict[str, Callable[[Any], Any]] = {
+    "source_dir": _folder_path("La cartella sorgente"),
+    "output_dir": _output_path("La cartella di destinazione"),
+    "model_name": _text("Il nome del modello", 200),
+    "device": _choice("Il dispositivo", ("auto", "cuda", "mps", "cpu")),
+    "batch_size": _num("La dimensione del lotto", 1, 512, integer=True),
+    "workers": _num("Il numero di processi", 1, 32, integer=True),
+    "score_threshold": _num("La soglia di punteggio", 0, 1),
+    "score_temperature": _num("La temperatura del punteggio", 0.1, 20),
+    "event_gap_hours": _num("La pausa tra eventi (ore)", 0.5, 168),
+    "max_event_days": _num("La durata massima di un evento (giorni)", 0.5, 365),
+    "min_event_size": _num("La dimensione minima di un evento", 1, 100, integer=True),
+    "event_burst_ratio": _num("Quanto deve essere speciale un giorno per diventare un evento", 0, 20),
+    "min_context_size": _num("La dimensione minima di una cartella di contesto", 1, 100, integer=True),
+    "near_dup_threshold": _num("La soglia dei quasi-uguali", 0, 1),
+    "near_dup_seconds": _num("La finestra dei quasi-uguali (secondi)", 0, 86400),
+    "near_dup_name_rule": _flag("La regola sul nome dei modificati"),
+    "dup_mode": _choice("La gestione dei duplicati", ("subfolder", "skip")),
+    "link_mode": _choice("La modalita' di copia", ("hardlink", "copy")),
+    "event_names": _choice("Il tipo di nome degli eventi", ("descrittivi", "data")),
+    "folder_template": _folder_template,
+    "labels": _labels,
+    "null_prompts": _text_list("Le descrizioni neutre", 1, 50),
+    "video_fractions": _fractions,
+    "enable_faces": _flag("Il riconoscimento volti"),
+    "faces_threshold": _num("La soglia volti", 0.2, 0.9),
+    "faces_assign_threshold": _num("La soglia di assegnazione volti", 0.2, 0.9),
+    "faces_min_photos": _num("Le foto minime per persona", 1, 50, integer=True),
+    "faces_det_size": _int_choice("La dimensione di rilevamento volti", (480, 640, 800, 960)),
+    "update_check_on_start": _flag("La ricerca degli aggiornamenti all'avvio"),
+    "update_auto_download": _flag("Il download automatico degli aggiornamenti"),
+    "update_auto_install": _flag("L'installazione automatica degli aggiornamenti"),
+    "update_prerelease": _flag("La scelta delle versioni di prova"),
+}
+
+
+def _validate(body: dict) -> tuple[dict[str, Any], dict[str, str]]:
+    """Normalizza i soli campi presenti nel corpo. Ritorna (valori validi, {campo: messaggio italiano}).
+    Campi sconosciuti vengono ignorati."""
+    out: dict[str, Any] = {}
+    errors: dict[str, str] = {}
+    for key, value in body.items():
+        check = _CHECKS.get(key)
+        if check is None:
+            continue
+        try:
+            out[key] = check(value)
+        except ValueError as e:
+            errors[key] = str(e)
+    return out, errors
+
+
+# ---------------------------------------------------------------- /status
+@router.get("/status")
+def status(conn=Depends(get_db)):
+    cfg = get_cfg()
+    source = _effective_source(cfg, conn)
+    st = dbm.stats(conn)
+    plan_rows = conn.execute(
+        "SELECT COUNT(*) AS n, COUNT(DISTINCT CASE WHEN folder IS NOT NULL THEN folder END) AS folders, "
+        "SUM(folder IS NOT NULL) AS files FROM plan"
+    ).fetchone()
+    # Foto indicizzate che il piano non conosce ancora (0 se il piano non e' stato costruito).
+    missing = 0
+    if plan_rows["n"] > 0:
+        missing = conn.execute(
+            "SELECT COUNT(*) FROM files f LEFT JOIN plan p ON p.file_id = f.id "
+            "WHERE f.status = 'embedded' AND p.file_id IS NULL"
+        ).fetchone()[0]
+    from .. import faces as faces_mod
+    faces_info = faces_mod.status_info(cfg)
+    return {
+        "version": APP_VERSION,
+        "first_run": not source and st["totale"] == 0,
+        "source_dir": source,
+        "output_dir": cfg.output_dir,
+        "db_path": cfg.db_path,
+        "counts": {k: st[k] for k in (
+            "totale", "foto", "video", "indicizzati", "errori", "duplicati", "data_incerta", "senza_data_exif")},
+        "plan": {"built": plan_rows["n"] > 0, "folders": plan_rows["folders"], "files": plan_rows["files"] or 0,
+                 "missing": missing},
+        "device": cfg.resolve_device(),
+        "ffmpeg": cfg.find_ffmpeg()[0] is not None,
+        "model": cfg.model_name,
+        "model_cached": _model_cached(cfg.model_name),
+        "embedding_model": dbm.get_meta(conn, "embedding_model") or (
+            "google/siglip2-base-patch16-224" if st["indicizzati"] > 0 else cfg.model_name
+        ),
+        "model_mismatch": st["indicizzati"] > 0 and (
+            (dbm.get_meta(conn, "embedding_model") or "google/siglip2-base-patch16-224") != cfg.model_name
+        ),
+        "available_models": [
+            {**m, "cached": _model_cached(m["id"])} for m in all_models(cfg)
+        ],
+        "faces": faces_info,
+        "faces_available": faces_info["available"],
+        "faces_reason": faces_info["reason"],
+        "catalog_bytes": _catalog_bytes(cfg.db_path),
+        "phone_import": _phone_import_summary(conn),
+    }
+
+
+def _phone_import_summary(conn) -> dict | None:
+    """Ultimo scarico dal telefono (null se non ne e' mai stato fatto uno)."""
+    from ..phone_log import days_since, last_import
+
+    rec = last_import(conn)
+    if rec is None:
+        return None
+    return {"when": rec.when, "device": rec.device, "new_files": rec.new_files,
+            "total_seen": rec.total_seen, "days_ago": days_since(rec)}
+
+
+# ---------------------------------------------------------------- /settings
+@router.get("/settings")
+def get_settings(conn=Depends(get_db)):
+    return _settings_view(get_cfg(), conn)
+
+
+@router.put("/settings")
+def put_settings(body: dict = Body(...), conn=Depends(get_db)):
+    """Aggiornamento parziale: i campi non inviati restano invariati."""
+    with _save_lock:
+        cur = get_cfg()
+        updates, errors = _validate(body)
+        src = updates.get("source_dir", cur.source_dir) or _effective_source(cur, conn)
+        out = updates.get("output_dir", cur.output_dir)
+        if "output_dir" not in errors and src and out and (_inside(Path(out), Path(src)) or _inside(Path(src), Path(out))):
+            errors["output_dir"] = "La cartella di destinazione non puo' essere dentro (o contenere) la cartella sorgente."
+        if errors:
+            # Stesso formato di HTTPException (detail = testo per l'avviso), con i messaggi anche per campo.
+            return JSONResponse(status_code=400, content={"detail": " ".join(errors.values()), "fields": errors})
+        new = dataclasses.replace(cur, **updates)
+        _write_config(new)
+        if "model_name" in updates and updates["model_name"] != cur.model_name:
+            from . import routes_search  # import locale per evitare cicli
+
+            routes_search.reset_model()
+        return _settings_view(get_cfg(), conn)
+
+
+# Valori di fabbrica (dalla dataclass Config): la UI li usa per "Ripristina predefiniti" senza duplicarli.
+_DEFAULT_KEYS = ["score_threshold", "score_temperature", "event_gap_hours", "max_event_days", "min_event_size",
+                 "min_context_size", "event_burst_ratio", "event_names", "near_dup_threshold", "near_dup_seconds", "near_dup_name_rule", "folder_template",
+                 "labels", "null_prompts", "faces_threshold", "faces_assign_threshold", "faces_min_photos", "faces_det_size"]
+
+
+@router.get("/settings/defaults")
+def settings_defaults():
+    base = Config()
+    return {k: getattr(base, k) for k in _DEFAULT_KEYS}
+
+
+@router.post("/settings/reset-labels")
+def reset_labels(conn=Depends(get_db)):
+    with _save_lock:
+        new = dataclasses.replace(get_cfg(), labels=[dict(x) for x in DEFAULT_LABELS])
+        _write_config(new)
+        return _settings_view(get_cfg(), conn)
+
+
+# ---------------------------------------------------------------- /system
+def _pick_folder_blocking(title: str | None, initial: str | None) -> tuple[bool, str | None]:
+    """Finestra nativa di scelta cartella. Ritorna (disponibile, percorso o None se annullata)."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception:
+        return False, None
+    root = None
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        kwargs: dict[str, Any] = {"parent": root, "title": title or "Scegli una cartella", "mustexist": True}
+        if initial and os.path.isdir(initial):
+            kwargs["initialdir"] = initial
+        chosen = filedialog.askdirectory(**kwargs)
+        return True, (os.path.normpath(chosen) if chosen else None)
+    except Exception:  # nessun display, Tk non disponibile, ecc.
+        return False, None
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
+
+@router.post("/system/pick-folder")
+def pick_folder(body: dict | None = Body(default=None)):
+    """Sync di proposito: FastAPI lo esegue in un thread, il loop non si blocca."""
+    body = body or {}
+    title = body.get("title") if isinstance(body.get("title"), str) else None
+    initial = body.get("initial") if isinstance(body.get("initial"), str) else None
+    if not _dialog_lock.acquire(blocking=False):
+        raise HTTPException(409, "Una finestra di scelta cartella e' gia' aperta.")
+    try:
+        available, path = _pick_folder_blocking(title, initial)
+        return {"path": path, "available": available}
+    finally:
+        _dialog_lock.release()
+
+
+@router.post("/system/open-folder")
+def open_folder(body: dict = Body(...), conn=Depends(get_db)):
+    """Apre in Esplora risorse solo cartelle esistenti dentro output_dir o source_dir."""
+    raw = body.get("path")
+    if not isinstance(raw, str) or not raw.strip():
+        raise HTTPException(400, "Indica la cartella da aprire.")
+    cfg = get_cfg()
+    roots = [Path(os.path.abspath(r)) for r in (cfg.output_dir, _effective_source(cfg, conn)) if r]
+    target = Path(os.path.abspath(raw.strip()))
+    if not target.is_dir():
+        raise HTTPException(404, "La cartella non esiste.")
+    if not any(_inside(target, r) for r in roots if r.is_dir()):
+        raise HTTPException(400, "Si possono aprire solo le cartelle di destinazione o sorgente.")
+    if sys.platform == "win32":
+        os.startfile(str(target))  # noqa: S606 - percorso verificato sopra
+    else:
+        subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(target)])
+    return {"ok": True}
+
+
+@router.post("/system/open-file")
+def open_file(body: dict = Body(...), conn=Depends(get_db)):
+    """Apre un file con l'app predefinita (action=open) oppure lo mostra nella sua cartella (action=reveal).
+    Solo file esistenti dentro la cartella sorgente o di destinazione. Il file non viene mai modificato."""
+    raw = body.get("path")
+    action = body.get("action", "open")
+    if not isinstance(raw, str) or not raw.strip():
+        raise HTTPException(400, "Indica il file da aprire.")
+    if action not in ("open", "reveal"):
+        raise HTTPException(400, "Azione non valida.")
+    cfg = get_cfg()
+    roots = [Path(os.path.abspath(r)) for r in (cfg.output_dir, _effective_source(cfg, conn)) if r]
+    target = Path(os.path.abspath(raw.strip()))
+    if not target.is_file():
+        raise HTTPException(404, "Il file non esiste.")
+    if not any(_inside(target, r) for r in roots if r.is_dir()):
+        raise HTTPException(400, "Si possono aprire solo i file della sorgente o della destinazione.")
+    if sys.platform == "win32":
+        if action == "reveal":
+            subprocess.Popen(["explorer", f"/select,{target}"])
+        else:
+            os.startfile(str(target))  # noqa: S606 - percorso verificato sopra
+    else:
+        if action == "reveal":
+            subprocess.Popen(["xdg-open", str(target.parent)])
+        else:
+            subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(target)])
+    return {"ok": True}
+
+
+@router.get("/system/disk")
+def disk(path: str | None = Query(default=None), conn=Depends(get_db)):
+    cfg = get_cfg()
+    source = _effective_source(cfg, conn)
+    target = (path or "").strip() or cfg.output_dir or source
+    if not target:
+        raise HTTPException(400, "Indica una cartella.")
+    p = Path(os.path.abspath(target))
+    probe = _nearest_existing(p)  # per lo spazio libero: la cartella stessa o il primo antenato esistente
+    src_probe = _nearest_existing(Path(os.path.abspath(source))) if source else None
+    if probe is None:
+        return {"exists": False, "is_file": False, "free_bytes": None, "total_bytes": None, "drive": None,
+                "same_volume_as_source": False}
+    usage = shutil.disk_usage(probe)
+    return {
+        "exists": p.is_dir(),
+        "is_file": p.is_file(),  # un file al posto della cartella: messaggio diverso dal "non esiste"
+        "free_bytes": usage.free,
+        "total_bytes": usage.total,
+        "drive": probe.anchor or str(probe),
+        "same_volume_as_source": src_probe is not None and os.stat(probe).st_dev == os.stat(src_probe).st_dev,
+    }

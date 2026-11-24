@@ -1,0 +1,207 @@
+/* view-album-detail.css — dettaglio album (caricato dinamicamente da views/album-detail.js).
+   Solo token --md-sys-* / --shape-* / --sp-* / --dur-* : nessun colore fisso. */
+
+/* ---------- Intestazione con copertina sfumata ---------- */
+.album-hero {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-height: 200px;
+  margin-bottom: var(--sp-4);
+  border-radius: var(--shape-xl);
+  overflow: hidden;
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface);
+}
+@media (min-width: 600px) {
+  .album-hero { min-height: 300px; }
+}
+
+/* Sfumatura: la foto sfuma nel colore di superficie gia' dal centro, il testo resta leggibile in chiaro e scuro. */
+.album-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-raised);
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent 0%, var(--md-sys-color-surface) 62%);
+}
+
+.album-hero__media {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: grid;
+  place-items: center;
+  background: var(--md-sys-color-surface-container-highest);
+}
+.album-hero__img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity var(--dur-medium) var(--motion-standard);
+}
+.album-hero.has-cover .album-hero__img { opacity: 1; }
+.album-hero__img[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .album-hero__img { transition: none; }
+}
+/* Icona md-icon: la dimensione va sull'elemento stesso (md-icon ignora font-size). In alto, lontano dal titolo. */
+.album-hero__placeholder {
+  --md-icon-size: 72px;
+  width: 72px;
+  height: 72px;
+  margin-top: var(--sp-4);
+  align-self: start;
+  color: var(--md-sys-color-on-surface-variant);
+}
+@media (max-width: 599px) {
+  .album-hero__placeholder { --md-icon-size: 56px; width: 56px; height: 56px; }
+}
+.album-hero.has-cover .album-hero__placeholder { display: none; }
+
+.album-hero__body {
+  position: relative;
+  z-index: var(--z-raised);
+  min-width: 0;
+  padding: var(--sp-6);
+}
+.album-hero__title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.album-hero__name {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--md-sys-color-on-surface);
+}
+.album-hero__edit { flex: none; }
+@media (pointer: coarse) {
+  .album-hero__edit { width: 48px; height: 48px; }
+}
+.album-hero__meta {
+  margin: var(--sp-1) 0 0;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+/* Segnaposto di caricamento: righe grigie al posto di nome e conteggio. */
+.album-hero.is-loading .album-hero__name,
+.album-hero.is-loading .album-hero__meta {
+  display: block;
+  min-height: 1.4em;
+  color: transparent;
+  border-radius: var(--shape-xs);
+  background: var(--md-sys-color-surface-container-highest);
+}
+.album-hero.is-loading .album-hero__name { width: min(60%, 320px); }
+.album-hero.is-loading .album-hero__meta { width: min(35%, 200px); margin-top: var(--sp-2); }
+
+@media (max-width: 599px) {
+  .album-hero__body { padding: var(--sp-4); }
+}
+
+/* ---------- Azioni ---------- */
+.album-detail__actions { margin-bottom: var(--sp-2); }
+.album-detail__danger {
+  --md-outlined-button-label-text-color: var(--md-sys-color-error);
+  --md-outlined-button-icon-color: var(--md-sys-color-error);
+  --md-outlined-button-outline-color: var(--md-sys-color-outline);
+}
+
+/* ---------- Griglia e stati vuoti ---------- */
+.album-detail__grid { position: relative; min-height: 160px; }
+.album-detail__grid[hidden],
+.album-detail__empty[hidden] { display: none; }
+.album-detail__empty { padding-top: var(--sp-4); }
+
+/* ---------- Selettore "Aggiungi foto" a schermo intero ---------- */
+.album-picker {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  display: flex;
+  flex-direction: column;
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  animation: album-picker-in var(--dur-medium) var(--motion-emphasized-decel) both;
+}
+@keyframes album-picker-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .album-picker { animation: none; }
+}
+
+.album-picker__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 64px;
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--md-sys-color-surface-container);
+  box-shadow: var(--elev-1);
+}
+.album-picker__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--md-sys-color-on-surface);
+}
+.album-picker__filters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-4) var(--sp-3);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+.album-picker__chips { padding: 0; }
+.album-picker__chips:empty { display: none; }
+@media (pointer: coarse) {
+  .album-picker__chips md-filter-chip { min-height: 48px; }
+}
+/* Foto gia' nell'album: non selezionabili, con badge testuale. */
+.album-picker .photo-tile.is-member { cursor: default; }
+.album-picker__member {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  max-width: calc(100% - 52px); /* lascia spazio al cuore in alto a destra */
+  padding: 2px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-radius: var(--shape-full);
+  background: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-on-surface);
+  font: 500 12px / 16px var(--md-ref-typeface-plain);
+  text-align: center;
+  pointer-events: none;
+  box-shadow: var(--elev-1);
+}
+
+.album-picker__body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--sp-1) var(--sp-4) var(--sp-6);
+}
+
+.album-picker .photo-tile:focus-visible { outline-offset: 2px; }
+
+@media (max-width: 599px) {
+  .album-picker__bar { padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-1); gap: var(--sp-1); }
+  .album-picker__filters { padding: var(--sp-2) var(--sp-3) var(--sp-2); }
+  .album-picker__body { padding-inline: var(--sp-3); }
+}

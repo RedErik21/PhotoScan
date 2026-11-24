@@ -1,0 +1,1265 @@
+/* components.css — componenti riutilizzabili di FotoScan 2 (posseduto dall'agente "css-components").
+   Solo token: --md-sys-color-*, --shape-*, --elev-*, --sp-*, --dur-*, --motion-*, --md-sys-typescale-*.
+   Nessun colore hard-coded. Overlay scuri = color-mix con --md-sys-color-scrim.
+
+   CLASSI (nomi FISSI, usati dagli altri moduli):
+   Foto
+     .tile-grid                 griglia auto-fill minmax(var(--tile-size),1fr), gap var(--tile-gap)
+     .tile-group-header         intestazione di gruppo/giorno, sticky; dentro .tile-grid occupa tutta la riga
+     .photo-tile                contenitore quadrato (position relative, shape-sm, overflow hidden, hover = scurimento + scale 1.02)
+       .photo-tile__img         <img> object-fit cover
+       .photo-tile__badge       badge video in basso a sinistra: icona play + durata (scrim 60%)
+       .photo-tile__fav         bottone cuore in alto a destra; visibile su hover/focus, sempre visibile se
+                                [aria-pressed="true"] o .is-active (icona piena), sempre visibile su dispositivi touch
+       .photo-tile__check       cerchio di selezione in alto a sinistra (icona check da .material-symbols-outlined)
+       .photo-tile__meta        didascalia in basso (gradiente scuro), usata se showMeta
+       [data-selected="true"]   immagine inset 12%, shape-md, bordo primary 2px, check riempito
+   Griglia virtuale (js/ui/virtual-grid.js)
+     .vg-layer / .vg-row / .vg-cell / .vg-header-slot    altezza intestazione: --vg-header-h
+   Skeleton (js/ui/skeleton.js)
+     .skeleton                  shimmer M3 (surface-container-highest); base per le varianti
+     .skeleton-grid             griglia di quadrati; lato da --skeleton-tile (px)
+     .skeleton-tile / -line(--short) / -card / -card-media / -card-body
+     .skeleton-list / -row / -avatar / -row-text          elenco con cerchio + due righe
+   Stati e feedback (js/ui/empty-state.js)
+     .empty-state(--error)      centrato: .empty-state__icon, __title, __text, __action
+     .loading-block             attesa breve: .loading-block__label
+     .progress-block            wrapper di md-linear-progress: .progress-block__head (testo + percentuale), .progress-block__text
+     .callout                   avviso in riquadro: modificatori .callout--info (default), --warning, --error
+     .banner                    striscia a tutta larghezza (.banner__actions per i pulsanti)
+   Navigazione e controlli
+     .scrubber                  rail verticale a destra (js/ui/scrubber.js): .scrubber__ticks, __labels, __tick(--year|--month),
+                                __label, __thumb, __tooltip; stati .is-compact .is-visible .is-empty .is-dragging .is-active
+     .viewer-overlay            schermo intero, scrim 92%; .has-info riserva 360px a destra
+       .viewer-topbar           controlli in alto
+       .viewer-stage            area immagine/video
+       .viewer-nav              freccia laterale: modificatori .viewer-nav--prev / --next
+       .viewer-info             pannello info a destra 360px (bottom sheet sotto 600px)
+     .selection-bar             barra contestuale in alto (js/ui/selection.js): .is-open, __count, __actions
+     .chip-row                  riga orizzontale scrollabile di chip, senza scrollbar visibile
+     .kbd                       tasto tastiera
+   Contenuti
+     .card                      superficie surface-container-low; modificatore .card--clickable (state layer)
+     .stat-card                 numero grande (.stat-card__value) + etichetta (.stat-card__label)
+     .table-m3                  tabella densa, righe con hover, th sticky (inserire in un contenitore con overflow auto);
+                                .num per colonne numeriche allineate a destra
+     .compare                   due colonne affiancate con divisore (confronto duplicati); sotto 600px impilate
+     .code-block                monospace su surface-container
+
+   Il colore delle superfici scure (viewer, badge su foto) usa --on-media: chiaro in entrambi i temi. */
+
+/* Colore del testo posto sopra foto e scrim (chiaro in entrambi i temi). */
+:root { --on-media: var(--md-sys-color-inverse-on-surface); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --on-media: var(--md-sys-color-inverse-surface); }
+}
+:root[data-theme="dark"] { --on-media: var(--md-sys-color-inverse-surface); }
+
+/* ---------- Griglia foto ---------- */
+.tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--tile-size), 1fr));
+  gap: var(--tile-gap);
+}
+.tile-grid > .tile-group-header { grid-column: 1 / -1; }
+
+.tile-group-header {
+  position: sticky; top: 0; z-index: var(--z-sticky);
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  font: 500 var(--md-sys-typescale-label-large-size) / var(--md-sys-typescale-label-large-line-height) var(--md-ref-typeface-plain);
+  color: var(--md-sys-color-on-surface);
+  background: color-mix(in srgb, var(--md-sys-color-surface) 92%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.photo-tile {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  contain: layout paint style;
+  border-radius: var(--shape-sm);
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--on-media);
+  cursor: pointer;
+  transition: transform var(--dur-short) var(--motion-standard), border-radius var(--dur-medium) var(--motion-standard),
+    box-shadow var(--dur-short) var(--motion-standard), background-color var(--dur-short) var(--motion-standard);
+  -webkit-tap-highlight-color: transparent;
+}
+/* State layer M3: leggero scurimento su hover, 10% in pressione; la pressione scala la tile (ritorno morbido dalla transition). */
+.photo-tile::after {
+  content: ""; position: absolute; inset: 0; z-index: var(--z-raised); pointer-events: none;
+  background: var(--md-sys-color-on-surface); opacity: 0;
+  transition: opacity var(--dur-short) var(--motion-standard);
+}
+.photo-tile:hover::after { opacity: .08; }
+.photo-tile:active::after { opacity: .10; }
+.photo-tile:active { transform: scale(.98); }
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .photo-tile:hover .photo-tile__img { transform: scale(1.02); }
+}
+/* Tile in attesa dell'ingresso (js/ui/photo-tile.js): invisibile finche' non si sa se entra nello schermo */
+.photo-tile.is-pending { opacity: 0; }
+.photo-tile:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
+
+.photo-tile__img {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover; display: block;
+  border-radius: inherit;
+  transition: inset var(--dur-medium) var(--motion-standard), transform var(--dur-medium) var(--motion-standard),
+    border-radius var(--dur-medium) var(--motion-standard);
+}
+
+.photo-tile__badge {
+  position: absolute; left: var(--sp-1); bottom: var(--sp-1); z-index: var(--z-raised);
+  display: inline-flex; align-items: center; gap: 2px;
+  height: 20px; padding: 0 var(--sp-2) 0 var(--sp-1);
+  border-radius: var(--shape-xs);
+  background: color-mix(in srgb, var(--md-sys-color-scrim) 60%, transparent);
+  color: var(--on-media);
+  font: 500 var(--md-sys-typescale-label-medium-size) / var(--md-sys-typescale-label-medium-line-height) var(--md-ref-typeface-plain);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.photo-tile__badge .material-symbols-outlined { font-size: 16px; font-variation-settings: 'FILL' 1; }
+/* Con didascalia il badge sale sopra la didascalia */
+.photo-tile:has(.photo-tile__meta) .photo-tile__badge { bottom: 28px; }
+
+.photo-tile__fav {
+  position: absolute; top: var(--sp-1); right: var(--sp-1); z-index: var(--z-raised);
+  display: grid; place-items: center;
+  width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--shape-full);
+  background: color-mix(in srgb, var(--md-sys-color-scrim) 45%, transparent);
+  color: var(--on-media); cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-short) var(--motion-standard), background-color var(--dur-short) var(--motion-standard);
+}
+.photo-tile:hover .photo-tile__fav,
+.photo-tile:focus-within .photo-tile__fav,
+.photo-tile__fav[aria-pressed="true"],
+.photo-tile__fav.is-active { opacity: 1; }
+.photo-tile__fav:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; opacity: 1; }
+.photo-tile__fav .material-symbols-outlined { font-size: 20px; }
+.photo-tile__fav[aria-pressed="true"] .material-symbols-outlined,
+.photo-tile__fav.is-active .material-symbols-outlined { font-variation-settings: 'FILL' 1; }
+@media (hover: none) {
+  .photo-tile__fav { opacity: 1; }
+}
+
+.photo-tile__check {
+  position: absolute; top: var(--sp-2); left: var(--sp-2); z-index: var(--z-raised);
+  display: grid; place-items: center;
+  width: 24px; height: 24px; box-sizing: border-box;
+  border: 2px solid var(--on-media); border-radius: var(--shape-full);
+  background: color-mix(in srgb, var(--md-sys-color-scrim) 35%, transparent);
+  color: transparent; pointer-events: none;
+  transition: background-color var(--dur-short) var(--motion-standard), color var(--dur-short) var(--motion-standard);
+}
+.photo-tile__check .material-symbols-outlined { font-size: 18px; font-weight: 600; }
+
+/* Selezione: immagine rientrata del 12%, cornice primary, check riempito */
+.photo-tile[data-selected="true"] {
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-primary-container);
+  box-shadow: inset 0 0 0 2px var(--md-sys-color-primary);
+}
+.photo-tile[data-selected="true"] .photo-tile__img {
+  inset: 12%; width: 76%; height: 76%;
+  border-radius: var(--shape-sm);
+}
+.photo-tile[data-selected="true"] .photo-tile__check {
+  background: var(--md-sys-color-primary);
+  border-color: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+  animation: check-pop var(--dur-medium) var(--motion-spring) backwards;
+}
+
+.photo-tile__meta {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: var(--z-raised);
+  padding: var(--sp-6) var(--sp-2) var(--sp-1);
+  background: linear-gradient(to top, color-mix(in srgb, var(--md-sys-color-scrim) 70%, transparent), transparent);
+  color: var(--on-media);
+  font: 400 var(--md-sys-typescale-label-medium-size) / var(--md-sys-typescale-label-medium-line-height) var(--md-ref-typeface-plain);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.photo-tile__fallback {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface-variant);
+}
+.photo-tile__fallback .material-symbols-outlined { font-size: 32px; }
+.photo-tile.is-error { cursor: default; }
+.photo-tile__date, .photo-tile__dur { white-space: nowrap; }
+.photo-tile__ctx { opacity: 0.85; }
+
+/* Touch (puntatore grossolano): aree di tocco di almeno 48px. Su desktop non cambia nulla. */
+@media (pointer: coarse) {
+  md-icon-button, .nav-toggle, .theme-btn { width: 48px; height: 48px; }
+  .photo-tile__fav { width: 48px; height: 48px; }
+  md-filter-chip { min-height: 48px; align-items: center; }
+  md-switch { min-width: 48px; min-height: 48px; }
+  md-slider { min-height: 48px; }
+}
+
+/* ---------- Griglia virtuale (js/ui/virtual-grid.js) ---------- */
+:root { --vg-header-h: 48px; }   /* deve coincidere con HEADER_H in virtual-grid.js */
+.vg-layer { position: relative; width: 100%; contain: layout style; }
+.vg-row { position: absolute; top: 0; left: 0; right: 0; display: grid; justify-content: start; contain: layout paint style; will-change: transform; }
+.vg-row.vg-header { display: block; }
+.vg-cell { position: relative; min-width: 0; contain: layout paint style; }
+.vg-cell > * { display: block; width: 100%; height: 100%; }
+.vg-cell:focus-visible { outline: 3px solid var(--md-sys-color-primary); outline-offset: -3px; border-radius: var(--shape-sm); }
+.vg-header-slot { height: var(--vg-header-h); box-sizing: border-box; overflow: hidden; }
+.vg-header-slot > .tile-group-header { position: static; height: 100%; padding: 0 var(--sp-1); background: none; backdrop-filter: none; }
+
+/* ---------- Skeleton (shimmer) ---------- */
+.skeleton {
+  background: linear-gradient(90deg,
+      var(--md-sys-color-surface-container-highest) 25%,
+      var(--md-sys-color-surface-bright) 50%,
+      var(--md-sys-color-surface-container-highest) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer calc(var(--dur-long) * 3.5) var(--motion-standard) infinite;
+}
+@keyframes skeleton-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+.skeleton-grid {
+  display: grid; gap: var(--tile-gap, 4px);
+  grid-template-columns: repeat(auto-fill, minmax(var(--skeleton-tile, 180px), 1fr));
+}
+.skeleton-tile { width: 100%; aspect-ratio: 1 / 1; border-radius: var(--shape-sm); }
+.skeleton-line { display: block; width: 100%; height: 14px; border-radius: var(--shape-xs); }
+.skeleton-line--short { width: 40%; }
+.skeleton-card { width: 100%; min-height: 120px; border-radius: var(--shape-md); box-sizing: border-box; }
+.skeleton-card-media { width: 100%; height: 140px; border-radius: var(--shape-sm); }
+.skeleton-card-body { display: flex; flex-direction: column; gap: var(--sp-2); }
+.skeleton-list { display: flex; flex-direction: column; gap: var(--sp-1); }
+.skeleton-row { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-4); }
+.skeleton-avatar { flex: none; width: 40px; height: 40px; border-radius: var(--shape-full); }
+.skeleton-row-text { display: flex; flex: 1; flex-direction: column; gap: var(--sp-2); min-width: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+}
+
+/* ---------- Stato vuoto ---------- */
+.empty-state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--sp-3);
+  margin: 0 auto; padding: var(--sp-10) var(--sp-4);
+  max-width: 480px; text-align: center;
+}
+.empty-state__icon { --md-icon-size: 64px; font-size: 64px; color: var(--md-sys-color-on-surface-variant); }
+.empty-state__icon .material-symbols-outlined { font-size: 64px; line-height: 1; }
+.empty-state__title {
+  margin: 0; color: var(--md-sys-color-on-surface);
+  font: 400 var(--md-sys-typescale-headline-small-size) / var(--md-sys-typescale-headline-small-line-height) var(--md-ref-typeface-plain);
+}
+.empty-state__text {
+  margin: 0; color: var(--md-sys-color-on-surface-variant);
+  font: 400 var(--md-sys-typescale-body-large-size) / var(--md-sys-typescale-body-large-line-height) var(--md-ref-typeface-plain);
+}
+.empty-state__action { margin-top: var(--sp-2); }
+.empty-state--error .empty-state__icon { color: var(--md-sys-color-error); }
+
+.loading-block {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--sp-3); padding: var(--sp-6) var(--sp-4); text-align: center;
+}
+.loading-block__label {
+  margin: 0; color: var(--md-sys-color-on-surface-variant);
+  font: 400 var(--md-sys-typescale-body-medium-size) / var(--md-sys-typescale-body-medium-line-height) var(--md-ref-typeface-plain);
+}
+
+/* ---------- Progresso ---------- */
+.progress-block { display: flex; flex-direction: column; gap: var(--sp-2); width: 100%; }
+.progress-block__head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3);
+  color: var(--md-sys-color-on-surface);
+  font: 500 var(--md-sys-typescale-label-large-size) / var(--md-sys-typescale-label-large-line-height) var(--md-ref-typeface-plain);
+  font-variant-numeric: tabular-nums;
+}
+.progress-block md-linear-progress { width: 100%; }
+.progress-block__percent { font-variant-numeric: tabular-nums; color: var(--md-sys-color-primary); }
+.progress-block__text {
+  color: var(--md-sys-color-on-surface-variant);
+  font: 400 var(--md-sys-typescale-body-medium-size) / var(--md-sys-typescale-body-medium-line-height) var(--md-ref-typeface-plain);
+}
+
+/* ---------- Callout (avvisi in riquadro) ---------- */
+.callout {
+  display: flex; align-items: flex-start; gap: var(--sp-3);
+  padding: var(--sp-4);
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+  font: 400 var(--md-sys-typescale-body-medium-size) / var(--md-sys-typescale-body-medium-line-height) var(--md-ref-typeface-plain);
+}
+.callout--info { background: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container); }
+.callout--warning { background: var(--md-sys-color-tertiary-container); color: var(--md-sys-color-on-tertiary-container); }
+.callout--error { background: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); }
+.callout__icon { flex: none; font-size: 24px; }
+.callout__title { margin: 0 0 var(--sp-1); font-weight: 500; font-size: var(--md-sys-typescale-title-medium-size); }
+.callout p { margin: 0; }
+
+/* ---------- Banner (striscia a tutta larghezza) ---------- */
+.banner {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3);
+  width: 100%; box-sizing: border-box;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  font: 400 var(--md-sys-typescale-body-medium-size) / var(--md-sys-typescale-body-medium-line-height) var(--md-ref-typeface-plain);
+}
+.banner > span:first-child { flex: 1 1 240px; }
+.banner__actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-left: auto; }
+
+/* ---------- Scrubber (rail verticale anno/mese, js/ui/scrubber.js) ---------- */
+.scrubber {
+  position: absolute; top: 0; bottom: 0; right: 0; z-index: var(--z-sticky);
+  width: 56px; touch-action: none; user-select: none; -webkit-user-select: none;
+  transition: opacity var(--dur-medium) var(--motion-standard);
+}
+.scrubber.is-empty { display: none; }
+.scrubber.is-compact { width: 48px; }
+.scrubber.is-compact:not(.is-visible) { opacity: 0; pointer-events: none; }
+.scrubber__ticks, .scrubber__labels { position: absolute; inset: 0; pointer-events: none; }
+.scrubber__tick {
+  position: absolute; right: 0; width: 6px; height: 1px; margin-top: -0.5px;
+  background: var(--md-sys-color-outline-variant);
+}
+.scrubber__tick--year { width: 12px; background: var(--md-sys-color-on-surface-variant); }
+.scrubber__label {
+  position: absolute; right: 12px; transform: translateY(-50%); padding: 0 4px;
+  border-radius: var(--shape-xs);
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface-variant);
+  font: 400 var(--md-sys-typescale-label-medium-size) / var(--md-sys-typescale-label-medium-line-height) var(--md-ref-typeface-plain);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transition: background-color var(--dur-short) var(--motion-standard), color var(--dur-short) var(--motion-standard), transform var(--dur-short) var(--motion-standard);
+}
+.scrubber__label.is-active {
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+  font-weight: 600;
+  transform: translateY(-50%) scale(1.06);
+}
+.scrubber.is-compact .scrubber__label {
+  right: 10px;
+  font-size: var(--md-sys-typescale-label-medium-size); line-height: var(--md-sys-typescale-label-medium-line-height);
+}
+.scrubber__thumb {
+  position: absolute; top: 0; right: 4px; width: 10px; height: 44px; transform: translateY(-50%);
+  will-change: transform;
+  border-radius: var(--shape-full); background: var(--md-sys-color-primary);
+  cursor: grab; transition: width var(--dur-short) var(--motion-standard);
+}
+.scrubber.is-compact .scrubber__thumb { right: 6px; width: 6px; height: 36px; }
+/* A 390px le etichette degli anni si sovrapponevano alle tile: su compatto restano tacche e tooltip. */
+.scrubber.is-compact .scrubber__labels { display: none; }
+.scrubber.is-dragging .scrubber__thumb { width: 14px; cursor: grabbing; }
+.scrubber__thumb:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 3px; }
+.scrubber__tooltip {
+  position: absolute; top: 0; right: 24px; transform: translateY(-50%); padding: 4px 12px;
+  will-change: transform;
+  border-radius: var(--shape-sm);
+  background: var(--md-sys-color-inverse-surface); color: var(--md-sys-color-inverse-on-surface);
+  font: 500 var(--md-sys-typescale-label-large-size) / var(--md-sys-typescale-label-large-line-height) var(--md-ref-typeface-plain);
+  white-space: nowrap; pointer-events: none; opacity: 0;
+  transition: opacity var(--dur-short) var(--motion-standard);
+}
+.scrubber.is-compact .scrubber__tooltip { right: 20px; }
+.scrubber__tooltip.is-active { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .scrubber, .scrubber__thumb, .scrubber__tooltip { transition: none; }
+}
+
+/* ---------- Visualizzatore (overlay a schermo intero) ---------- */
+.viewer-overlay {
+  position: fixed; inset: 0; z-index: var(--z-overlay);
+  display: flex; flex-direction: column;
+  background: color-mix(in srgb, var(--md-sys-color-scrim) 92%, transparent);
+  color: var(--on-media);
+  overflow: hidden;
+}
+.viewer-overlay[hidden] { display: none; }
+.viewer-topbar {
+  position: relative; z-index: var(--z-raised);
+  display: flex; align-items: center; gap: var(--sp-2);
+  height: var(--topbar-height); padding: 0 var(--sp-4);
+  flex: none;
+}
+.viewer-topbar__title {
+  flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font: 500 var(--md-sys-typescale-title-medium-size) / var(--md-sys-typescale-title-medium-line-height) var(--md-ref-typeface-plain);
+}
+.viewer-topbar__actions { display: flex; align-items: center; gap: var(--sp-1); }
+.viewer-stage {
+  position: relative; flex: 1; min-height: 0;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; touch-action: none;
+}
+.viewer-stage img,
+.viewer-stage video {
+  max-width: 100%; max-height: 100%;
+  object-fit: contain; user-select: none; -webkit-user-drag: none;
+}
+.viewer-nav {
+  position: absolute; top: 50%; z-index: var(--z-raised); transform: translateY(-50%);
+  display: grid; place-items: center;
+  width: 48px; height: 48px; padding: 0; border: 0; border-radius: var(--shape-full);
+  background: color-mix(in srgb, var(--md-sys-color-scrim) 40%, transparent);
+  color: var(--on-media); cursor: pointer;
+  transition: background-color var(--dur-short) var(--motion-standard);
+}
+.viewer-nav:hover { background: color-mix(in srgb, var(--md-sys-color-scrim) 60%, transparent); }
+.viewer-nav:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
+.viewer-nav--prev { left: var(--sp-4); }
+.viewer-nav--next { right: var(--sp-4); }
+.viewer-nav[disabled] { opacity: .3; cursor: default; }
+
+/* Pannello info: 360px a destra; sotto 600px bottom sheet */
+.viewer-info {
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: var(--z-raised);
+  width: var(--info-width); box-sizing: border-box;
+  display: flex; flex-direction: column; gap: var(--sp-3);
+  padding: var(--sp-6) var(--sp-5); overflow-y: auto;
+  background: var(--md-sys-color-surface-container-low);
+  color: var(--md-sys-color-on-surface);
+  border-left: 1px solid var(--md-sys-color-outline-variant);
+  font: 400 var(--md-sys-typescale-body-medium-size) / var(--md-sys-typescale-body-medium-line-height) var(--md-ref-typeface-plain);
+}
+.viewer-info[hidden] { display: none; }
+.viewer-overlay.has-info .viewer-stage { margin-right: var(--info-width); }
+.viewer-info__title {
+  margin: 0; font: 400 var(--md-sys-typescale-title-large-size) / var(--md-sys-typescale-title-large-line-height) var(--md-ref-typeface-plain);
+}
+.viewer-info__row { display: flex; justify-content: space-between; gap: var(--sp-3); }
+.viewer-info__row dt { color: var(--md-sys-color-on-surface-variant); }
+.viewer-info__row dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+@media (max-width: 599px) {
+  .viewer-info {
+    top: auto; left: 0; right: 0; bottom: 0;
+    width: 100%; max-height: 60%;
+    border-left: 0; border-top: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: var(--shape-xl) var(--shape-xl) 0 0;
+    box-shadow: var(--elev-3);
+  }
+  .viewer-overlay.has-info .viewer-stage { margin-right: 0; margin-bottom: 40%; }
+}
+
+/* ---------- Barra di selezione contestuale (js/ui/selection.js) ---------- */
+/* Lo slot ha altezza 0 e resta in cima alla vista: la barra e' un overlay e non sposta la griglia. */
+.selection-bar-slot { position: sticky; top: 0; height: 0; z-index: var(--z-sticky); }
+.selection-bar {
+  position: absolute; top: var(--sp-2); left: 0; right: 0;
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2);
+  min-height: 56px; padding: var(--sp-2) var(--sp-3); box-sizing: border-box;
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  box-shadow: var(--elev-2);
+  opacity: 0; transform: translateY(-8px);
+  transition: opacity var(--dur-short) var(--motion-standard), transform var(--dur-short) var(--motion-standard);
+}
+.selection-bar.is-open { opacity: 1; transform: none; }
+.selection-bar[hidden] { display: none; }
+.selection-bar__count {
+  flex: 1 1 auto; min-width: 0; white-space: nowrap;
+  font: 500 var(--md-sys-typescale-title-medium-size) / var(--md-sys-typescale-title-medium-line-height) var(--md-ref-typeface-plain);
+  font-variant-numeric: tabular-nums;
+}
+.selection-bar__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); margin-left: auto; }
+.selection-bar md-icon-button {
+  --md-icon-button-icon-color: currentColor; --md-icon-button-hover-icon-color: currentColor;
+  --md-icon-button-focus-icon-color: currentColor; --md-icon-button-pressed-icon-color: currentColor;
+}
+/* Azioni con testo visibile (da 600px); sotto 600px solo icona. */
+.selection-bar md-text-button {
+  --md-text-button-label-text-color: currentColor; --md-text-button-icon-color: currentColor;
+  --md-text-button-hover-label-text-color: currentColor; --md-text-button-hover-icon-color: currentColor;
+  --md-text-button-focus-label-text-color: currentColor; --md-text-button-pressed-label-text-color: currentColor;
+}
+.selection-bar__label { white-space: nowrap; }
+@media (max-width: 599px) {
+  .selection-bar__label { display: none; }
+  .selection-bar md-text-button { min-width: 48px; --md-text-button-leading-space: 12px; --md-text-button-trailing-space: 12px; }
+}
+@media (prefers-reduced-motion: reduce) { .selection-bar { transition: none; transform: none; } }
+
+/* ---------- Stepper dei flussi (Analisi, Onboarding, Crea cartelle) ----------
+   Un solo linguaggio visivo per i tre stepper: pallino 32px circolare, connettore sottile tra i passi.
+   Passi: .idx-step, .ob-stepper__item, .apply-step. Stati: .is-done (fatto), .is-current (corrente).
+   Il connettore verso un passo e' primary se il passo precedente e' fatto, outline-variant altrimenti.
+   I contenitori (griglia o flex) e i casi speciali (es. in pausa) stanno nei file delle viste. */
+.idx-step,
+.ob-stepper__item,
+.apply-step {
+  position: relative; min-width: 0;
+  display: flex; flex-direction: column; align-items: center; gap: var(--sp-2);
+  padding-inline: var(--sp-1);
+  text-align: center;
+  color: var(--md-sys-color-on-surface-variant);
+}
+/* Connettore: dal centro del passo precedente al centro di questo (pallino 32px, centro a 16px dall'alto) */
+.idx-step::before,
+.ob-stepper__item::before,
+.apply-step::before {
+  content: ''; position: absolute; top: 15px; height: 2px;
+  left: calc(-50% + 16px); right: calc(50% + 16px);
+  background: var(--md-sys-color-outline-variant);
+}
+.idx-step:first-child::before,
+.ob-stepper__item:first-child::before,
+.apply-step:first-child::before { display: none; }
+.idx-step.is-done + .idx-step::before,
+.ob-stepper__item.is-done + .ob-stepper__item::before,
+.apply-step.is-done + .apply-step::before { background: var(--md-sys-color-primary); }
+
+.idx-step__dot,
+.ob-stepper__dot,
+.apply-step__dot {
+  position: relative; z-index: var(--z-raised); flex: none;
+  display: grid; place-items: center;
+  width: 32px; height: 32px; box-sizing: border-box; border-radius: var(--shape-full);
+  background: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-on-surface-variant);
+  font: 500 var(--md-sys-typescale-label-large-size) / 1 var(--md-ref-typeface-plain);
+  font-variant-numeric: tabular-nums;
+  transition: background-color var(--dur-medium) var(--motion-standard), box-shadow var(--dur-medium) var(--motion-standard);
+}
+.idx-step__dot .material-symbols-outlined,
+.ob-stepper__dot .material-symbols-outlined,
+.ob-stepper__dot .callout__icon,
+.apply-step__dot .material-symbols-outlined { font-size: 18px; }
+
+.idx-step__label,
+.ob-stepper__label,
+.apply-step__label {
+  overflow-wrap: anywhere;
+  font: 400 var(--md-sys-typescale-label-medium-size) / var(--md-sys-typescale-label-medium-line-height) var(--md-ref-typeface-plain);
+}
+.idx-step.is-current .idx-step__label,
+.ob-stepper__item.is-current .ob-stepper__label,
+.apply-step.is-current .apply-step__label { color: var(--md-sys-color-on-surface); font-weight: 600; }
+
+/* Fatto: contenitore primary-container. */
+.idx-step.is-done .idx-step__dot,
+.ob-stepper__item.is-done .ob-stepper__dot,
+.apply-step.is-done .apply-step__dot {
+  background: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container);
+}
+/* Corrente: primary pieno con anello leggero. */
+.idx-step.is-current .idx-step__dot,
+.ob-stepper__item.is-current .ob-stepper__dot,
+.apply-step.is-current .apply-step__dot {
+  background: var(--md-sys-color-primary); color: var(--md-sys-color-on-primary);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--md-sys-color-primary) 24%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .idx-step__dot, .ob-stepper__dot, .apply-step__dot { transition: none; }
+}
+
+/* ---------- Chip, tasti, card ---------- */
+.chip-row {
+  display: flex; align-items: center; gap: var(--sp-2);
+  overflow-x: auto; overscroll-behavior-x: contain;
+  padding: var(--sp-1) var(--sp-4);
+  scrollbar-width: none; -ms-overflow-style: none;
+}
+.chip-row::-webkit-scrollbar { display: none; }
+.chip-row > * { flex: none; }
+
+.kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 22px; height: 22px; padding: 0 var(--sp-1); box-sizing: border-box;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-bottom-width: 2px;
+  border-radius: var(--shape-xs);
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface);
+  font-family: ui-monospace, 'Roboto Mono', Consolas, monospace;
+  font-size: var(--md-sys-typescale-label-medium-size); line-height: 1;
+}
+
+.card {
+  display: flex; flex-direction: column; gap: var(--sp-3);
+  min-width: 0;
+  padding: var(--sp-4);
+  box-sizing: border-box;
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-surface-container);
+  color: var(--md-sys-color-on-surface);
+  position: relative;
+}
+.card--clickable { cursor: pointer; transition: box-shadow var(--dur-short) var(--motion-standard); }
+/* Card cliccabile: state layer M3 (8% hover, 10% pressed) invece di un'ombra. */
+.card--clickable::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit;
+  background: var(--md-sys-color-on-surface); opacity: 0; pointer-events: none;
+  transition: opacity var(--dur-short) var(--motion-standard);
+}
+.card--clickable:hover::after { opacity: .08; }
+.card--clickable:active::after { opacity: .10; }
+.card--clickable:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
+
+.stat-card { display: flex; flex-direction: column; gap: var(--sp-1); }
+.stat-card__value {
+  color: var(--md-sys-color-on-surface);
+  font: 400 var(--md-sys-typescale-headline-large-size) / var(--md-sys-typescale-headline-large-line-height) var(--md-ref-typeface-plain);
+  font-variant-numeric: tabular-nums;
+}
+.stat-card__label {
+  color: var(--md-sys-color-on-surface-variant);
+  font: 400 var(--md-sys-typescale-body-medium-size) / var(--md-sys-typescale-body-medium-line-height) var(--md-ref-typeface-plain);
+}
+
+/* ---------- Tabella densa ---------- */
+.table-m3 {
+  width: 100%; border-collapse: separate; border-spacing: 0;
+  color: var(--md-sys-color-on-surface);
+  font: 400 var(--md-sys-typescale-body-medium-size) / var(--md-sys-typescale-body-medium-line-height) var(--md-ref-typeface-plain);
+}
+.table-m3 th,
+.table-m3 td {
+  height: 40px; padding: var(--sp-1) var(--sp-3);
+  text-align: left; vertical-align: middle;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+.table-m3 th {
+  position: sticky; top: 0; z-index: var(--z-raised);
+  background: var(--md-sys-color-surface-container);
+  color: var(--md-sys-color-on-surface-variant);
+  font: 500 var(--md-sys-typescale-label-large-size) / var(--md-sys-typescale-label-large-line-height) var(--md-ref-typeface-plain);
+  white-space: nowrap;
+}
+.table-m3 tbody tr { transition: background-color var(--dur-short) var(--motion-standard); }
+.table-m3 tbody tr:hover { background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent); }
+.table-m3 .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ---------- Confronto (duplicati) ---------- */
+.compare {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+}
+.compare > * { min-width: 0; padding: 0 var(--sp-3); }
+.compare > :first-child { padding-left: 0; }
+.compare > :last-child { padding-right: 0; }
+.compare > * + * { border-left: 1px solid var(--md-sys-color-outline-variant); }
+@media (max-width: 599px) {
+  .compare { grid-template-columns: minmax(0, 1fr); }
+  .compare > * { padding: var(--sp-3) 0; }
+  .compare > * + * { border-left: 0; border-top: 1px solid var(--md-sys-color-outline-variant); }
+}
+
+/* ---------- Blocco di codice ---------- */
+.code-block {
+  margin: 0; padding: var(--sp-3) var(--sp-4);
+  overflow: auto; white-space: pre;
+  border-radius: var(--shape-sm);
+  background: var(--md-sys-color-surface-container);
+  color: var(--md-sys-color-on-surface);
+  font-family: ui-monospace, 'Roboto Mono', Consolas, monospace;
+  font-size: var(--md-sys-typescale-body-medium-size); line-height: 1.5;
+}
+
+/* ---------- Dialog M3 (js/ui/dialog.js) ---------- */
+.fs-dialog-text { white-space: pre-line; overflow-wrap: anywhere; }
+.fs-dialog-muted { color: var(--md-sys-color-on-surface-variant); margin-bottom: var(--sp-2); }
+.fs-dialog-field { display: block; width: 100%; margin-top: var(--sp-2); }
+.fs-dialog-chips { margin-top: var(--sp-3); }
+.fs-dialog-hint { margin: var(--sp-3) 0 var(--sp-1); color: var(--md-sys-color-on-surface-variant); }
+/* Lista dentro il dialog: sfondo trasparente, come il contenitore del dialog. */
+.fs-dialog-list { padding: 0; --md-list-container-color: transparent; }
+.fs-dialog-busy { display: flex; justify-content: center; padding: var(--sp-6) 0; }
+.fs-dialog-error { margin: var(--sp-3) 0 0; color: var(--md-sys-color-error); }
+.fs-dialog-danger-icon { color: var(--md-sys-color-error); }
+/* Pulsante di conferma distruttiva: container error, testo on-error. */
+md-filled-button.fs-btn-danger {
+  --md-filled-button-container-color: var(--md-sys-color-error);
+  --md-filled-button-label-text-color: var(--md-sys-color-on-error);
+}
+.fs-album-thumb {
+  display: grid; place-items: center; overflow: hidden;
+  width: 40px; height: 40px; border-radius: var(--shape-sm); object-fit: cover;
+  background: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-on-surface-variant);
+}
+.fs-album-thumb img { width: 100%; height: 100%; object-fit: cover; }
+
+/* ---------- Movimento ----------
+   Solo transform e opacity. Durate: --dur-short/--dur-medium; curve: --motion-emphasized-decel (ingresso),
+   --motion-emphasized-accel (uscita), --motion-standard (default). --motion-spring e --motion-stagger sono
+   locali a questo file: l'elasticita' della spunta e lo sfasamento delle tile. Con prefers-reduced-motion
+   i token di durata valgono 1ms: restano solo dissolvenze istantanee, niente scala ne' rimbalzo. */
+:root {
+  --motion-spring: cubic-bezier(.34, 1.56, .64, 1);   /* leggero overshoot per la spunta di selezione */
+  --motion-stagger: 16ms;                             /* sfasamento fra tile (max 8 tile = 128 ms) */
+}
+
+/* Ingresso tile: fade + scala 0.98 -> 1. Animato da js/ui/photo-tile.js solo per tile visibili, non durante lo scroll. */
+@keyframes tile-enter {
+  from { opacity: 0; transform: scale(.98); }
+  to { opacity: 1; transform: none; }
+}
+.photo-tile.is-enter {
+  animation: tile-enter var(--dur-short) var(--motion-emphasized-decel) backwards;
+  animation-delay: var(--tile-delay, 0ms);
+}
+
+/* Spunta di selezione: scala 0 -> 1 elastica */
+@keyframes check-pop {
+  from { transform: scale(0); }
+  to { transform: scale(1); }
+}
+
+/* Pressione dei pulsanti M3: scala 0.98, ritorno morbido. Lo state layer (8%/10%) lo gestiscono i componenti. */
+:is(md-filled-button, md-filled-tonal-button, md-outlined-button, md-elevated-button, md-text-button,
+    md-icon-button, md-filled-icon-button, md-filled-tonal-icon-button, md-outlined-icon-button, md-fab,
+    md-filter-chip, md-assist-chip, md-suggestion-chip, md-input-chip) {
+  transition: transform var(--dur-short) var(--motion-standard);
+}
+:is(md-filled-button, md-filled-tonal-button, md-outlined-button, md-elevated-button, md-text-button,
+    md-icon-button, md-filled-icon-button, md-filled-tonal-icon-button, md-outlined-icon-button, md-fab,
+    md-filter-chip, md-assist-chip, md-suggestion-chip, md-input-chip):active:not([disabled]) {
+  transform: scale(.98);
+}
+
+/* Contenuto che sostituisce uno skeleton: compare in dissolvenza invece di saltare (solo opacita').
+   @starting-style applica lo stato iniziale agli elementi appena inseriti nel DOM. */
+.tile-grid, .card, .stat-card, .table-m3, .empty-state, .callout {
+  transition: opacity var(--dur-medium) var(--motion-emphasized-decel);
+  @starting-style { opacity: 0; }
+}
+.card--clickable {
+  transition: box-shadow var(--dur-short) var(--motion-standard), opacity var(--dur-medium) var(--motion-emphasized-decel);
+}
+
+/* Slot 85 - Tipografia degli avvisi (.callout).
+   Il titolo .callout__title eredita la line-height del corpo (body-medium, 20px) con dimensione title-medium (16px).
+   Allineo titolo a typescale title-medium (size + line-height) e famiglia plain. Colori via token M3: tema scuro gia' coperto. */
+.callout__title {
+  font: 500 var(--md-sys-typescale-title-medium-size) / var(--md-sys-typescale-title-medium-line-height) var(--md-ref-typeface-plain);
+  margin: 0 0 var(--sp-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .photo-tile:active,
+  :is(md-filled-button, md-filled-tonal-button, md-outlined-button, md-elevated-button, md-text-button,
+      md-icon-button, md-filled-icon-button, md-filled-tonal-icon-button, md-outlined-icon-button, md-fab,
+      md-filter-chip, md-assist-chip, md-suggestion-chip, md-input-chip):active { transform: none; }
+  .photo-tile[data-selected="true"] .photo-tile__check { animation: none; }
+}
+
+/* Slot 55 - card: focus da tastiera piu visibile sulle card cliccabili/focusabili.
+   Colori solo da token M3 (si adattano anche al tema scuro). Rispetta prefers-reduced-motion. */
+.card--clickable:focus-visible,
+.card[tabindex]:focus-visible,
+.card[role="button"]:focus-visible {
+  outline: 3px solid var(--md-sys-color-primary);
+  outline-offset: var(--sp-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card--clickable,
+  .card--clickable::after {
+    transition: none;
+  }
+}
+
+/* Slot 71 - card e statistiche su desktop (viewport > 840px).
+   Solo respiro maggiore per card e stat-card; nessun colore fisso, nessuna animazione nuova,
+   quindi tema scuro e prefers-reduced-motion restano invariati. */
+@media (min-width: 841px) {
+  .card {
+    padding: var(--sp-5);
+    gap: var(--sp-4);
+  }
+  .stat-card {
+    gap: var(--sp-2);
+  }
+  .stat-card__label {
+    font-size: var(--md-sys-typescale-body-large-size, var(--md-sys-typescale-body-medium-size));
+  }
+}
+
+/* Slot 63 - card, stat-card e tile: override minimi di allineamento e movimento.
+   Solo token M3 e spaziatura, nessun colore fisso (il tema scuro resta quello dei token). */
+
+/* Testi lunghi o numeri grandi nelle card statistiche non devono sforare il contenitore. */
+.stat-card { min-width: 0; }
+.stat-card__value,
+.stat-card__label { min-width: 0; overflow-wrap: anywhere; }
+
+/* Le card cliccabili restano allineate in alto con l'icona e il testo nella stessa colonna. */
+.quick-action { justify-content: flex-start; }
+
+/* Rispetto di prefers-reduced-motion: niente transizioni di ombra/opacita' sulle card. */
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .card--clickable,
+  .stat-card,
+  .quick-action { transition: none; }
+}
+
+/* Slot 97 - avvisi (.callout, .banner): overflow e testo lungo.
+   Colori, ombre e durate solo da token M3/--sp-*; tema scuro gestito dai token.
+   Nessuna animazione introdotta, quindi nessuna media query reduced-motion necessaria. */
+.callout,
+.banner {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+}
+.callout > *,
+.banner > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.callout__title,
+.callout p {
+  overflow-wrap: anywhere;
+}
+.banner > span:first-child {
+  flex: 1 1 240px;
+  overflow-wrap: anywhere;
+}
+.banner__actions {
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* Slot 53 - card: contorno sottile M3 su .card (superficie surface-container).
+   Solo token di colore (outline-variant): il tema scuro si adatta da solo.
+   Il box-sizing border-box di .card assorbe il bordo: nessuna variazione di dimensioni. */
+.card {
+  border: 1px solid var(--md-sys-color-outline-variant);
+}
+
+/* Slot 100 - accessibilita' degli avvisi (.callout, .banner, .fs-snackbar).
+   Con prefers-contrast: more aggiunge un contorno e un bordo in currentColor,
+   cosi' il tipo di avviso non dipende solo dal colore di sfondo.
+   Nessun colore fisso: il tema scuro segue i token M3 (currentColor). */
+@media (prefers-contrast: more) {
+  .callout,
+  .banner {
+    outline: 2px solid currentColor;
+    outline-offset: -2px;
+  }
+  .banner {
+    border-bottom-width: 2px;
+    border-bottom-color: currentColor;
+  }
+  .callout__title {
+    font-weight: 600;
+  }
+}
+
+/* Slot 70 - card e statistiche: versione compatta sotto 600px (mobile).
+   Solo override di padding e gap con token --sp-*; colori e tema scuro restano invariati
+   (gestiti dai token M3 in components.css). Nessun !important, nessuna animazione nuova. */
+@media (max-width: 599px) {
+  .card {
+    padding: var(--sp-3);
+    gap: var(--sp-2);
+  }
+  .stat-card {
+    gap: 2px;
+  }
+}
+
+/* Slot 56 - Card: feedback di pressione.
+   Le card cliccabili hanno gia' lo state layer (:active 10%).
+   Aggiunge una lieve compressione allo stato premuto, come per le photo-tile.
+   Solo token (--dur-*, --motion-*); tema scuro invariato (state layer on-surface). */
+.card--clickable {
+  transition: box-shadow var(--dur-short) var(--motion-standard),
+              opacity var(--dur-medium) var(--motion-emphasized-decel),
+              transform var(--dur-short) var(--motion-standard);
+}
+.card--clickable:active {
+  transform: scale(.98);
+}
+@media (prefers-reduced-motion: reduce) {
+  .card--clickable:active { transform: none; }
+}
+
+/* Slot 36 - controlli compatti (chip, md-fab, md-switch, md-checkbox, md-segmented-button).
+   Anello di focus da tastiera con il colore primary di sistema (segue il tema scuro).
+   md-icon-button resta gestito da Material. Transizioni azzerate con prefers-reduced-motion. */
+.chip:focus-visible,
+md-fab:focus-visible,
+md-switch:focus-visible,
+md-checkbox:focus-visible,
+md-segmented-button:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chip,
+  md-fab,
+  md-switch,
+  md-segmented-button {
+    transition: none;
+  }
+}
+
+/* Slot 50 - rifiniture micro per controlli compatti (switch, checkbox, segmented, chip, voci nav).
+   Solo cursor, tap highlight, bordo sottile e transizione del colore del testo. Token, nessun !important. */
+:is(md-switch, md-checkbox, md-segmented-button, md-filter-chip, md-assist-chip,
+    md-suggestion-chip, md-input-chip, .chip):not([disabled]) {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+:is(md-switch, md-checkbox, md-segmented-button, md-filter-chip, md-assist-chip,
+    md-suggestion-chip, md-input-chip, .chip)[disabled] { cursor: default; }
+.nav-link { transition: color var(--dur-short) var(--motion-standard); }
+md-assist-chip, md-suggestion-chip { --md-assist-chip-outline-color: var(--md-sys-color-outline-variant); }
+@media (prefers-reduced-motion: reduce) {
+  .nav-link { transition: none; }
+}
+
+/* Slot 07: stato disabilitato dei pulsanti M3 con aria-disabled="true" (il disabled nativo
+   e' gia' gestito da @material/web). Leggibile ma chiaramente inattivo: etichetta al 60%
+   di on-surface, contenitore/contorno al 12%. Usa solo token di tema, quindi vale anche
+   nel tema scuro. Niente transizioni nuove: il cursore resta default e la pressione (scala)
+   viene annullata, quindi prefers-reduced-motion non richiede altro. */
+:is(md-filled-button, md-filled-tonal-button, md-elevated-button, md-outlined-button, md-text-button)[aria-disabled="true"] {
+  cursor: default;
+  --md-filled-button-label-text-color: color-mix(in srgb, var(--md-sys-color-on-surface) 60%, transparent);
+  --md-filled-tonal-button-label-text-color: color-mix(in srgb, var(--md-sys-color-on-surface) 60%, transparent);
+  --md-elevated-button-label-text-color: color-mix(in srgb, var(--md-sys-color-on-surface) 60%, transparent);
+  --md-outlined-button-label-text-color: color-mix(in srgb, var(--md-sys-color-on-surface) 60%, transparent);
+  --md-text-button-label-text-color: color-mix(in srgb, var(--md-sys-color-on-surface) 60%, transparent);
+  --md-outlined-button-outline-color: color-mix(in srgb, var(--md-sys-color-on-surface) 12%, transparent);
+  --md-filled-button-container-color: color-mix(in srgb, var(--md-sys-color-on-surface) 12%, transparent);
+  --md-filled-tonal-button-container-color: color-mix(in srgb, var(--md-sys-color-on-surface) 12%, transparent);
+  --md-elevated-button-container-color: color-mix(in srgb, var(--md-sys-color-on-surface) 12%, transparent);
+}
+:is(md-filled-button, md-filled-tonal-button, md-elevated-button, md-outlined-button, md-text-button)[aria-disabled="true"]:active {
+  transform: none;
+}
+
+/* Slot 22 - pulsanti (M3 e .fs-btn-danger): overflow e testo lungo.
+   Il pulsante non esce dal contenitore (max-width: 100%) e puo' andare a capo
+   invece di spingere il layout. Solo proprieta' di dimensione e di a capo: nessun colore, nessuna durata, nessun !important. */
+md-filled-button, md-filled-tonal-button, md-outlined-button, md-elevated-button, md-text-button,
+.fs-btn-danger {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Slot 19 - Pulsanti M3 (md-*-button) su puntatore grossolano: area di tocco minima 48px. */
+@media (pointer: coarse) {
+  :is(md-filled-button, md-filled-tonal-button, md-outlined-button, md-elevated-button, md-text-button,
+      md-filled-icon-button, md-filled-tonal-icon-button, md-outlined-icon-button, md-icon-button) {
+    min-height: var(--touch-min);
+  }
+  :is(md-filled-icon-button, md-filled-tonal-icon-button, md-outlined-icon-button, md-icon-button) {
+    min-width: var(--touch-min);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(md-filled-button, md-filled-tonal-button, md-outlined-button, md-elevated-button, md-text-button,
+      md-filled-icon-button, md-filled-tonal-icon-button, md-outlined-icon-button, md-icon-button) {
+    transition: none;
+  }
+}
+
+/* Slot 80 - avvisi (.callout, .banner): anello di focus da tastiera (:focus-visible) sui controlli interni.
+   Colore currentColor (testo del contenitore) invece del primary di sistema, che su
+   primary-container/error-container ha contrasto basso. Si adatta da solo al tema scuro. */
+.callout :focus-visible,
+.banner :focus-visible {
+  outline: 3px solid currentColor;
+  outline-offset: var(--sp-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .callout :focus-visible,
+  .banner :focus-visible {
+    transition: none;
+  }
+}
+
+/* Slot 51 - card: superficie e movimento.
+   Il fondo di .card e' gia' var(--md-sys-color-surface-container), coerente con i token M3 (anche in tema scuro): nessun cambio di colore.
+   Override solo per prefers-reduced-motion: niente dissolvenza d'ingresso e niente transizioni su card e card cliccabili. */
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .card--clickable {
+    transition: none;
+  }
+}
+
+/* Slot 78 - Avvisi (.callout): contorno sottile e accento laterale colorato per variante.
+   Usa solo token M3 (--md-sys-color-*), quindi il tema scuro e' gia' gestito dai token.
+   Nessuna transizione aggiunta: prefers-reduced-motion non richiede altro. */
+.callout {
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-inline-start: 4px solid var(--md-sys-color-primary);
+}
+.callout--info { border-inline-start-color: var(--md-sys-color-primary); }
+.callout--warning { border-inline-start-color: var(--md-sys-color-tertiary); }
+.callout--error {
+  border-color: var(--md-sys-color-error);
+  border-inline-start-color: var(--md-sys-color-error);
+}
+
+/* Slot 25 - rifiniture micro dei pulsanti M3 (md-*-button).
+   Solo cursore, tap highlight e selezione del testo: nessun colore fisso, nessuna transizione
+   (la scala di pressione e le durate restano quelle di components.css, con prefers-reduced-motion). */
+:is(md-filled-button, md-filled-tonal-button, md-outlined-button, md-elevated-button, md-text-button) {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+:is(md-filled-button, md-filled-tonal-button, md-outlined-button, md-elevated-button, md-text-button)[disabled] {
+  cursor: default;
+}
+md-filled-button.fs-btn-danger:not([disabled]):hover {
+  --md-filled-button-hover-state-layer-color: var(--md-sys-color-on-error);
+}
+
+
+/* Slot 69 - area di tocco delle card cliccabili su puntatore grossolano (min 48px).
+   Usa il token --touch-min gia' definito nel file; nessun !important. */
+@media (pointer: coarse) {
+  .card--clickable {
+    min-width: var(--touch-min);
+    min-height: var(--touch-min);
+    touch-action: manipulation;
+  }
+}
+
+/* Slot 69 - reduced motion per le card cliccabili (la transizione del tocco resta nel file). */
+@media (prefers-reduced-motion: reduce) {
+  .card--clickable,
+  .card--clickable::after {
+    transition: none;
+  }
+}
+
+/* Slot 94 - avvisi (.callout, .banner, snackbar): area di tocco minima 48px per i pulsanti
+   negli avvisi su puntatore grossolano (pointer: coarse). Solo token M3, nessun !important. */
+@media (pointer: coarse) {
+  .callout md-text-button, .callout md-filled-button, .callout md-outlined-button,
+  .banner md-text-button, .banner md-filled-button, .banner md-outlined-button {
+    min-height: 48px;
+    min-width: 48px;
+  }
+  .banner__actions { gap: var(--sp-3); }
+}
+
+/* Slot 13 - pulsanti M3: dimensione dell'icona di pulsante (18px, come da spec M3).
+   Il glifo .material-symbols-outlined (fonts.css) fissa 24px e supera l'icona slot del pulsante.
+   Solo la dimensione: colore, allineamento icona+testo e tema restano quelli del componente. */
+:is(md-filled-button, md-filled-tonal-button, md-outlined-button, md-elevated-button, md-text-button) > md-icon[slot="icon"] .material-symbols-outlined {
+  font-size: var(--fs-btn-icon-size, 18px);
+  line-height: 1;
+}
+
+/* Slot 82 - avvisi (.callout, .banner): stato disabilitato dei controlli interni.
+   Leggibile ma chiaramente inattivo: opacita ridotta, cursore "non consentito".
+   Nessun colore fisso: eredita i token M3, quindi vale anche nel tema scuro. */
+.callout [disabled],
+.banner [disabled] {
+  opacity: .6;
+  cursor: not-allowed;
+  transition: opacity var(--dur-short) ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .callout [disabled],
+  .banner [disabled] { transition: none; }
+}
+
+/* Slot 91: indicatori di progresso dentro avvisi e banner (.callout, .banner).
+   Il testo e la percentuale ereditano il colore del contenitore, cosi' il primary
+   non finisce su container di errore/avviso. Il blocco progresso va a capo a tutta
+   larghezza nel banner di sincronizzazione. Nessuna animazione aggiunta: nulla da
+   disattivare con prefers-reduced-motion. Tema scuro gestito dai token M3 esistenti. */
+.callout .progress-block__head,
+.callout .progress-block__percent,
+.callout .progress-block__text { color: inherit; }
+.banner .progress-block__percent { color: var(--md-sys-color-on-surface); }
+.banner .progress-block { flex: 1 1 100%; }
+
+/* ripristino slot-05 */
+
+/* Slot 05 - pulsanti FotoScan: focus da tastiera piu' evidente (solo :focus-visible).
+   Tutti i pulsanti @material/web e .fs-btn-danger. Colori e spaziature dai token; niente !important. */
+:is(md-filled-button, md-filled-tonal-button, md-outlined-button, md-elevated-button, md-text-button,
+    md-icon-button, md-filled-icon-button, md-filled-tonal-icon-button, md-outlined-icon-button, md-fab,
+    .fs-btn-danger):focus-visible {
+  outline: 3px solid var(--md-sys-color-primary);
+  outline-offset: var(--sp-1);
+  transition: outline-offset var(--dur-short) var(--motion-standard);
+}
+.fs-btn-danger:focus-visible {
+  outline-color: var(--md-sys-color-error);
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(md-filled-button, md-filled-tonal-button, md-outlined-button, md-elevated-button, md-text-button,
+      md-icon-button, md-filled-icon-button, md-filled-tonal-icon-button, md-outlined-icon-button, md-fab,
+      .fs-btn-danger):focus-visible {
+    transition: none;
+  }
+}
+
+/* ripristino slot-14 */
+
+/* Slot 14 - Gerarchia pulsanti: estende la variante distruttiva .fs-btn-danger
+   (oggi solo filled in components.css) a outlined e text. Gerarchia:
+   primaria filled > secondaria tonal/outlined > terziaria text > distruttiva (label error).
+   Solo token M3: il tema scuro e' gestito dai token. Il movimento resta quello di components.css
+   (con prefers-reduced-motion niente scala). */
+md-outlined-button.fs-btn-danger {
+  --md-outlined-button-label-text-color: var(--md-sys-color-error);
+  --md-outlined-button-icon-color: var(--md-sys-color-error);
+  --md-outlined-button-outline-color: var(--md-sys-color-outline);
+}
+md-text-button.fs-btn-danger {
+  --md-text-button-label-text-color: var(--md-sys-color-error);
+  --md-text-button-icon-color: var(--md-sys-color-error);
+}
+
+/* ripristino slot-20 */
+
+/* Slot 20 - pulsanti su mobile (sotto 600px): area di tocco minima 48px e nessun overflow orizzontale.
+   Solo layout: colori e stati restano dai token M3 (tema chiaro/scuro gia' coperto, incluso .fs-btn-danger).
+   Nessuna animazione nuova: la scala :active resta disattivata da prefers-reduced-motion in components.css. */
+@media (max-width: 599px) {
+  :is(md-filled-button, md-filled-tonal-button, md-outlined-button, md-elevated-button, md-text-button,
+      .fs-btn-danger) {
+    min-height: var(--sp-12);
+    max-width: 100%;
+  }
+}
+
+/* ripristino slot-41 */
+
+/* Slot 41 - controlli compatti in attesa (icon-button, fab, chip, switch, checkbox, segmented).
+   Override minimo: cursore neutro, nessuna interazione mentre il controllo e' disabilitato o busy,
+   e dissolvenza breve. Colori e stati disabled restano quelli dei componenti @material/web. */
+:is(md-icon-button, md-filled-icon-button, md-fab, md-switch, md-checkbox, md-segmented-button, .chip)[disabled],
+:is(md-icon-button, md-filled-icon-button, md-fab, md-switch, md-checkbox, md-segmented-button, .chip)[aria-disabled="true"],
+:is(md-icon-button, md-filled-icon-button, md-fab, md-switch, md-checkbox, md-segmented-button, .chip)[aria-busy="true"] {
+  cursor: default;
+  pointer-events: none;
+  transition: opacity var(--dur-short) var(--motion-standard);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(md-icon-button, md-filled-icon-button, md-fab, md-switch, md-checkbox, md-segmented-button, .chip)[disabled],
+  :is(md-icon-button, md-filled-icon-button, md-fab, md-switch, md-checkbox, md-segmented-button, .chip)[aria-disabled="true"],
+  :is(md-icon-button, md-filled-icon-button, md-fab, md-switch, md-checkbox, md-segmented-button, .chip)[aria-busy="true"] {
+    transition: none;
+  }
+}
+
+/* ripristino slot-72 */
+
+/* Slot 72: card e card statistiche con testo lungo.
+   .card ha gia' min-width: 0, ma i figli diretti e le etichette/valori delle stat-card non spezzano
+   parole senza spazi (nomi lunghi, percorsi, numeri): il testo esce dalla card. Qui solo overflow-wrap
+   e min-width sui figli; nessun valore fisso, nessun !important. Tile foto (.photo-tile__meta) gia' troncata. */
+.card > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.stat-card__value,
+.stat-card__label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ripristino slot-81 */
+
+/* Slot 81 - feedback di pressione per le azioni negli avvisi (.callout, .banner).
+   I pulsanti md-* hanno gia' lo scale in components.css; qui copriamo i <button> e <a> nativi.
+   Solo token (var(--sp-*), var(--shape-*), var(--dur-*), var(--motion-*)); tema scuro ereditato.
+   Movimento disattivato con prefers-reduced-motion. */
+.callout :is(button, a),
+.banner :is(button, a) {
+  border-radius: var(--shape-sm);
+  transition: transform var(--dur-short) var(--motion-standard),
+              background-color var(--dur-short) var(--motion-standard);
+}
+.callout :is(button, a):active:not([disabled]),
+.banner :is(button, a):active:not([disabled]) {
+  transform: scale(.98);
+  background-color: color-mix(in srgb, currentColor 12%, transparent);
+}
+.callout :is(button, a):focus-visible,
+.banner :is(button, a):focus-visible {
+  outline: 2px solid var(--md-sys-color-outline);
+  outline-offset: var(--sp-1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .callout :is(button, a),
+  .banner :is(button, a) { transition: none; }
+  .callout :is(button, a):active:not([disabled]),
+  .banner :is(button, a):active:not([disabled]) { transform: none; }
+}
+
+/* ripristino slot-16 */
+/* Slot 16 - stato busy dei pulsanti M3 (md-*-button, .fs-btn-danger).
+   Il JS disabilita gia' il pulsante durante l'attesa (disabled). Qui aggiungo solo l'indicatore
+   di progresso quando il pulsante ha aria-busy="true": spinner con currentColor, quindi vale anche nel tema scuro. */
+:is(md-filled-button, md-filled-tonal-button, md-outlined-button, md-elevated-button, md-text-button, md-filled-button.fs-btn-danger)[aria-busy="true"] {
+  position: relative;
+  cursor: progress;
+  padding-inline-end: calc(var(--sp-4) + 16px);
+}
+:is(md-filled-button, md-filled-tonal-button, md-outlined-button, md-elevated-button, md-text-button, md-filled-button.fs-btn-danger)[aria-busy="true"]::after {
+  content: "";
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-end: var(--sp-4);
+  width: 16px;
+  height: 16px;
+  margin-block-start: -8px;
+  box-sizing: border-box;
+  border: 2px solid currentColor;
+  border-block-start-color: transparent;
+  border-radius: 50%;
+  animation: fs-busy-spin calc(var(--dur-medium) * 3) linear infinite;
+}
+@keyframes fs-busy-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(md-filled-button, md-filled-tonal-button, md-outlined-button, md-elevated-button, md-text-button, md-filled-button.fs-btn-danger)[aria-busy="true"]::after {
+    animation: none;
+  }
+}
+
+
+/* ripristino slot-99 */
+/* Slot 99 - rifiniture micro degli avvisi (.callout).
+   Barra d'accento sul bordo sinistro (inset shadow, nessun reflow), ombra leggera
+   da token, transizione morbida di colore/sfondo. Solo token M3 e --elev/--dur/--motion. */
+.callout {
+  transition: background-color var(--dur-short) var(--motion-standard),
+              color var(--dur-short) var(--motion-standard);
+}
+.callout__icon {
+  transition: transform var(--dur-medium) var(--motion-standard);
+}
+@media (prefers-reduced-motion: reduce) {
+  .callout, .callout__icon { transition: none; }
+}

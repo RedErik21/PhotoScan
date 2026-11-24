@@ -1,0 +1,13 @@
+{
+  "source_dir": "",
+  "output_dir": "",
+  "model_name": "google/siglip2-base-patch16-224",
+  "device": "auto",
+  "batch_size": 64,
+  "workers": 8,
+  "enable_faces": false,
+  "faces_threshold": 0.5,
+  "faces_assign_threshold": 0.52,
+  "faces_min_photos": 3,
+  "faces_det_size": 640
+}

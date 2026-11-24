@@ -1,0 +1,32 @@
+# Crea la Release GitHub quando si spinge un tag v<versione> (es. v2.1.0 o v2.2.0-beta.1).
+# FotoScan controlla le Release per gli aggiornamenti (fotoscan/updater.py) e scarica lo zip del sorgente.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verifica che il tag corrisponda a fotoscan/version.py
+        run: |
+          VER=$(python3 -c "import re; print(re.search(r'^__version__\s*=\s*[\"\x27]([^\"\x27]+)', open('fotoscan/version.py', encoding='utf-8').read(), re.M).group(1))")
+          if [ "${GITHUB_REF_NAME#v}" != "$VER" ]; then
+            echo "::error::Il tag $GITHUB_REF_NAME non corrisponde a __version__ = $VER in fotoscan/version.py"
+            exit 1
+          fi
+
+      - name: Crea la Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRE=""
+          case "$GITHUB_REF_NAME" in *-*) PRE="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" --title "FotoScan ${GITHUB_REF_NAME#v}" --generate-notes $PRE

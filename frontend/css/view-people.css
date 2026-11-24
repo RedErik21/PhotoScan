@@ -1,0 +1,731 @@
+/* Vista Persone: griglia delle persone riconosciute e dettaglio delle loro foto. */
+
+.people-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.people-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.people-toolbar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.people-job-banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.people-job-banner__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.people-merge-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+
+.people-merge-bar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.people-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: var(--sp-4);
+}
+
+.person-card {
+  position: relative;
+  contain: layout style paint;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 210px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-3);
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-surface-container);
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: background var(--dur-short) var(--motion-standard), border-color var(--dur-short) var(--motion-standard), transform var(--dur-short) var(--motion-standard);
+  color: inherit;
+  font: inherit;
+}
+
+.person-card:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.person-card:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.person-card.is-selected {
+  border-color: var(--md-sys-color-primary);
+  background: var(--md-sys-color-secondary-container);
+}
+
+.person-card.is-hidden-person {
+  opacity: 0.65;
+}
+
+.person-card__check {
+  position: absolute;
+  top: var(--sp-2);
+  right: var(--sp-2);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-on-surface-variant);
+  border: 2px solid var(--md-sys-color-outline);
+}
+
+.person-card.is-selected .person-card__check {
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+  border-color: var(--md-sys-color-primary);
+}
+
+.person-card__media {
+  width: 112px;
+  height: 112px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--md-sys-color-surface-container-highest);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.person-card__media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.person-card__fallback {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.person-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  width: 100%;
+}
+
+.person-card__name {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.person-card__name--unnamed {
+  color: var(--md-sys-color-on-surface-variant);
+  font-style: italic;
+}
+
+.person-card__meta {
+  margin: 0;
+}
+
+/* Dettaglio persona */
+.person-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-surface-container);
+}
+
+.person-detail-head__avatar {
+  position: relative;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--md-sys-color-surface-container-highest);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.person-detail-head__avatar--btn {
+  padding: 0;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: border-color var(--dur-short) var(--motion-standard);
+}
+
+.person-detail-head__avatar--btn:hover,
+.person-detail-head__avatar--btn:focus-visible {
+  border-color: var(--md-sys-color-primary);
+}
+
+.person-detail-head__avatar-edit {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--md-sys-color-scrim, #000) 45%, transparent);
+  color: #fff;
+  opacity: 0;
+  transition: opacity var(--dur-short) var(--motion-standard);
+}
+
+.person-detail-head__avatar--btn:hover .person-detail-head__avatar-edit,
+.person-detail-head__avatar--btn:focus-visible .person-detail-head__avatar-edit {
+  opacity: 1;
+}
+
+.person-detail-head__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.person-detail-head__info {
+  flex: 1 1 200px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.person-detail-head__title {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.person-detail-head__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.person-photos-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: var(--sp-3);
+}
+
+.person-photo-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--shape-sm);
+  overflow: hidden;
+}
+
+.person-photo-item__tools {
+  position: absolute;
+  top: var(--sp-1);
+  right: var(--sp-1);
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--shape-pill, 999px);
+  background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 88%, transparent);
+  opacity: 0;
+  transition: opacity var(--dur-short) var(--motion-standard);
+  z-index: 2;
+}
+
+.person-photo-item:hover .person-photo-item__tools,
+.person-photo-item:focus-within .person-photo-item__tools {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .person-photo-item__tools {
+    opacity: 1;
+  }
+}
+
+.person-photo-item__tools md-icon-button {
+  --md-icon-button-state-layer-width: 32px;
+  --md-icon-button-state-layer-height: 32px;
+  --md-icon-button-icon-size: 18px;
+}
+
+.person-photo-item__tools md-icon-button.is-active-cover {
+  --md-icon-button-icon-color: var(--md-sys-color-primary);
+}
+
+.people-more {
+  align-self: center;
+}
+
+/* Drag & drop per unire due persone */
+.person-card.is-dragging {
+  opacity: 0.45;
+  transform: scale(0.96);
+}
+
+.person-card.is-drop-target {
+  border-color: var(--md-sys-color-primary);
+  border-style: dashed;
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+  transform: scale(1.03);
+}
+
+.person-card__drop-hint {
+  position: absolute;
+  top: var(--sp-2);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-short) var(--motion-standard);
+  z-index: 2;
+}
+
+.person-card.is-drop-target .person-card__drop-hint {
+  opacity: 1;
+}
+
+/* Fascia «Potrebbero essere la stessa persona» */
+.people-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-surface-container-low);
+  border: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.people-suggestions__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--md-sys-color-primary);
+}
+
+.people-suggestions__head h2 {
+  margin: 0;
+  color: var(--md-sys-color-on-surface);
+}
+
+.people-suggestions__count {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+
+.people-suggestions__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: var(--sp-3);
+}
+
+.people-suggest-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-surface-container);
+}
+
+.people-suggest-card__avatars {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+}
+
+.people-suggest-card__avatar {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--md-sys-color-surface-container-highest);
+  display: grid;
+  place-items: center;
+}
+
+.people-suggest-card__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.people-suggest-card__link {
+  color: var(--md-sys-color-primary);
+  display: inline-flex;
+}
+
+.people-suggest-card__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  width: 100%;
+}
+
+.people-suggest-card__names {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.people-suggest-card__info p:last-child {
+  margin: 0;
+}
+
+.people-suggest-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+
+/* Dialog visuale «Unisci con…» */
+.merge-picker-dialog {
+  --md-dialog-container-shape: var(--shape-xl);
+  min-width: min(460px, 92vw);
+}
+
+.merge-picker-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.merge-picker-search {
+  width: 100%;
+}
+
+.merge-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.merge-picker-empty {
+  text-align: center;
+  padding: var(--sp-4) 0;
+}
+
+.merge-picker-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: 0;
+  border-radius: var(--shape-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-short) var(--motion-standard);
+}
+
+.merge-picker-item:hover {
+  background: var(--md-sys-color-surface-container-highest);
+}
+
+.merge-picker-item__avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--md-sys-color-surface-container-highest);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.merge-picker-item__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.merge-picker-item__info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.merge-picker-item__info span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.merge-picker-item__icon {
+  color: var(--md-sys-color-on-surface-variant);
+  flex: none;
+}
+
+/* Dialog «Analizza» confronto tra due persone suggerite */
+.compare-dialog {
+  --md-dialog-container-shape: var(--shape-xl);
+  min-width: min(860px, 94vw);
+  max-width: 960px;
+}
+
+.compare-dialog__headline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.compare-dialog__sim {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+
+.compare-dialog__content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  max-height: 70vh;
+  overflow-y: auto;
+  padding-right: var(--sp-1);
+}
+
+.compare-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-surface-container-low);
+  border: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.compare-section.is-primary {
+  background: var(--md-sys-color-surface-container);
+}
+
+.compare-section__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.compare-section__avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--md-sys-color-surface-container-highest);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.compare-section__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.compare-section__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.compare-section__meta p {
+  margin: 0;
+}
+
+.compare-section__title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.compare-section__title-row h3 {
+  margin: 0;
+}
+
+.compare-section__badge {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+
+.compare-section__badge.is-primary {
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+}
+
+.compare-photos-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: var(--sp-2);
+}
+
+.compare-section__more {
+  align-self: center;
+}
+
+.compare-dialog__divider {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.compare-dialog__divider::before,
+.compare-dialog__divider::after {
+  content: '';
+  flex: 1;
+  border-top: 2px dashed var(--md-sys-color-outline-variant);
+}
+
+.compare-dialog__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* Dialog «Scegli foto profilo» */
+.cover-picker-dialog {
+  --md-dialog-container-shape: var(--shape-xl);
+  min-width: min(560px, 92vw);
+  max-width: 680px;
+}
+
+.cover-picker-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  max-height: 62vh;
+  overflow-y: auto;
+}
+
+.cover-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: var(--sp-3);
+}
+
+.cover-picker-face {
+  position: relative;
+  aspect-ratio: 1;
+  padding: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 3px solid transparent;
+  background: var(--md-sys-color-surface-container-highest);
+  cursor: pointer;
+  transition: transform var(--dur-short) var(--motion-standard), border-color var(--dur-short) var(--motion-standard);
+}
+
+.cover-picker-face:hover {
+  transform: scale(1.05);
+  border-color: var(--md-sys-color-primary);
+}
+
+.cover-picker-face.is-active {
+  border-color: var(--md-sys-color-primary);
+}
+
+.cover-picker-face img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.cover-picker-face__badge {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+}
+
+@media (max-width: 599px) {
+  .people-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  }
+  .person-card__media {
+    width: 88px;
+    height: 88px;
+  }
+}

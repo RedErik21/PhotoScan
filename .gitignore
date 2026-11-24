@@ -1,0 +1,45 @@
+# Ambienti virtuali e cache Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Dati personali, cataloghi SQLite e configurazione locale
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+config.json
+config.json.tmp
+.env
+.env.*
+
+# Cache locale (miniature, anteprime, ritagli volti, modelli ONNX scaricati)
+cache/
+
+# Log e file temporanei
+*.log
+*.err
+*.tmp
+_fotoscan_apply.log
+
+# File di sistema e IDE
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# Materiale personale e locale (screenshot dell'archivio vero, video, appunti interni)
+_privato/
+
+# Varie
+node_modules/
+.claude/

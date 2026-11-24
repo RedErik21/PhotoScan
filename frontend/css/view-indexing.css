@@ -1,0 +1,150 @@
+/* view-indexing.css — stili del cruscotto di indicizzazione (caricato da js/views/indexing.js).
+   Solo token M3 (nessun colore fisso). Le classi generiche (card, progress-block, callout, stat-card, code-block,
+   table-m3, empty-state) stanno in components.css. */
+
+.indexing { display: flex; flex-direction: column; min-width: 0; }
+.idx-page-title { margin: 0; color: var(--md-sys-color-on-surface); }
+.indexing .view-header { margin-bottom: var(--sp-4); }
+
+/* ---------- Card principale ---------- */
+.idx-main { gap: var(--sp-4); }
+.idx-head { display: flex; flex-direction: column; gap: var(--sp-1); }
+.idx-title { margin: 0; color: var(--md-sys-color-on-surface); font-weight: 400; }
+.idx-sub { margin: 0; }
+
+/* Stepper delle fasi: una sola riga elastica per 4 o 5 passi. Pallini, connettori e stati stanno in components.css (.idx-step). */
+.idx-stepper {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
+}
+.idx-stepper .idx-step__dot {
+  display: flex; align-items: center; justify-content: center;
+}
+.idx-stepper .idx-step__dot md-icon,
+.idx-stepper .idx-step__dot .material-symbols-outlined {
+  display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; font-size: 18px; line-height: 1;
+  --md-icon-size: 18px;
+}
+/* Fase in pausa: contenitore tertiary, niente anello (specificita' maggiore per prevalere sullo stato corrente). */
+.idx-stepper .idx-step.is-paused .idx-step__dot {
+  background: var(--md-sys-color-tertiary-container); color: var(--md-sys-color-on-tertiary-container);
+  box-shadow: none;
+}
+
+/* Avanzamento */
+.idx-percent { font-variant-numeric: tabular-nums; }
+.idx-bar { width: 100%; }
+
+/* Velocita', stima, trascorso */
+.idx-meta {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-3); margin: 0;
+}
+.idx-meta[hidden] { display: none; }
+.idx-meta > div { min-width: 0; }
+.idx-meta__label { margin: 0; color: var(--md-sys-color-on-surface-variant); }
+.idx-meta__value {
+  margin: 2px 0 0; color: var(--md-sys-color-on-surface);
+  font: 400 var(--md-sys-typescale-title-medium-size) / var(--md-sys-typescale-title-medium-line-height) var(--md-ref-typeface-plain);
+  font-variant-numeric: tabular-nums; overflow-wrap: anywhere;
+}
+
+.idx-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+
+/* Opzioni avanzate */
+.idx-advanced { border-top: 1px solid var(--md-sys-color-outline-variant); padding-top: var(--sp-3); }
+.idx-advanced summary {
+  cursor: pointer; color: var(--md-sys-color-primary);
+  padding: var(--sp-2) 0; list-style-position: inside;
+  border-radius: var(--shape-xs);
+}
+.idx-advanced summary:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
+.idx-advanced__body { display: flex; flex-direction: column; gap: var(--sp-3); padding-top: var(--sp-2); }
+.idx-advanced__body md-outlined-text-field { width: 100%; max-width: 360px; }
+.idx-switch {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4);
+  max-width: 480px; cursor: pointer;
+}
+.idx-switch__text { display: flex; flex-direction: column; min-width: 0; }
+
+/* Completamento */
+.idx-done { margin: 0; }
+.idx-done__body { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; }
+.idx-done__body p { margin: 0; }
+.idx-done__actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-1); }
+
+/* ---------- Riepilogo ---------- */
+.idx-stats {
+  display: grid; gap: var(--sp-3);
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+.idx-stat { gap: 0; padding: var(--sp-3) var(--sp-4); }
+.idx-stat__hint { font-size: var(--md-sys-typescale-body-small-size); line-height: var(--md-sys-typescale-body-small-line-height); margin-top: 2px; }
+.idx-stats-note { margin: var(--sp-2) 0 0; }
+.idx-stat .stat-card__value {
+  font: 400 var(--md-sys-typescale-headline-small-size) / var(--md-sys-typescale-headline-small-line-height) var(--md-ref-typeface-plain);
+}
+.idx-stat .stat-card__label { font-size: var(--md-sys-typescale-body-small-size); }
+
+/* ---------- Sezioni con titolo e azione ---------- */
+.idx-section-head {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: var(--sp-2); margin-bottom: var(--sp-3);
+}
+.idx-section-head .section-title { margin: 0; }
+.idx-count { margin-right: auto; }
+
+/* ---------- Log ---------- */
+.idx-log-details {
+  border-radius: var(--shape-lg);
+  background: var(--fs-card);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  padding: var(--sp-3) var(--sp-4);
+}
+.idx-log-summary {
+  cursor: pointer; font-weight: 600; color: var(--md-sys-color-on-surface);
+  list-style-position: inside; padding: var(--sp-1) 0;
+}
+.idx-log-body { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-2); }
+.idx-log-tools { display: flex; justify-content: flex-end; }
+.idx-log {
+  min-height: 140px; max-height: 280px; margin: 0;
+  overflow: auto; overscroll-behavior: contain;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.idx-log:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
+
+/* ---------- File con problemi ---------- */
+.idx-errors p { margin: 0 0 var(--sp-3); }
+.idx-table-wrap {
+  max-height: 360px; overflow: auto; overscroll-behavior: contain;
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-surface-container-low);
+}
+.idx-table-wrap .table-m3 th,
+.idx-table-wrap .table-m3 td { height: auto; min-height: 40px; }
+.idx-path {
+  font-family: ui-monospace, 'Roboto Mono', Consolas, monospace;
+  font-size: 0.8125rem; white-space: normal; overflow-wrap: anywhere;
+}
+.idx-problem { min-width: 120px; overflow-wrap: anywhere; }
+/* Colonna azioni: due icone affiancate, mai a capo (il td non e' un flex). */
+.idx-table-wrap .table-m3 td.idx-row-actions { white-space: nowrap; text-align: end; width: 1%; }
+.idx-table-wrap .table-m3 td.idx-row-actions md-icon-button { vertical-align: middle; }
+
+/* Comparsa della fase di completamento e colore del connettore (rispettano prefers-reduced-motion). */
+.idx-done:not([hidden]) { animation: idx-fade var(--dur-medium) var(--motion-standard); }
+@keyframes idx-fade { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.idx-step::before { transition: background-color var(--dur-medium) var(--motion-standard); }
+@media (prefers-reduced-motion: reduce) {
+  .idx-done:not([hidden]) { animation: none; }
+  .idx-step::before { transition: none; }
+}
+
+/* ---------- Layout stretto (telefono) ---------- */
+@media (max-width: 599px) {
+  .idx-meta { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-2); }
+  .idx-meta__value { font-size: var(--md-sys-typescale-body-large-size); }
+  .idx-switch { max-width: none; }
+}

@@ -1,0 +1,54 @@
+/* Token Material Design 3 non di colore: forma, elevazione, movimento, tipografia, spaziatura.
+   Il colore sta in tokens-color.css. I componenti @material/web leggono --md-sys-* da qui. */
+:root {
+  /* Tipografia (type scale M3) */
+  --md-ref-typeface-brand: 'Segoe UI Variable Display', 'Segoe UI Variable Text', 'Segoe UI', 'Roboto', system-ui, sans-serif;
+  --md-ref-typeface-plain: 'Segoe UI Variable Text', 'Segoe UI', 'Roboto', system-ui, sans-serif;
+  --md-sys-typescale-display-large-size: 3.5625rem;   --md-sys-typescale-display-large-line-height: 4rem;
+  --md-sys-typescale-headline-large-size: 2rem;       --md-sys-typescale-headline-large-line-height: 2.5rem;
+  --md-sys-typescale-headline-medium-size: 1.75rem;   --md-sys-typescale-headline-medium-line-height: 2.25rem;
+  --md-sys-typescale-headline-small-size: 1.5rem;     --md-sys-typescale-headline-small-line-height: 2rem;
+  --md-sys-typescale-title-large-size: 1.375rem;      --md-sys-typescale-title-large-line-height: 1.75rem;
+  --md-sys-typescale-title-medium-size: 1rem;         --md-sys-typescale-title-medium-line-height: 1.5rem;
+  --md-sys-typescale-title-small-size: 0.875rem;      --md-sys-typescale-title-small-line-height: 1.25rem;
+  --md-sys-typescale-body-large-size: 1rem;           --md-sys-typescale-body-large-line-height: 1.5rem;
+  --md-sys-typescale-body-medium-size: 0.875rem;      --md-sys-typescale-body-medium-line-height: 1.25rem;
+  --md-sys-typescale-label-large-size: 0.875rem;      --md-sys-typescale-label-large-line-height: 1.25rem;
+  --md-sys-typescale-label-medium-size: 0.75rem;      --md-sys-typescale-label-medium-line-height: 1rem;
+
+  /* Forma (corner radius) */
+  --shape-none: 0; --shape-xs: 6px; --shape-sm: 10px; --shape-md: 14px; --shape-lg: 20px; --shape-xl: 28px; --shape-full: 9999px;
+
+  /* Elevazione: ombre M3 livelli 0-5 */
+  --elev-0: none;
+  /* Colore delle ombre = ruolo --md-sys-color-shadow (in tokens-color.css). */
+  --elev-1: 0 1px 2px color-mix(in srgb, var(--md-sys-color-shadow) 30%, transparent), 0 1px 3px 1px color-mix(in srgb, var(--md-sys-color-shadow) 15%, transparent);
+  --elev-2: 0 1px 2px color-mix(in srgb, var(--md-sys-color-shadow) 30%, transparent), 0 2px 6px 2px color-mix(in srgb, var(--md-sys-color-shadow) 15%, transparent);
+  --elev-3: 0 1px 3px color-mix(in srgb, var(--md-sys-color-shadow) 30%, transparent), 0 4px 8px 3px color-mix(in srgb, var(--md-sys-color-shadow) 15%, transparent);
+  --elev-4: 0 2px 3px color-mix(in srgb, var(--md-sys-color-shadow) 30%, transparent), 0 6px 10px 4px color-mix(in srgb, var(--md-sys-color-shadow) 15%, transparent);
+  --elev-5: 0 4px 4px color-mix(in srgb, var(--md-sys-color-shadow) 30%, transparent), 0 8px 12px 6px color-mix(in srgb, var(--md-sys-color-shadow) 15%, transparent);
+
+  /* Movimento */
+  --motion-standard: cubic-bezier(.2, 0, 0, 1);
+  --motion-emphasized: cubic-bezier(.2, 0, 0, 1);
+  --motion-emphasized-decel: cubic-bezier(.05, .7, .1, 1);
+  --motion-emphasized-accel: cubic-bezier(.3, 0, .8, .15);
+  --dur-short: 150ms; --dur-medium: 250ms; --dur-long: 400ms;
+
+  /* Spaziatura (griglia a 4dp) */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px; --sp-12: 48px;
+
+  /* Area di tocco minima (puntatore grossolano) e icona dei pulsanti */
+  --touch-min: 48px; --fs-btn-icon-size: 18px;
+
+  /* Layout */
+  --rail-width: 84px; --drawer-width: 264px; --info-width: 360px; --topbar-height: 64px; --bottombar-height: 80px;
+  --content-max: 1440px; --gutter: var(--sp-4);
+  --tile-size: 180px; --tile-gap: 4px;
+
+  /* Scala z-index condivisa: usare questi valori invece di numeri sparsi. */
+  --z-raised: 2; --z-sticky: 5; --z-overlay: 40; --z-toast: 1000;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-short: 1ms; --dur-medium: 1ms; --dur-long: 1ms; }
+}

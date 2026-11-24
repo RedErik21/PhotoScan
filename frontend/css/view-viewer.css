@@ -1,0 +1,310 @@
+/* view-viewer.css — stili del visualizzatore (posseduto da v-viewer). Caricato da js/views/viewer.js.
+   Base in components.css (.viewer-overlay, .viewer-topbar, .viewer-stage, .viewer-nav, .viewer-info).
+   Solo token: nessun colore fisso. Testo sopra foto/scrim = var(--on-media). */
+
+/* Sfondo pieno: l'app dietro non deve trasparire (la foto va letta da sola). */
+.viewer-overlay {
+  background: var(--md-sys-color-scrim);
+  /* niente selezione di testo/immagini: un doppio clic non deve trasformarsi in trascinamento nativo */
+  user-select: none; -webkit-user-select: none;
+}
+
+/* Icone sopra lo scrim: chiare in entrambi i temi. */
+.viewer-overlay md-icon-button {
+  --md-icon-button-icon-color: var(--on-media);
+  --md-icon-button-hover-icon-color: var(--on-media);
+  --md-icon-button-focus-icon-color: var(--on-media);
+  --md-icon-button-pressed-icon-color: var(--on-media);
+  --md-icon-button-selected-icon-color: var(--on-media);
+  --md-icon-button-disabled-icon-color: color-mix(in srgb, var(--on-media) 38%, transparent);
+  --md-icon-button-hover-state-layer-color: var(--on-media);
+  --md-icon-button-pressed-state-layer-color: var(--on-media);
+}
+/* Dentro il pannello info la superficie e' chiara: icone scure. */
+.viewer-info md-icon-button {
+  --md-icon-button-icon-color: var(--md-sys-color-on-surface-variant);
+  --md-icon-button-selected-icon-color: var(--md-sys-color-on-surface);
+  --md-icon-button-hover-icon-color: var(--md-sys-color-on-surface);
+  --md-icon-button-focus-icon-color: var(--md-sys-color-on-surface);
+  --md-icon-button-hover-state-layer-color: var(--md-sys-color-on-surface);
+  --md-icon-button-pressed-state-layer-color: var(--md-sys-color-on-surface);
+}
+.viewer-overlay md-icon-button:focus-visible,
+.viewer-overlay md-text-button:focus-visible,
+.viewer-overlay md-filled-tonal-button:focus-visible,
+.viewer-overlay a:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+/* Barra superiore: sfumatura morbida sopra il media + titolo a due righe (nome + data/posizione) */
+.viewer-overlay .viewer-topbar {
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--md-sys-color-scrim) 78%, transparent), transparent);
+  transition: opacity var(--dur-short) var(--motion-standard), transform var(--dur-short) var(--motion-standard);
+}
+.viewer-topbar__name,
+.viewer-topbar__sub {
+  display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.viewer-topbar__sub {
+  font: 400 var(--md-sys-typescale-label-medium-size) / var(--md-sys-typescale-label-medium-line-height) var(--md-ref-typeface-plain);
+  font-variant-numeric: tabular-nums;
+  opacity: .82;
+}
+.viewer-topbar__actions md-menu { position: relative; }
+.viewer-menu-danger {
+  --md-menu-item-label-text-color: var(--md-sys-color-error);
+  --md-menu-item-leading-icon-color: var(--md-sys-color-error);
+}
+
+/* Modalita' pulita (tocco singolo su foto): nasconde barre e frecce per godersi l'immagine */
+.viewer-overlay.is-immersive .viewer-topbar,
+.viewer-overlay.is-immersive .viewer-nav,
+.viewer-overlay.is-immersive .viewer-zoom {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Foto: canvas a tutto stage (trasformato per zoom/pan/swipe), miniatura sfocata sotto la foto intera */
+.viewer-canvas {
+  position: absolute; inset: 0;
+  transform-origin: 50% 50%;
+  will-change: transform;
+  cursor: zoom-in;
+  touch-action: none;
+}
+.viewer-canvas.is-zoomed { cursor: grab; }
+.viewer-canvas:active { cursor: grabbing; }
+.viewer-canvas img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: contain; pointer-events: none; user-select: none; -webkit-user-drag: none;
+}
+.viewer-thumb { filter: blur(14px); transform: scale(1.04); opacity: .9; }
+.viewer-full { opacity: 0; transition: opacity var(--dur-medium) var(--motion-standard); }
+.viewer-full.is-loaded { opacity: 1; }
+.viewer-img-loader {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  pointer-events: none;
+  --md-circular-progress-size: 32px;
+  --md-circular-progress-active-indicator-color: var(--on-media);
+}
+
+/* Video: contenitore centrato con margine dalla topbar e dalla barra controlli in basso */
+.viewer-video-wrap {
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  padding: calc(var(--topbar-height) + var(--sp-2)) var(--sp-10, 48px) 72px;
+  box-sizing: border-box;
+}
+.viewer-video {
+  max-width: min(100%, 1440px);
+  max-height: 100%;
+  border-radius: var(--shape-sm);
+  background: #000;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  outline: none;
+}
+@media (max-width: 599px) {
+  .viewer-video-wrap { padding: calc(var(--topbar-height) + var(--sp-1)) var(--sp-2) 68px; }
+}
+
+/* Errore di caricamento: sopra l'area foto, con Riprova */
+.viewer-stage > .viewer-error {
+  position: absolute; inset: 0; z-index: var(--z-raised);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--sp-3); padding: var(--sp-6); text-align: center;
+  background: color-mix(in srgb, var(--md-sys-color-scrim) 45%, transparent);
+  color: var(--on-media);
+}
+.viewer-error .material-symbols-outlined { font-size: 48px; }
+.viewer-error__text {
+  margin: 0; font: 400 var(--md-sys-typescale-body-large-size) / var(--md-sys-typescale-body-large-line-height) var(--md-ref-typeface-plain);
+}
+
+/* Barra inferiore (zoom/rotazione per foto, controlli rapidi per video) */
+.viewer-zoom {
+  position: absolute; left: 50%; bottom: var(--sp-4); z-index: var(--z-sticky);
+  transform: translateX(-50%);
+  display: flex; align-items: center; gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--shape-full);
+  background: color-mix(in srgb, var(--md-sys-color-scrim) 68%, transparent);
+  backdrop-filter: blur(12px);
+  border: 1px solid color-mix(in srgb, var(--on-media) 14%, transparent);
+  transition: opacity var(--dur-short) var(--motion-standard);
+}
+.viewer-zoom[hidden] { display: none; }
+.viewer-zoom__label {
+  all: unset; box-sizing: border-box;
+  min-width: 56px; padding: 4px 8px; border-radius: var(--shape-full);
+  text-align: center; color: var(--on-media); cursor: pointer;
+  font: 500 var(--md-sys-typescale-label-large-size) / var(--md-sys-typescale-label-large-line-height) var(--md-ref-typeface-plain);
+  font-variant-numeric: tabular-nums;
+}
+.viewer-zoom__label:hover { background: color-mix(in srgb, var(--on-media) 12%, transparent); }
+.viewer-zoom__sep {
+  width: 1px; height: 20px; margin: 0 2px;
+  background: color-mix(in srgb, var(--on-media) 20%, transparent);
+}
+
+/* Frecce: pillole traslucide con blur, ben leggibili su foto chiare e scure */
+.viewer-nav {
+  z-index: var(--z-sticky);
+  border-radius: var(--shape-full);
+  background: color-mix(in srgb, var(--md-sys-color-scrim) 46%, transparent);
+  backdrop-filter: blur(8px);
+  transition: opacity var(--dur-short) var(--motion-standard), background-color var(--dur-short) var(--motion-standard);
+}
+.viewer-nav:hover { background: color-mix(in srgb, var(--md-sys-color-scrim) 68%, transparent); }
+.viewer-nav md-icon-button,
+md-icon-button.viewer-nav { --md-icon-button-icon-color: var(--on-media); }
+
+/* ---------- Pannello info ---------- */
+.viewer-info { z-index: var(--z-sticky); }
+.viewer-info__header {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
+}
+.viewer-info__header .viewer-info__title { font-size: var(--md-sys-typescale-title-large-size); }
+.viewer-info__name {
+  margin: 0; overflow-wrap: anywhere;
+  font: 500 var(--md-sys-typescale-title-medium-size) / var(--md-sys-typescale-title-medium-line-height) var(--md-ref-typeface-plain);
+}
+.viewer-info__list { margin: 0; display: flex; flex-direction: column; gap: var(--sp-3); }
+.viewer-info__list dd a,
+.viewer-info a { color: var(--md-sys-color-primary); }
+.viewer-info__sub {
+  color: var(--md-sys-color-on-surface-variant);
+  font: 400 var(--md-sys-typescale-label-medium-size) / var(--md-sys-typescale-label-medium-line-height) var(--md-ref-typeface-plain);
+}
+.viewer-info__warn {
+  display: inline-block; margin-top: var(--sp-1); padding: 2px var(--sp-2);
+  border-radius: var(--shape-sm);
+  background: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container);
+  font: 500 var(--md-sys-typescale-label-medium-size) / var(--md-sys-typescale-label-medium-line-height) var(--md-ref-typeface-plain);
+}
+.viewer-info__section {
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+.viewer-info__label {
+  margin: 0; color: var(--md-sys-color-on-surface-variant);
+  font: 500 var(--md-sys-typescale-label-large-size) / var(--md-sys-typescale-label-large-line-height) var(--md-ref-typeface-plain);
+}
+.viewer-info__path {
+  display: block; padding: var(--sp-2); border-radius: var(--shape-sm);
+  background: var(--md-sys-color-surface-container-highest); color: var(--md-sys-color-on-surface);
+  font: 400 var(--md-sys-typescale-label-medium-size) / 1.4 ui-monospace, Consolas, monospace;
+  overflow-wrap: anywhere; user-select: text;
+}
+.viewer-info__actions { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+.viewer-info__chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.viewer-info__chip {
+  padding: var(--sp-1) var(--sp-3); border-radius: var(--shape-sm);
+  border: 1px solid var(--md-sys-color-outline); color: var(--md-sys-color-on-surface) !important;
+  text-decoration: none;
+  font: 500 var(--md-sys-typescale-label-large-size) / var(--md-sys-typescale-label-large-line-height) var(--md-ref-typeface-plain);
+}
+.viewer-info__chip:hover { background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent); }
+
+/* Pannello info su superficie scura come il visualizzatore: testo chiaro (--on-media) in entrambi i temi */
+.viewer-overlay .viewer-info {
+  background: color-mix(in srgb, var(--md-sys-color-scrim) 88%, var(--md-sys-color-surface));
+  color: var(--on-media);
+  border-color: color-mix(in srgb, var(--on-media) 20%, transparent);
+  --md-text-button-label-text-color: var(--on-media);
+  --md-text-button-icon-color: var(--on-media);
+  --md-text-button-hover-label-text-color: var(--on-media);
+  --md-text-button-hover-icon-color: var(--on-media);
+  --md-text-button-focus-label-text-color: var(--on-media);
+  --md-text-button-focus-icon-color: var(--on-media);
+  --md-text-button-pressed-label-text-color: var(--on-media);
+  --md-text-button-pressed-icon-color: var(--on-media);
+  --md-text-button-hover-state-layer-color: var(--on-media);
+  --md-text-button-pressed-state-layer-color: var(--on-media);
+}
+.viewer-info md-icon-button {
+  --md-icon-button-icon-color: var(--on-media);
+  --md-icon-button-hover-icon-color: var(--on-media);
+  --md-icon-button-focus-icon-color: var(--on-media);
+  --md-icon-button-hover-state-layer-color: var(--on-media);
+  --md-icon-button-pressed-state-layer-color: var(--on-media);
+}
+.viewer-info .viewer-info__row dt,
+.viewer-info .viewer-info__sub,
+.viewer-info .viewer-info__label { color: color-mix(in srgb, var(--on-media) 72%, transparent); }
+.viewer-info .viewer-info__path {
+  background: color-mix(in srgb, var(--on-media) 12%, transparent); color: var(--on-media);
+}
+.viewer-info .viewer-info__section { border-top-color: color-mix(in srgb, var(--on-media) 20%, transparent); }
+.viewer-info a,
+.viewer-info .viewer-info__list dd a { color: var(--on-media); text-decoration: underline; }
+.viewer-info .viewer-info__chip { color: var(--on-media) !important; border-color: color-mix(in srgb, var(--on-media) 45%, transparent); }
+.viewer-info .viewer-info__chip:hover { background: color-mix(in srgb, var(--on-media) 12%, transparent); }
+
+/* Errore: "Riprova" con contrasto alto sullo scrim in entrambi i temi */
+.viewer-error md-filled-tonal-button {
+  --md-filled-tonal-button-container-color: var(--on-media);
+  --md-filled-tonal-button-label-text-color: var(--md-sys-color-scrim);
+  --md-filled-tonal-button-hover-label-text-color: var(--md-sys-color-scrim);
+  --md-filled-tonal-button-focus-label-text-color: var(--md-sys-color-scrim);
+  --md-filled-tonal-button-pressed-label-text-color: var(--md-sys-color-scrim);
+  --md-filled-tonal-button-hover-state-layer-color: var(--md-sys-color-scrim);
+  --md-filled-tonal-button-pressed-state-layer-color: var(--md-sys-color-scrim);
+}
+
+/* Caricamento di altre foto (fine lista): piccolo indicatore in alto al centro */
+.viewer-loader {
+  position: absolute; top: calc(var(--topbar-height) + var(--sp-2)); left: 50%; transform: translateX(-50%);
+  z-index: var(--z-sticky);
+  --md-circular-progress-size: 24px;
+  --md-circular-progress-active-indicator-color: var(--on-media);
+}
+.viewer-loader[hidden] { display: none; }
+
+/* Movimento: apertura con dissolvenza e leggera scala, chiusura piu' rapida, pannello info che scorre dentro.
+   Le durate arrivano dai token (--dur-*, azzerati da prefers-reduced-motion in tokens.css). */
+.viewer-overlay { animation: viewer-in var(--dur-medium) var(--motion-emphasized-decel) backwards; }
+.viewer-overlay.is-closing { animation: viewer-out var(--dur-short) var(--motion-emphasized-accel) forwards; }
+.viewer-info:not([hidden]) { animation: viewer-info-side var(--dur-medium) var(--motion-standard) backwards; }
+@media (max-width: 599px) {
+  .viewer-info:not([hidden]) { animation-name: viewer-info-sheet; }
+}
+@keyframes viewer-in { from { opacity: 0; transform: scale(.98); } }
+@keyframes viewer-out { to { opacity: 0; transform: scale(.98); } }
+@keyframes viewer-info-side { from { transform: translateX(100%); } }
+@keyframes viewer-info-sheet { from { transform: translateY(100%); } }
+
+/* Compatto (<600px): album e informazioni nel menu "Altre azioni" */
+.viewer-menu-compact { display: none; }
+@media (max-width: 599px) {
+  .viewer-topbar__wide { display: none; }
+  .viewer-menu-compact { display: flex; }
+  /* con il bottom sheet aperto la foto resta nella parte alta, sopra il pannello */
+  .viewer-overlay.has-info > .viewer-stage { flex: 0 0 calc(40% - var(--topbar-height)); margin: 0; }
+}
+
+/* Area di tocco di 48px sui dispositivi touch */
+@media (pointer: coarse) {
+  .viewer-topbar md-icon-button,
+  .viewer-zoom md-icon-button { min-width: 48px; min-height: 48px; }
+}
+
+/* Layout esteso (>=600px): il pannello parte sotto la barra superiore; frecce e zoom si spostano a sinistra del pannello */
+@media (min-width: 600px) {
+  .viewer-overlay .viewer-info { top: var(--topbar-height); }
+  .viewer-overlay.has-info .viewer-nav--next { right: calc(var(--info-width) + var(--sp-4)); }
+  .viewer-overlay.has-info .viewer-zoom { left: calc(50% - var(--info-width) / 2); }
+}
+/* Compatto (<600px): bottom sheet; mentre e' aperto nascondo frecce e zoom sotto di esso */
+@media (max-width: 599px) {
+  .viewer-overlay.has-info .viewer-nav,
+  .viewer-overlay.has-info .viewer-zoom { display: none; }
+  /* su telefono le frecce coprirebbero la foto: si scorre con il dito (swipe) */
+  .viewer-nav { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .viewer-full { transition: none; }
+  .viewer-overlay, .viewer-overlay.is-closing, .viewer-info:not([hidden]) { animation: none; }
+}

@@ -1,0 +1,145 @@
+/* Aiuto (view help.js): centrata, ampia (max 1080px) e ariosa. Solo token M3. */
+.help-page {
+  display: flex; flex-direction: column; gap: var(--sp-8, 32px);
+  max-width: 1080px; width: 100%; margin: 0 auto;
+  padding-bottom: var(--sp-12, 48px);
+  box-sizing: border-box;
+}
+.help-header { display: flex; flex-direction: column; gap: var(--sp-2, 8px); text-align: left; }
+.help-header h1 { margin: 0; text-align: left; font-weight: 700; letter-spacing: -0.02em; }
+.help-header p { margin: 0; text-align: left; font-size: 1rem; line-height: 1.55; }
+.help-muted { margin: 0; color: var(--md-sys-color-on-surface-variant); }
+.help-section { display: flex; flex-direction: column; gap: var(--sp-4, 16px); min-width: 0; }
+.help-section > .section-title { margin: 0; color: var(--md-sys-color-on-surface); }
+.help-card { display: flex; flex-direction: column; gap: var(--sp-2, 8px); min-width: 0; }
+.help-card h3, .help-card h4, .help-card p { margin: 0; }
+.help-card h3, .help-step .help-step__title { font-weight: 600; }
+.help-card p + p { margin-top: 0; }
+.help-card > h4 { margin-top: var(--sp-2, 8px); }
+.help-card__link, .help-step__link {
+  display: inline-flex; align-items: center; gap: var(--sp-1, 4px);
+  align-self: flex-start; margin-top: var(--sp-1, 4px);
+  color: var(--md-sys-color-primary); text-decoration: none; border-radius: var(--shape-full, 999px);
+  padding: var(--sp-1, 4px) var(--sp-2, 8px); margin-left: calc(var(--sp-2, 8px) * -1);
+}
+.help-card__link:focus-visible, .help-step__link:focus-visible, .help-faq summary:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px;
+}
+.help-card__link:hover, .help-step__link:hover { text-decoration: underline; }
+.help-card__link .material-symbols-outlined, .help-step__link .material-symbols-outlined { font-size: 18px; }
+
+/* ---------- Come funziona ---------- */
+.help-steps {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--sp-3, 12px);
+}
+.help-step {
+  display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-1, 4px);
+  padding: var(--sp-4, 16px); border-radius: var(--shape-md, 12px); min-width: 0;
+}
+.help-step__icon {
+  display: inline-grid; place-items: center; width: 48px; height: 48px; margin-bottom: var(--sp-2, 8px);
+  border-radius: var(--shape-full, 999px);
+  background: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container);
+}
+.help-step__num { color: var(--md-sys-color-on-surface-variant); }
+.help-step__title, .help-step__text { margin: 0; }
+.help-step__title { color: var(--md-sys-color-on-surface); }
+.help-step__text { color: var(--md-sys-color-on-surface-variant); flex: 1 1 auto; }
+.help-step .help-step__link { margin-top: auto; white-space: nowrap; }
+
+/* ---------- La tua sicurezza ---------- */
+.help-safety { display: flex; flex-direction: column; gap: var(--sp-3, 12px); }
+.help-safety .callout__title { margin: 0 0 var(--sp-1, 4px); }
+.help-safety .callout p { margin: 0; }
+.help-card > .compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2, 8px); }
+.help-compare-item { height: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: var(--sp-1, 4px); padding: var(--sp-3, 12px) var(--sp-4, 16px); border-radius: var(--shape-md, 12px); background: var(--md-sys-color-surface-container-high); }
+.help-compare-item h4, .help-compare-item p { margin: 0; }
+.help-compare-item p { color: var(--md-sys-color-on-surface-variant); }
+.help-example { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ---------- Domande frequenti ---------- */
+.help-faq-tools { display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
+.help-search { width: 100%; }
+.help-faq { display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
+.help-faq__item {
+  border-radius: var(--shape-md, 12px); overflow: hidden; min-width: 0;
+  background: var(--md-sys-color-surface-container-low); color: var(--md-sys-color-on-surface);
+  border: 1px solid var(--md-sys-color-outline-variant);
+}
+.help-faq summary {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3, 12px);
+  min-height: 58px; padding: var(--sp-3, 12px) var(--sp-5, 20px); box-sizing: border-box;
+  cursor: pointer; list-style: none; overflow-wrap: anywhere;
+  font-weight: 500;
+}
+.help-faq summary::-webkit-details-marker { display: none; }
+.help-faq summary:hover { background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent); }
+.help-faq summary:active { background: color-mix(in srgb, var(--md-sys-color-on-surface) 10%, transparent); }
+.help-faq__chev {
+  display: inline-flex; flex: 0 0 auto; color: var(--md-sys-color-on-surface-variant);
+  transition: transform var(--dur-short, 200ms) var(--motion-standard, ease-in-out);
+}
+.help-faq__item[open] > summary .help-faq__chev { transform: rotate(180deg); }
+.help-faq__body { padding: 0 var(--sp-5, 20px) var(--sp-5, 20px); font-size: 0.9625rem; line-height: 1.62; }
+/* Apertura: il contenuto scorre dentro leggermente (la chiusura resta immediata, com'e' nativo di details). */
+.help-faq__item[open] > .help-faq__body { animation: help-faq-in var(--dur-short, 150ms) var(--motion-standard, ease-in-out) both; }
+@keyframes help-faq-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.help-faq__body p { margin: 0 0 var(--sp-2, 8px); color: var(--md-sys-color-on-surface-variant); }
+.help-faq__body p:last-of-type { margin-bottom: 0; }
+.help-faq__body .help-card__link { margin-top: var(--sp-2, 8px); }
+.help-faq mark {
+  background: var(--md-sys-color-tertiary-container); color: var(--md-sys-color-on-tertiary-container);
+  border-radius: 3px; padding: 0 2px;
+}
+.help-faq .empty-state { padding: var(--sp-6, 24px) 0; }
+
+/* ---------- Scorciatoie ---------- */
+.help-table-wrap { overflow-x: auto; border-radius: var(--shape-md, 12px); background: var(--md-sys-color-surface-container-low); }
+.help-table { min-width: 420px; }
+.help-table th, .help-table td { text-align: left; vertical-align: middle; }
+.help-table td:first-child { width: 1%; white-space: nowrap; padding-right: var(--sp-3, 12px); }
+.help-table td:last-child { overflow-wrap: anywhere; }
+.help-group {
+  padding-top: var(--sp-4, 16px); color: var(--md-sys-color-primary);
+  font: 600 var(--md-sys-typescale-label-large-size) / var(--md-sys-typescale-label-large-line-height) var(--md-ref-typeface-plain);
+}
+.help-keys { display: inline-flex; align-items: center; flex-wrap: nowrap; gap: 4px; white-space: nowrap; }
+.help-keys__sep { color: var(--md-sys-color-on-surface-variant); font-size: var(--md-sys-typescale-label-medium-size); }
+
+/* ---------- Informazioni ---------- */
+.help-info-body { min-height: 120px; }
+.help-info {
+  margin: 0; display: flex; flex-direction: column; gap: 0;
+  border-radius: var(--shape-md, 12px); overflow: hidden; background: var(--md-sys-color-surface-container-low);
+}
+.help-info__row {
+  display: grid; grid-template-columns: minmax(150px, 220px) 1fr; gap: var(--sp-2, 8px) var(--sp-4, 16px);
+  padding: var(--sp-3, 12px) var(--sp-4, 16px); align-items: start;
+}
+.help-info__row + .help-info__row { border-top: 1px solid var(--md-sys-color-outline-variant); }
+.help-info dt { margin: 0; color: var(--md-sys-color-on-surface-variant); }
+.help-info dd { margin: 0; color: var(--md-sys-color-on-surface); min-width: 0; overflow-wrap: anywhere; }
+.help-info__value { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-1, 4px); min-width: 0; }
+.help-path { font-family: ui-monospace, 'Roboto Mono', Consolas, monospace; font-size: var(--md-sys-typescale-body-small-size); overflow-wrap: anywhere; }
+.help-info__actions { display: flex; flex-wrap: wrap; gap: var(--sp-1, 4px); }
+.help-diag-slot { display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
+.help-diagnostics { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-3, 12px); }
+
+@media (max-width: 599px) {
+  .help-info__row { grid-template-columns: 1fr; gap: 2px; }
+  .help-card > .compare { grid-template-columns: 1fr; }
+  .help-table { min-width: 0; }
+  .help-steps { grid-template-columns: 1fr; }
+}
+/* Su touch: i link sono <a> e non rientrano nella regola dei pulsanti M3 (components.css), quindi 48px qui. */
+@media (pointer: coarse) {
+  .help-card__link, .help-step__link { min-height: 48px; box-sizing: border-box; align-items: center; }
+}
+@media (min-width: 840px) {
+  .help-page { padding-top: var(--sp-4, 16px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .help-faq__chev { transition: none; }
+  .help-faq__item[open] > .help-faq__body { animation: none; }
+}

@@ -1,0 +1,161 @@
+/* view-onboarding.css — percorso di benvenuto a schermo intero (caricato da views/onboarding.js).
+   Solo token M3: nessun colore fisso. Classi generiche (.callout, .card-outlined, .skeleton, .spacer) da components.css/base.css. */
+
+/* Overlay fisso che copre la shell (barra di navigazione inclusa). */
+.ob {
+  position: fixed; inset: 0; z-index: var(--z-overlay);
+  display: flex; flex-direction: column;
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  overflow: hidden;
+}
+/* Testata e piede: il contenuto (.ob__col) ha la stessa colonna di .ob__inner (max 640px, centrata). */
+.ob__top {
+  flex: none;
+  padding: calc(var(--sp-3) + env(safe-area-inset-top, 0px)) 0 var(--sp-3);
+}
+.ob__col {
+  box-sizing: border-box; width: 100%; max-width: 640px; margin-inline: auto;
+  padding-inline: var(--sp-4);
+  display: flex; align-items: center; gap: var(--sp-2);
+}
+.ob__brand { display: inline-flex; align-items: center; gap: var(--sp-2); color: var(--md-sys-color-primary); }
+.ob-icon { font-size: 20px; }
+.ob__main { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.ob__inner {
+  box-sizing: border-box; max-width: 640px; margin-inline: auto;
+  padding: var(--sp-2) var(--sp-4) var(--sp-8);
+  display: flex; flex-direction: column; gap: var(--sp-5);
+}
+.ob__foot {
+  flex: none;
+  padding: var(--sp-3) 0 calc(var(--sp-3) + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-low);
+}
+@media (min-width: 600px) {
+  .ob__col { padding-inline: var(--sp-6); }
+  .ob__inner { padding-inline: var(--sp-6); padding-top: var(--sp-4); gap: var(--sp-6); }
+}
+
+/* Transizione tra passi (scorrimento leggero + dissolvenza). */
+.ob-panel { display: flex; flex-direction: column; gap: var(--sp-5); min-width: 0; }
+.ob-panel.is-fwd { animation: ob-in-fwd var(--dur-medium) var(--motion-emphasized-decel) both; }
+.ob-panel.is-back { animation: ob-in-back var(--dur-medium) var(--motion-emphasized-decel) both; }
+@keyframes ob-in-fwd { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+@keyframes ob-in-back { from { opacity: 0; transform: translateX(-24px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .ob-panel.is-fwd, .ob-panel.is-back { animation: none; }
+}
+
+/* Stepper M3: pallini numerati + barra di avanzamento. Pallini, connettori e stati stanno in components.css (.ob-stepper__item). */
+.ob-stepper { display: flex; flex-direction: column; gap: var(--sp-2); }
+/* Nessun gap tra i passi: il connettore in components.css si misura sulle colonne. */
+.ob-stepper__list { display: flex; margin: 0; padding: 0; list-style: none; }
+.ob-stepper__item { flex: 1 1 0; }
+.ob-stepper__bar { width: 100%; }
+/* Telefono: solo il nome del passo corrente, per non stringere le etichette.
+   Le larghezze diventano variabili, quindi i connettori non si allineano: si nascondono. */
+@media (max-width: 599px) {
+  .ob-stepper__item:not(.is-current) .ob-stepper__label { display: none; }
+  .ob-stepper__item { flex: 0 0 auto; }
+  .ob-stepper__item::before { display: none; }
+  .ob-stepper__list { justify-content: space-between; }
+  .ob-stepper__item.is-current { flex: 1 1 auto; flex-direction: row; justify-content: center; }
+  .ob-stepper__item.is-current .ob-stepper__label { display: block; }
+}
+
+/* Illustrazione (SVG inline, colori dai token). */
+.ob-art { display: flex; justify-content: center; }
+.ob-art svg { width: min(100%, 300px); height: auto; }
+.ob-art__bg { fill: var(--md-sys-color-primary-container); }
+.ob-art__card--back { fill: var(--md-sys-color-tertiary-container); }
+.ob-art__card--mid { fill: var(--md-sys-color-secondary-container); }
+.ob-art__card--front { fill: var(--md-sys-color-surface-container-lowest); stroke: var(--md-sys-color-outline-variant); stroke-width: 1; }
+.ob-art__sun { fill: var(--md-sys-color-tertiary); }
+.ob-art__hill { fill: var(--md-sys-color-primary); }
+
+.ob-intro { display: flex; flex-direction: column; gap: var(--sp-2); }
+.ob-title { margin: 0; outline: none; text-wrap: balance; }
+/* Titoli di pagina: stesso peso e corpo dei titoli delle altre viste (.view-header h1 in theme.css). */
+.ob-intro > .ob-title {
+  font: 700 clamp(1.5rem, 1.1rem + 1vw, 2rem) / 1.2 var(--md-ref-typeface-brand);
+  letter-spacing: -0.025em;
+}
+.ob__brand-logo { width: 28px; height: 28px; flex: none; }
+.ob-lead { margin: 0; color: var(--md-sys-color-on-surface-variant); }
+.ob-muted { color: var(--md-sys-color-on-surface-variant); }
+
+/* Tre punti chiave del benvenuto. */
+.ob-points { display: flex; flex-direction: column; gap: var(--sp-3); margin: 0; padding: 0; list-style: none; }
+.ob-point { display: flex; align-items: flex-start; gap: var(--sp-3); }
+.ob-point__icon {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: var(--shape-md);
+  background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container);
+}
+.ob-point__icon .callout__icon { font-size: 22px; }
+.ob-point__text { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; padding-top: 2px; }
+
+/* Campi cartella. */
+.ob-field { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; }
+.ob-field__row { display: flex; align-items: flex-start; gap: var(--sp-2); }
+.ob-field__input { flex: 1 1 0; min-width: 0; }
+.ob-field__pick { flex: none; margin-top: var(--sp-2); } /* centrato sulla casella di testo (56px), non sul campo con il testo di aiuto */
+.ob-help { display: flex; flex-direction: column; gap: var(--sp-3); }
+.ob-help:empty { display: none; }
+.ob-mode-line {
+  margin: 0; padding: var(--sp-3) var(--sp-4); border-radius: var(--shape-md);
+  background: var(--md-sys-color-surface-container); color: var(--md-sys-color-on-surface);
+}
+.ob-hint { margin: 0; color: var(--md-sys-color-on-surface-variant); }
+.ob-hint:empty { display: none; }
+
+/* Gruppi con titolo (scelta quantita' nel passo di controllo). */
+.ob-modes { display: flex; flex-direction: column; gap: var(--sp-3); }
+.ob-modes h3 { margin: 0; }
+
+/* Riepilogo e controlli di ambiente (passo 4). */
+.ob-summary {
+  display: flex; flex-direction: column; gap: var(--sp-1);
+  padding: var(--sp-4); border-radius: var(--shape-md);
+  background: var(--md-sys-color-surface-container);
+}
+.ob-summary p { margin: 0; }
+.ob-path { overflow-wrap: anywhere; }
+.ob-checks { display: flex; flex-direction: column; gap: var(--sp-2); }
+.ob-check {
+  display: flex; align-items: flex-start; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4); border-radius: var(--shape-md);
+  background: var(--md-sys-color-surface-container-low);
+}
+.ob-check__icon { flex: none; display: inline-flex; padding-top: 2px; }
+.ob-check__icon .callout__icon { font-size: 22px; }
+.ob-check--ok .ob-check__icon { color: var(--md-sys-color-primary); }
+.ob-check--info .ob-check__icon { color: var(--md-sys-color-secondary); }
+.ob-check--warning .ob-check__icon { color: var(--md-sys-color-tertiary); }
+.ob-check__body { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
+.ob-check__body p { margin: 0; }
+.ob-code {
+  display: inline-block; align-self: flex-start; max-width: 100%; overflow-wrap: anywhere;
+  padding: var(--sp-1) var(--sp-2); border-radius: var(--shape-xs);
+  background: var(--md-sys-color-surface-container-highest); color: var(--md-sys-color-on-surface);
+  font-family: ui-monospace, Consolas, monospace; font-size: 0.9em;
+}
+
+/* Scelta quantita' (radio). */
+.ob-choices { display: flex; flex-direction: column; gap: var(--sp-2); }
+.ob-choice {
+  display: flex; align-items: flex-start; gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4); border-radius: var(--shape-md); cursor: pointer;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  transition: background-color var(--dur-short) var(--motion-standard);
+}
+.ob-choice:hover { background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent); }
+.ob-choice:has(md-radio[checked]) { border-color: var(--md-sys-color-primary); background: var(--md-sys-color-primary-container); }
+.ob-choice:has(md-radio[checked]) .ob-muted { color: var(--md-sys-color-on-primary-container); }
+.ob-choice md-radio { flex: none; margin-top: -4px; }
+.ob-choice__text { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
+
+/* Il pulsante Sfoglia e i campi restano usabili con tastiera (focus gia' gestito dai componenti). */
+.ob md-outlined-button, .ob md-filled-button, .ob md-text-button { flex: none; }

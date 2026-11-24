@@ -1,0 +1,480 @@
+/* shell.css — cornice adattiva (caricato da js/shell.js).
+   compatto <600px: top bar + bottom bar | medio 600-1023: rail 84px (o sidebar) | esteso >=1024: sidebar 264px (o rail).
+   La sidebar e' una superficie a tutta altezza; top bar, barra del flusso e outlet stanno nella colonna principale. */
+
+.app-shell {
+  --nav-w: 0px;
+  position: relative;
+  height: 100vh;
+  height: 100dvh;
+  display: grid;
+  overflow: hidden;
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  --page-margin: var(--sp-4);
+}
+.app-shell [hidden] { display: none !important; }
+.app-shell:not([data-size="compact"]) { --page-margin: var(--sp-8); }
+.app-shell[data-size="medium"] { --page-margin: var(--sp-6); }
+
+.app-shell[data-size="compact"] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas: "main" "bottom";
+}
+.app-shell[data-size="compact"] .app-nav { display: none; }
+
+.app-shell:not([data-size="compact"]) {
+  grid-template-columns: var(--nav-w) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "nav main";
+  transition: grid-template-columns var(--dur-medium) var(--motion-standard);
+}
+.app-shell:not([data-size="compact"]) .app-bottombar { display: none; }
+.app-shell[data-nav="rail"] { --nav-w: var(--rail-width); }
+.app-shell[data-nav="drawer"] { --nav-w: var(--drawer-width); }
+
+/* ---------- Barra del titolo (solo finestra desktop senza bordi) ---------- */
+:root { --titlebar-h: 32px; }
+.fs-titlebar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: var(--z-toast);
+  display: none; align-items: stretch; height: var(--titlebar-h);
+  background: var(--fs-sidebar);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  color: var(--md-sys-color-on-surface-variant);
+  user-select: none;
+}
+.is-desktop .fs-titlebar { display: flex; }
+.is-desktop .app-shell { padding-top: var(--titlebar-h); }
+/* Overlay a schermo intero: partono sotto la barra del titolo, altrimenti ne coprono i controlli in alto */
+.is-desktop .ob,
+.is-desktop .viewer-overlay,
+.is-desktop .album-picker { top: var(--titlebar-h); }
+.fs-titlebar__drag { flex: 1 1 auto; display: flex; align-items: center; padding-inline: var(--sp-3); min-width: 0; }
+.fs-titlebar__title { font: 600 0.75rem/1 var(--md-ref-typeface-brand); letter-spacing: 0.01em; }
+.fs-titlebar__controls { display: flex; flex: none; }
+.fs-titlebar__btn {
+  display: grid; place-items: center; width: 46px; height: 100%; padding: 0;
+  border: 0; background: none; color: inherit; cursor: pointer;
+  transition: background-color var(--dur-short) var(--motion-standard);
+}
+.fs-titlebar__btn svg { display: block; }
+.fs-titlebar__btn:hover { background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent); color: var(--md-sys-color-on-surface); }
+.fs-titlebar__btn--close:hover { background: var(--md-sys-color-error); color: var(--md-sys-color-on-error); }
+.fs-titlebar__btn:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: -2px; }
+
+/* ---------- Sidebar ---------- */
+.app-nav {
+  grid-area: nav;
+  display: flex; flex-direction: column;
+  width: var(--nav-w); min-height: 0; min-width: 0;
+  overflow: hidden;
+  padding: var(--sp-3) var(--sp-3) var(--sp-3);
+  background: var(--fs-sidebar);
+  border-right: 1px solid var(--md-sys-color-outline-variant);
+}
+.app-nav > * { flex: 0 0 auto; }
+.nav-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; margin-inline: calc(-1 * var(--sp-1)); padding-inline: var(--sp-1); }
+
+.nav-brand {
+  display: flex; align-items: center; gap: var(--sp-2);
+  min-height: 52px; padding: 0 0 var(--sp-3) var(--sp-2);
+}
+.brand {
+  display: flex; align-items: center; gap: var(--sp-3);
+  flex: 1 1 auto; min-width: 0;
+  color: var(--md-sys-color-on-surface); text-decoration: none;
+}
+.brand:hover { text-decoration: none; }
+.brand-logo {
+  flex: none; width: 34px; height: 34px; border-radius: 10px;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--md-sys-color-primary) 30%, transparent);
+}
+.brand-text { display: flex; flex-direction: column; min-width: 0; }
+.brand-wordmark {
+  display: block; width: 132px; height: auto; overflow: visible;
+  margin-left: -4px;
+}
+.brand-name {
+  font: 700 1.0625rem/1.25rem var(--md-ref-typeface-brand); letter-spacing: -0.01em;
+}
+.brand-sub {
+  font: 400 0.75rem/1rem var(--md-ref-typeface-plain); color: var(--md-sys-color-on-surface-variant);
+}
+.nav-toggle { --md-icon-button-icon-color: var(--md-sys-color-on-surface-variant); transition: transform var(--dur-short) var(--motion-standard); }
+.app-shell[data-nav="rail"] .nav-brand { flex-direction: column; padding: 0 0 var(--sp-3); gap: var(--sp-2); }
+.app-shell[data-nav="rail"] .brand { display: none; }
+.app-shell[data-nav="rail"] .brand-text { display: none; }
+
+.nav-group + .nav-group { margin-top: var(--sp-4); }
+.nav-group-label {
+  margin: var(--sp-2) var(--sp-3) var(--sp-2);
+  font: 600 0.6875rem/1rem var(--md-ref-typeface-plain);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--md-sys-color-on-surface-variant);
+  opacity: .8;
+}
+.app-shell[data-nav="rail"] .nav-group-label { display: none; }
+.app-shell[data-nav="rail"] .nav-group + .nav-group {
+  border-top: 1px solid var(--md-sys-color-outline-variant); padding-top: var(--sp-3); margin-top: var(--sp-3);
+}
+
+/* Voce di navigazione */
+.nav-link {
+  position: relative; isolation: isolate;
+  display: flex; align-items: center; gap: var(--sp-3);
+  min-width: 0; max-width: 100%;
+  height: 40px; padding: 0 var(--sp-3);
+  margin-block: 2px;
+  border-radius: var(--shape-sm);
+  color: var(--md-sys-color-on-surface-variant);
+  font: 500 0.875rem/1.25rem var(--md-ref-typeface-plain);
+  text-decoration: none; outline: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: color var(--dur-short) var(--motion-standard), background-color var(--dur-short) var(--motion-standard);
+}
+.nav-link:hover { text-decoration: none; background: color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent); color: var(--md-sys-color-on-surface); }
+.nav-link md-ripple { border-radius: inherit; }
+.nav-icon { display: grid; place-items: center; flex: none; width: 24px; height: 24px; }
+.nav-icon md-icon { --md-icon-size: 20px; font-size: 20px; }
+.nav-icon md-icon .material-symbols-outlined { font-size: 20px; }
+.nav-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-link.is-active {
+  color: var(--md-sys-color-primary);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 11%, transparent);
+  font-weight: 600;
+}
+.nav-link.is-active .nav-icon md-icon .material-symbols-outlined { font-variation-settings: 'FILL' 1, 'wght' 500; }
+.nav-link.is-active::before {
+  content: ""; position: absolute; left: calc(-1 * var(--sp-3)); top: 8px; bottom: 8px; width: 3px;
+  border-radius: 0 3px 3px 0; background: var(--md-sys-color-primary);
+}
+.nav-link:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: -2px; }
+
+/* Rail: icona sopra, etichetta piccola */
+.app-shell[data-nav="rail"] .nav-link {
+  flex-direction: column; justify-content: center; align-items: center; gap: 2px;
+  height: auto; min-height: 56px; padding: 6px 2px;
+  font-size: 0.6875rem; line-height: 0.875rem;
+}
+.app-shell[data-nav="rail"] .nav-icon { flex: none; }
+/* Le etichette vanno a capo (es. «Foto e / video», «Crea / cartelle») invece di troncarsi */
+.app-shell[data-nav="rail"] .app-nav { padding-inline: var(--sp-2); }
+.app-shell[data-nav="rail"] .nav-link { padding-inline: 0; }
+.app-shell[data-nav="rail"] .nav-label { flex: none; max-width: 100%; text-align: center; white-space: normal; overflow: visible; text-overflow: clip; letter-spacing: -0.01em; }
+/* Rail stile M3: indicatore a pillola dietro l'icona, niente barra laterale né sfondo pieno */
+.app-shell[data-nav="rail"] .nav-link:hover,
+.app-shell[data-nav="rail"] .nav-link.is-active { background: none; }
+.app-shell[data-nav="rail"] .nav-link.is-active::before { display: none; }
+.app-shell[data-nav="rail"] .nav-icon {
+  width: 56px; height: 28px; border-radius: var(--shape-full);
+  transition: background-color var(--dur-short) var(--motion-standard);
+}
+.app-shell[data-nav="rail"] .nav-link:hover .nav-icon { background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent); }
+.app-shell[data-nav="rail"] .nav-link.is-active .nav-icon { background: color-mix(in srgb, var(--md-sys-color-primary) 14%, transparent); }
+.app-shell[data-nav="rail"] .nav-link.is-active .nav-label { color: var(--md-sys-color-on-surface); }
+.app-shell[data-nav="rail"] .nav-link:focus-visible { outline: none; }
+.app-shell[data-nav="rail"] .nav-link:focus-visible .nav-icon { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
+
+/* Marcatore dei passi (numero / spunta) — usato in sidebar e nella barra del flusso */
+.step-marker {
+  display: grid; place-items: center; flex: none;
+  width: 22px; height: 22px; border-radius: var(--shape-full);
+  font: 700 0.75rem/1 var(--md-ref-typeface-plain); font-variant-numeric: tabular-nums;
+  border: 1.5px solid currentColor; color: var(--md-sys-color-on-surface-variant);
+  box-sizing: border-box;
+}
+.step-marker md-icon, .step-marker .material-symbols-outlined { --md-icon-size: 14px; font-size: 14px; font-variation-settings: 'wght' 700; }
+/* Nella rail .nav-icon md-icon impone 20px: qui il glifo resta 14px e centrato nel cerchio */
+.app-nav .step-marker md-icon { display: flex; align-items: center; justify-content: center; line-height: 1; }
+.app-nav .step-marker .material-symbols-outlined { font-size: 14px; line-height: 1; }
+.step-marker md-circular-progress { --md-circular-progress-size: 18px; --md-circular-progress-active-indicator-width: 12px; }
+.step-marker--done { background: var(--fs-success); border-color: var(--fs-success); color: var(--md-sys-color-surface-container-lowest); }
+.step-marker--warn { border-color: var(--md-sys-color-tertiary); color: var(--md-sys-color-tertiary); }
+.step-marker--running { border-color: transparent; }
+.nav-link.is-active .step-marker:not(.step-marker--done):not(.step-marker--warn) { background: var(--md-sys-color-primary); border-color: var(--md-sys-color-primary); color: var(--md-sys-color-on-primary); }
+
+/* Piede della sidebar: stato archivio + impostazioni/aiuto + tema */
+.nav-footer {
+  display: flex; flex-direction: column;
+  padding-top: var(--sp-3); margin-top: var(--sp-2);
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+.nav-footer-help-row {
+  display: flex; align-items: center; gap: var(--sp-1); min-width: 0;
+}
+.nav-footer-help-row > .nav-link { flex: 1 1 auto; min-width: 0; }
+.nav-theme-btn {
+  flex: none;
+  --md-icon-button-icon-color: var(--md-sys-color-on-surface-variant);
+}
+.app-shell[data-nav="rail"] .nav-footer-help-row {
+  flex-direction: column; align-items: center; gap: var(--sp-1);
+}
+.app-shell[data-nav="rail"] .nav-footer-help-row > .nav-link { width: 100%; }
+.side-status {
+  display: flex; align-items: flex-start; gap: var(--sp-3);
+  padding: var(--sp-3); margin-bottom: var(--sp-2);
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-surface-container-low);
+  color: var(--md-sys-color-on-surface); text-decoration: none;
+  transition: background-color var(--dur-short) var(--motion-standard);
+}
+.side-status:hover { text-decoration: none; background: var(--md-sys-color-surface-container); }
+.side-status__icon {
+  display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: var(--shape-sm);
+  background: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container);
+}
+.side-status__icon .material-symbols-outlined { font-size: 18px; display: block; line-height: 1; width: 18px; height: 18px; text-align: center; overflow: visible; }
+.side-status.is-done .side-status__icon { background: var(--fs-success-container); color: var(--fs-on-success-container); }
+.side-status__ring {
+  display: block; width: 18px; height: 18px; border-radius: 50%; box-sizing: border-box;
+  border: 2.5px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  animation: fs-spin 0.85s linear infinite;
+}
+@keyframes fs-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .side-status__ring { animation-duration: 2.4s; }
+}
+.side-status__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.side-status__title { font: 600 0.8125rem/1.125rem var(--md-ref-typeface-plain); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side-status__sub { font: 400 0.75rem/1rem var(--md-ref-typeface-plain); color: var(--md-sys-color-on-surface-variant); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side-status__bar {
+  position: relative; display: block; height: 4px; margin-top: 6px; overflow: hidden;
+  border-radius: var(--shape-full); background: var(--md-sys-color-surface-container-highest);
+}
+.side-status__bar > span { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--md-sys-color-primary); transition: width var(--dur-long) var(--motion-standard); }
+.side-status.is-done .side-status__bar > span { background: var(--fs-success); }
+.side-status__bar.is-indeterminate > span { animation: fs-indet 1.4s var(--motion-standard) infinite; }
+.app-shell[data-nav="rail"] .side-status { justify-content: center; padding: var(--sp-2); background: none; }
+.app-shell[data-nav="rail"] .side-status__text { display: none; }
+@keyframes fs-indet { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+
+/* ---------- Colonna principale ---------- */
+.app-main {
+  grid-area: main; position: relative;
+  display: flex; flex-direction: column;
+  min-width: 0; min-height: 0;
+}
+
+/* Top bar */
+.app-topbar {
+  flex: none; position: relative; z-index: var(--z-sticky);
+  display: flex; align-items: center; gap: var(--sp-4);
+  min-height: var(--topbar-height);
+  padding: var(--sp-2) var(--page-margin);
+  background: var(--md-sys-color-surface);
+  border-bottom: 1px solid transparent;
+  transition: border-color var(--dur-short) var(--motion-standard), box-shadow var(--dur-short) var(--motion-standard);
+}
+.app-shell.is-scrolled .app-topbar {
+  border-bottom-color: var(--md-sys-color-outline-variant);
+  box-shadow: 0 6px 18px -12px color-mix(in srgb, var(--md-sys-color-shadow) 35%, transparent);
+}
+.topbar-heading { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; flex: 0 1 auto; }
+.topbar-logo { display: none; width: 28px; height: 28px; border-radius: 8px; flex: none; }
+.app-shell[data-size="compact"] .topbar-logo { display: block; }
+.topbar-titles { display: flex; flex-direction: column; min-width: 0; }
+.topbar-eyebrow {
+  font: 600 0.6875rem/1rem var(--md-ref-typeface-plain); letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--md-sys-color-primary);
+}
+.topbar-eyebrow:empty { display: none; }
+.topbar-title {
+  margin: 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font: 650 1.125rem/1.5rem var(--md-ref-typeface-brand); letter-spacing: -0.01em;
+  color: var(--md-sys-color-on-surface);
+}
+/* La view ha gia' il suo h1: su schermi grandi la top bar non ripete il titolo. */
+.app-shell:not([data-size="compact"])[data-view-title] .topbar-heading { display: none; }
+
+.topbar-search {
+  position: relative; display: flex; align-items: center; gap: var(--sp-2);
+  flex: 1 1 auto; max-width: 560px; height: 42px; padding: 0 var(--sp-2) 0 var(--sp-3);
+  border-radius: var(--shape-full);
+  background: var(--md-sys-color-surface-container);
+  border: 1px solid transparent;
+  color: var(--md-sys-color-on-surface-variant);
+  cursor: text;
+  transition: background-color var(--dur-short) var(--motion-standard), border-color var(--dur-short) var(--motion-standard), box-shadow var(--dur-short) var(--motion-standard);
+}
+.topbar-search:hover { background: var(--md-sys-color-surface-container-high); }
+.topbar-search:focus-within {
+  background: var(--fs-card); border-color: var(--md-sys-color-primary);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--md-sys-color-primary) 16%, transparent);
+}
+.topbar-search md-icon { --md-icon-size: 20px; flex: none; }
+.topbar-search-input {
+  flex: 1 1 auto; min-width: 0; height: 100%;
+  border: 0; outline: none; background: transparent;
+  color: var(--md-sys-color-on-surface);
+  font: 400 0.9375rem/1.25rem var(--md-ref-typeface-plain);
+}
+.topbar-search-input::placeholder { color: var(--md-sys-color-on-surface-variant); opacity: .85; }
+.topbar-search-input::-webkit-search-cancel-button { cursor: pointer; }
+.topbar-search-kbd { flex: none; }
+.topbar-search:focus-within .topbar-search-kbd { display: none; }
+/* La barra di ricerca globale compare solo nelle pagine di esplorazione foto (Home, Galleria, Album, Luoghi). */
+.app-shell:not([data-route="home"]):not([data-route="gallery"]):not([data-route="albums"]):not([data-route="places"]) .topbar-search {
+  display: none;
+}
+/* Su desktop, quando non c'è ricerca e la pagina ha il proprio h1, la topbar non serve (il tema e' nella sidebar). */
+.app-shell:not([data-size="compact"])[data-view-title]:not([data-route="home"]):not([data-route="gallery"]):not([data-route="albums"]):not([data-route="places"]) .app-topbar {
+  display: none;
+}
+
+.topbar-actions { display: flex; align-items: center; gap: var(--sp-1); margin-left: auto; flex: none; }
+.app-topbar md-icon-button { --md-icon-button-icon-color: var(--md-sys-color-on-surface-variant); }
+.app-shell:not([data-size="compact"]) .menu-compact-only { display: none; }
+.app-shell:not([data-size="compact"]) #shell-more-btn { display: none; }
+
+/* Compatto: titolo + azioni sulla prima riga, ricerca sotto */
+.app-shell[data-size="compact"] .app-topbar { flex-wrap: wrap; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3) var(--sp-3) var(--sp-4); }
+.app-shell[data-size="compact"] .topbar-heading { flex: 1 1 auto; }
+.app-shell[data-size="compact"] .topbar-search { order: 3; flex: 1 1 100%; max-width: none; }
+.app-shell[data-size="compact"] .topbar-search-kbd { display: none; }
+/* Compatto con h1 nella view: resta solo l'occhiello (sezione), il titolo lo mostra la pagina. */
+.app-shell[data-size="compact"][data-view-title] .topbar-title { display: none; }
+.app-shell[data-size="compact"][data-view-title] .topbar-eyebrow { font-size: 0.75rem; }
+.app-shell[data-size="compact"][data-view-title] .topbar-eyebrow:empty + .topbar-title { display: block; }
+.app-shell[data-size="compact"][data-route="search"] .topbar-search { display: none; }
+
+/* Chip di stato indicizzazione */
+.status-chip {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  height: 34px; padding: 0 var(--sp-3) 0 var(--sp-2); margin-right: var(--sp-1);
+  border: 0; border-radius: var(--shape-full); cursor: pointer; white-space: nowrap;
+  background: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container);
+  font: 600 0.8125rem/1.25rem var(--md-ref-typeface-plain); font-variant-numeric: tabular-nums;
+}
+.status-chip:hover { box-shadow: var(--elev-1); }
+.status-chip:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
+.status-chip .chip-progress { --md-circular-progress-size: 20px; --md-circular-progress-active-indicator-width: 12px; }
+
+/* ---------- Barra del flusso Organizza ---------- */
+.flow-bar {
+  flex: none;
+  display: flex; align-items: center; gap: var(--sp-4);
+  padding: var(--sp-2) var(--page-margin) var(--sp-3);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+/* Con la sidebar estesa i 4 passi sono già a sinistra: resta solo il pulsante "Avanti" allineato a destra. */
+.app-shell[data-nav="drawer"] .flow-bar {
+  justify-content: flex-end;
+  padding: var(--sp-1) var(--page-margin) var(--sp-2);
+  border-bottom: 0;
+}
+.app-shell[data-nav="drawer"] .flow-steps { display: none; }
+.flow-steps {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: stretch; gap: var(--sp-2);
+  margin: 0; padding: 0; list-style: none;
+  overflow-x: auto; scrollbar-width: none;
+}
+.flow-steps::-webkit-scrollbar { display: none; }
+.flow-steps > li { flex: 1 1 0; min-width: 0; display: flex; }
+.flow-steps > li + li::before {
+  content: ""; flex: none; align-self: center; width: 18px; height: 2px; margin-right: var(--sp-2);
+  border-radius: 2px; background: var(--md-sys-color-outline-variant);
+}
+.flow-step {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--shape-md);
+  color: var(--md-sys-color-on-surface-variant); text-decoration: none;
+  transition: background-color var(--dur-short) var(--motion-standard);
+}
+.flow-step:hover { text-decoration: none; background: color-mix(in srgb, var(--md-sys-color-on-surface) 5%, transparent); }
+.flow-step.is-active { background: var(--fs-card); box-shadow: 0 0 0 1px var(--md-sys-color-outline-variant), 0 4px 14px -8px color-mix(in srgb, var(--md-sys-color-shadow) 40%, transparent); color: var(--md-sys-color-on-surface); }
+.flow-step.is-active .step-marker:not(.step-marker--done):not(.step-marker--warn) { background: var(--md-sys-color-primary); border-color: var(--md-sys-color-primary); color: var(--md-sys-color-on-primary); }
+.flow-step__marker { display: flex; flex: none; }
+.flow-step .step-marker { width: 26px; height: 26px; font-size: 0.8125rem; }
+.flow-step__text { display: flex; flex-direction: column; min-width: 0; }
+.flow-step__label { font: 600 0.875rem/1.25rem var(--md-ref-typeface-plain); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Sui due schermi medi il nome del passo va a capo invece di troncarsi (es. «Crea / cartelle») */
+.app-shell:not([data-size="compact"]) .flow-step__label { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.125rem; }
+.app-shell:not([data-size="compact"]) .flow-steps > li { flex: 1 1 auto; min-width: min-content; }
+.flow-step__hint { font: 400 0.75rem/1rem var(--md-ref-typeface-plain); color: var(--md-sys-color-on-surface-variant); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.flow-step:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
+.flow-next { flex: none; }
+@media (max-width: 1279px) { .flow-step__hint { display: none; } }
+.app-shell[data-size="compact"] .flow-bar { padding: var(--sp-2) var(--sp-3); }
+.app-shell[data-size="compact"] .flow-next { display: none; }
+.app-shell[data-size="compact"] .flow-steps > li { flex: 0 0 auto; }
+.app-shell[data-size="compact"] .flow-step { padding: var(--sp-1) var(--sp-2); gap: var(--sp-2); }
+.app-shell[data-size="compact"] .flow-steps > li + li::before { width: 10px; }
+/* Lista che scorre: sfumatura sul bordo destro per segnalare che ci sono altri passi */
+.flow-bar.has-overflow .flow-steps {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
+
+/* ---------- Outlet ---------- */
+.view-outlet {
+  flex: 1 1 auto; min-height: 0;
+  overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
+  background: var(--md-sys-color-surface);
+  outline: none;
+}
+.view-outlet:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: -2px; }
+
+/* ---------- Bottom bar (compatto) ---------- */
+.app-bottombar {
+  grid-area: bottom;
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+  min-height: 68px;
+  padding: var(--sp-1) var(--sp-2) calc(var(--sp-1) + env(safe-area-inset-bottom));
+  background: var(--fs-sidebar);
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+.app-bottombar .nav-link {
+  flex-direction: column; justify-content: center; gap: 2px;
+  height: auto; min-height: 56px; padding: 0 2px; margin: 0;
+  font-size: 0.6875rem; line-height: 0.875rem; background: none;
+}
+.app-bottombar .nav-label { flex: none; max-width: 100%; text-align: center; }
+/* Stesso linguaggio della rail: pillola 56x28 dietro l'icona, stati su hover e attivo */
+.app-bottombar .nav-icon {
+  width: 56px; height: 28px; border-radius: var(--shape-full);
+  transition: background-color var(--dur-short) var(--motion-standard);
+}
+.app-bottombar .nav-link:hover,
+.app-bottombar .nav-link.is-active { background: none; }
+.app-bottombar .nav-link.is-active::before { display: none; }
+.app-bottombar .nav-link:hover .nav-icon { background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent); }
+.app-bottombar .nav-link.is-active .nav-icon { background: color-mix(in srgb, var(--md-sys-color-primary) 14%, transparent); }
+.app-bottombar .nav-link.is-active .nav-label { color: var(--md-sys-color-on-surface); }
+.app-bottombar .nav-link:focus-visible { outline: none; }
+.app-bottombar .nav-link:focus-visible .nav-icon { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
+
+/* Banner connessione */
+.app-banner {
+  display: flex; align-items: center; gap: var(--sp-2);
+  flex: 0 0 auto;
+  padding: var(--sp-2) var(--page-margin);
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+  font: 500 0.875rem/1.25rem var(--md-ref-typeface-plain);
+}
+.app-banner md-icon { flex: 0 0 auto; }
+
+/* Skip link */
+.skip-link {
+  position: absolute; left: var(--sp-2); top: -100px; z-index: var(--z-toast);
+  padding: var(--sp-2) var(--sp-4); border-radius: var(--shape-sm);
+  background: var(--md-sys-color-inverse-surface); color: var(--md-sys-color-inverse-on-surface);
+  font: 500 0.875rem/1.25rem var(--md-ref-typeface-plain); text-decoration: none;
+}
+.skip-link:focus-visible { top: var(--sp-2); }
+
+/* Touch: aree di tocco 48px */
+@media (pointer: coarse) {
+  .nav-link, .status-chip, .flow-step { min-height: 48px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell, .nav-link, .app-topbar, .side-status__bar > span, .nav-toggle { transition: none; }
+  .side-status__bar.is-indeterminate > span { animation: none; }
+}

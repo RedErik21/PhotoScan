@@ -1,0 +1,164 @@
+/* Vista "Importa dal telefono" (frontend/js/views/phone.js).
+   Layout ordinato a card con guida di connessione, workspace a 2 colonne (cartelle + riepilogo) e storico. */
+
+.phone-page { display: flex; flex-direction: column; gap: var(--sp-5); max-width: 1120px; }
+.phone-slot:empty { display: none; }
+.phone-h2 { margin: 0 0 var(--sp-2); }
+.phone-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+.phone-hint, .phone-msg { margin: 0; color: var(--md-sys-color-on-surface-variant); }
+
+/* Card iniziale di connessione USB */
+.phone-connect {
+  display: flex; align-items: flex-start; gap: var(--sp-5);
+  padding: var(--sp-6);
+}
+.phone-connect__icon {
+  display: grid; place-items: center; flex: none;
+  width: 56px; height: 56px; border-radius: 16px;
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+}
+.phone-connect__icon md-icon,
+.phone-connect__icon .material-symbols-outlined { font-size: 28px; --md-icon-size: 28px; }
+.phone-connect__body { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; flex: 1; }
+.phone-connect__steps {
+  margin: 0; padding-left: var(--sp-5);
+  display: flex; flex-direction: column; gap: var(--sp-1);
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: var(--md-sys-typescale-body-medium-size);
+  line-height: var(--md-sys-typescale-body-medium-line-height);
+}
+@media (max-width: 599px) {
+  .phone-connect { flex-direction: column; padding: var(--sp-5); }
+}
+
+.phone-empty-card { padding: var(--sp-4); }
+.phone-device-bar { display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-4) var(--sp-5); }
+
+/* Workspace 2 colonne quando un dispositivo è collegato */
+.phone-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 1fr);
+  gap: var(--sp-5);
+  align-items: start;
+}
+.phone-workspace:not(:has(.phone-slot:not(:empty))) { display: none; }
+@media (max-width: 900px) {
+  .phone-workspace { grid-template-columns: minmax(0, 1fr); }
+}
+.phone-slot--main { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+.phone-slot--side { position: sticky; top: var(--sp-4); min-width: 0; }
+@media (max-width: 900px) { .phone-slot--side { position: static; } }
+
+.phone-busy {
+  display: flex; align-items: center; gap: var(--sp-2);
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: var(--md-sys-typescale-body-medium-size);
+  line-height: var(--md-sys-typescale-body-medium-line-height);
+}
+.phone-busy md-circular-progress { --md-circular-progress-size: 22px; flex: none; }
+.phone-pick { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; }
+.phone-pick md-outlined-select { flex: 1 1 200px; min-width: 0; }
+
+.phone-next { margin: 0; }
+.phone-next__body { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
+.phone-next__body p { margin: 0; }
+.phone-next__actions { margin-top: var(--sp-2); }
+
+/* Breadcrumb percorso */
+.phone-crumbs {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-surface-container-low);
+}
+.phone-crumb {
+  border: 0; background: none; cursor: pointer;
+  color: var(--md-sys-color-primary);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--shape-xs);
+  font-family: var(--md-ref-typeface-plain);
+  font-weight: 500;
+  font-size: var(--md-sys-typescale-body-medium-size);
+  line-height: var(--md-sys-typescale-body-medium-line-height);
+}
+.phone-crumb:hover { background: color-mix(in srgb, var(--md-sys-color-primary) 10%, transparent); }
+.phone-crumb-sep { color: var(--md-sys-color-outline); }
+
+/* Elenco cartelle */
+.phone-list { list-style: none; margin: 0; padding: 0; gap: 0; overflow: hidden; }
+.phone-row {
+  display: flex; align-items: center; gap: var(--sp-1);
+  padding: 0 var(--sp-3) 0 var(--sp-1);
+  min-height: 52px;
+  transition: background-color var(--dur-short) var(--motion-standard);
+}
+.phone-row:hover { background: color-mix(in srgb, var(--md-sys-color-on-surface) 4%, transparent); }
+.phone-row + .phone-row { border-top: 1px solid var(--md-sys-color-outline-variant); }
+.phone-row__name {
+  flex: 1; display: flex; align-items: center; gap: var(--sp-3);
+  min-height: 52px; padding: 0;
+  border: 0; background: none; cursor: pointer; text-align: left;
+  color: inherit;
+  font-family: var(--md-ref-typeface-plain);
+  font-weight: 500;
+  font-size: var(--md-sys-typescale-body-large-size);
+  line-height: var(--md-sys-typescale-body-large-line-height);
+}
+.phone-row__count {
+  margin-left: auto;
+  padding: 2px 10px; border-radius: var(--shape-full);
+  background: var(--md-sys-color-surface-container);
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: var(--md-sys-typescale-label-medium-size);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Pannello "Cosa importare" e pannello avanzamento */
+.phone-selection { display: flex; flex-direction: column; gap: var(--sp-4); padding: var(--sp-5); }
+.phone-selected ul {
+  margin: var(--sp-1) 0; padding-left: var(--sp-5);
+  font-size: var(--md-sys-typescale-body-medium-size);
+}
+.phone-dest-row { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
+.phone-dest-row md-outlined-text-field { flex: 1 1 200px; min-width: 0; }
+.phone-job { display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-5); }
+.phone-progress-meta {
+  display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-4); align-items: baseline;
+  font-size: var(--md-sys-typescale-body-medium-size);
+}
+.phone-progress-meta strong { font-size: var(--md-sys-typescale-title-medium-size); font-variant-numeric: tabular-nums; }
+.phone-errors ul {
+  max-height: 240px; overflow: auto;
+  font-size: var(--md-sys-typescale-body-medium-size);
+}
+.phone-result code { word-break: break-all; }
+
+/* Storico importazioni */
+.phone-history { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-5); }
+.phone-history__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.phone-history__row { display: flex; flex-direction: column; gap: 3px; padding: var(--sp-3) 0; border-top: 1px solid var(--md-sys-color-outline-variant); }
+.phone-history__row:first-child { border-top: 0; padding-top: 0; }
+.phone-history__head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.phone-history__state {
+  font-size: var(--md-sys-typescale-label-medium-size); font-weight: 600;
+  padding: 2px 10px; border-radius: var(--shape-full);
+  background: var(--md-sys-color-surface-container-highest);
+}
+.phone-history__state--done { background: var(--fs-success-container); color: var(--fs-on-success-container); }
+.phone-history__state--error { background: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); }
+.phone-history__dest {
+  word-break: break-all; color: var(--md-sys-color-on-surface-variant);
+  font-size: var(--md-sys-typescale-body-small-size); line-height: var(--md-sys-typescale-body-small-line-height);
+}
+.phone-history__error { color: var(--md-sys-color-error); }
+
+@media (pointer: coarse) {
+  .phone-actions md-filled-button,
+  .phone-actions md-outlined-button,
+  .phone-actions md-text-button,
+  .phone-dest-row md-outlined-button,
+  .phone-pick md-icon-button { min-height: var(--sp-12); }
+  .phone-crumb { padding: var(--sp-2) var(--sp-3); }
+}

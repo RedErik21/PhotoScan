@@ -1,0 +1,376 @@
+/* base.css — reset, tipografia di base, shell adattiva (window size classes M3) e utility.
+   Solo token: colori da tokens-color.css, forma/tipografia/spaziatura da tokens.css. Tema scuro automatico via token.
+   Window size classes: compatto <600px (bottom bar), medio 600–839px (rail 80px), esteso >=840px (rail o drawer). */
+
+/* ---------- 1. Reset moderno ---------- */
+*, *::before, *::after { box-sizing: border-box; }
+html {
+  height: 100%;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden; /* lo scroll avviene solo in .view-outlet */
+  font-family: var(--md-ref-typeface-plain);
+  font-size: var(--md-sys-typescale-body-large-size);
+  line-height: var(--md-sys-typescale-body-large-line-height);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  -webkit-font-smoothing: antialiased;
+}
+#app { height: 100%; }
+img, picture, video, canvas { max-width: 100%; height: auto; }
+input, button, select, textarea { font: inherit; color: inherit; letter-spacing: inherit; }
+button { cursor: pointer; }
+button:disabled, [aria-disabled="true"] { cursor: default; }
+h1, h2, h3, h4, h5, h6, p, figure, blockquote, dl, dd { margin: 0; }
+h1, h2, h3, h4, h5, h6 { font-weight: 400; text-wrap: balance; }
+p { text-wrap: pretty; }
+ul[role="list"], ol[role="list"] { margin: 0; padding: 0; list-style: none; }
+a { color: var(--md-sys-color-primary); text-underline-offset: 2px; }
+a:hover { text-decoration: underline; }
+hr { border: 0; border-top: 1px solid var(--md-sys-color-outline-variant); margin: var(--sp-4) 0; }
+[hidden] { display: none !important; }
+::selection { background: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container); }
+
+/* Scrollbar sottili in stile M3 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--md-sys-color-on-surface-variant) 40%, transparent) transparent;
+}
+
+/* Focus da tastiera ben visibile */
+:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+/* ---------- 2. Contenitore delle view ---------- */
+/* La shell (.app-shell, sidebar, top bar, outlet) e' in css/shell.css. */
+/* Ingresso della pagina: la view appena montata compare con dissolvenza e 8px di scorrimento.
+   Sui figli inseriti (non sul contenitore), cosi' parte quando la view c'e' davvero. Reduced motion: base.css sez. 7. */
+@keyframes view-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes fs-item-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.view-outlet > * { animation: view-enter 180ms cubic-bezier(.2, 0, 0, 1) backwards; }
+.fs-stagger > * { animation: fs-item-rise 220ms cubic-bezier(.2, 0, 0, 1) backwards; }
+.fs-stagger > :nth-child(2) { animation-delay: 20ms; }
+.fs-stagger > :nth-child(3) { animation-delay: 40ms; }
+.fs-stagger > :nth-child(4) { animation-delay: 60ms; }
+.fs-stagger > :nth-child(5) { animation-delay: 80ms; }
+.fs-stagger > :nth-child(6) { animation-delay: 100ms; }
+.fs-stagger > :nth-child(7) { animation-delay: 120ms; }
+.fs-stagger > :nth-child(n+8) { animation-delay: 140ms; }
+.view {
+  width: 100%;
+  max-width: var(--content-max);
+  margin-inline: auto;
+  padding: var(--sp-6) var(--page-margin);
+  padding-bottom: calc(var(--page-margin) + var(--sp-10));
+}
+
+/* ---------- 3. Layout delle view ---------- */
+.view-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3) var(--sp-4);
+  min-width: 0;
+  margin-bottom: var(--sp-6);
+}
+.view-header > :first-child { flex: 1 1 12rem; min-width: 0; margin: 0; }
+.view-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-inline-start: auto;
+}
+/* Header che resta in alto durante lo scroll della view. */
+.view-header--sticky {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-raised);
+  margin-inline: calc(-1 * var(--page-margin));
+  margin-top: calc(-1 * var(--page-margin));
+  padding: var(--sp-3) var(--page-margin);
+  background: var(--md-sys-color-surface);
+}
+
+.section { margin-block: 0 var(--sp-8); min-width: 0; }
+.section > .section-title { margin-bottom: var(--sp-3); }
+
+.grid-auto {
+  display: grid;
+  gap: var(--gap, var(--sp-4));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--min, 240px)), 1fr));
+}
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap, var(--sp-4));
+  min-width: 0;
+}
+.row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap, var(--sp-2));
+  min-width: 0;
+}
+.spacer { flex: 1 1 auto; }
+
+/* ---------- 4. Superfici ----------
+   .card (superficie tonale) e' definita in components.css: qui solo la variante outlined. */
+.card-outlined {
+  min-width: 0;
+  padding: var(--sp-4);
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  border: 1px solid var(--md-sys-color-outline-variant);
+}
+.muted { color: var(--md-sys-color-on-surface-variant); }
+
+/* ---------- 5. Tipografia di supporto (mappa sulle type scale M3) ---------- */
+.t-display, .t-headline, .t-title, .t-body, .t-label, .section-title {
+  margin: 0;
+  letter-spacing: normal;
+}
+.t-display {
+  font-size: var(--md-sys-typescale-display-large-size);
+  line-height: var(--md-sys-typescale-display-large-line-height);
+  font-weight: 400;
+}
+.t-headline {
+  font-size: var(--md-sys-typescale-headline-medium-size);
+  line-height: var(--md-sys-typescale-headline-medium-line-height);
+  font-weight: 400;
+}
+.t-title, .section-title {
+  font-size: var(--md-sys-typescale-title-large-size);
+  line-height: var(--md-sys-typescale-title-large-line-height);
+  font-weight: 400;
+}
+.t-body {
+  font-size: var(--md-sys-typescale-body-large-size);
+  line-height: var(--md-sys-typescale-body-large-line-height);
+  font-weight: 400;
+}
+.t-label {
+  font-size: var(--md-sys-typescale-label-large-size);
+  line-height: var(--md-sys-typescale-label-large-line-height);
+  font-weight: 500;
+}
+
+/* body-small non e' in tokens.css ma e' usato da molte view: senza il token la regola "font:" cade al default.
+   Valori M3 (12/16). */
+:root {
+  --md-sys-typescale-body-small-size: 0.75rem;
+  --md-sys-typescale-body-small-line-height: 1rem;
+}
+
+/* Gerarchia di pagina (scala M3 unica):
+   titolo di pagina = headline-small; titolo di sezione = title-large (.section-title, .settings-group__title). */
+.view-header h1,
+.home-title {
+  margin: 0;
+  font: 400 var(--md-sys-typescale-headline-small-size) / var(--md-sys-typescale-headline-small-line-height) var(--md-ref-typeface-plain);
+  letter-spacing: 0;
+  color: var(--md-sys-color-on-surface);
+}
+.section-title {
+  color: var(--md-sys-color-on-surface);
+}
+.settings-group > .settings-group__title {
+  font: 400 var(--md-sys-typescale-title-large-size) / var(--md-sys-typescale-title-large-line-height) var(--md-ref-typeface-plain);
+}
+
+/* ---------- 6. Utility ---------- */
+.truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* Testo solo per lettori di schermo; .skip-link diventa visibile al focus. */
+.sr-only, .visually-hidden, .skip-link {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+.skip-link:focus, .skip-link:focus-visible {
+  position: fixed;
+  top: var(--sp-2);
+  left: var(--sp-2);
+  z-index: var(--z-toast);
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  clip-path: none;
+  white-space: normal;
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--shape-full);
+  background: var(--md-sys-color-inverse-surface);
+  color: var(--md-sys-color-inverse-on-surface);
+  box-shadow: var(--elev-2);
+  font-size: var(--md-sys-typescale-label-large-size);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+/* Spaziatura: m/p (+t,b,x,y) e gap, da --sp-* (es. .mt-4, .px-6, .gap-2). */
+.m-0{margin:0}
+.mt-0{margin-top:0}
+.mb-0{margin-bottom:0}
+.mx-0{margin-inline:0}
+.my-0{margin-block:0}
+.p-0{padding:0}
+.pt-0{padding-top:0}
+.pb-0{padding-bottom:0}
+.px-0{padding-inline:0}
+.py-0{padding-block:0}
+.gap-0{gap:0}
+.m-1{margin:var(--sp-1)}
+.mt-1{margin-top:var(--sp-1)}
+.mb-1{margin-bottom:var(--sp-1)}
+.mx-1{margin-inline:var(--sp-1)}
+.my-1{margin-block:var(--sp-1)}
+.p-1{padding:var(--sp-1)}
+.pt-1{padding-top:var(--sp-1)}
+.pb-1{padding-bottom:var(--sp-1)}
+.px-1{padding-inline:var(--sp-1)}
+.py-1{padding-block:var(--sp-1)}
+.gap-1{gap:var(--sp-1)}
+.m-2{margin:var(--sp-2)}
+.mt-2{margin-top:var(--sp-2)}
+.mb-2{margin-bottom:var(--sp-2)}
+.mx-2{margin-inline:var(--sp-2)}
+.my-2{margin-block:var(--sp-2)}
+.p-2{padding:var(--sp-2)}
+.pt-2{padding-top:var(--sp-2)}
+.pb-2{padding-bottom:var(--sp-2)}
+.px-2{padding-inline:var(--sp-2)}
+.py-2{padding-block:var(--sp-2)}
+.gap-2{gap:var(--sp-2)}
+.m-3{margin:var(--sp-3)}
+.mt-3{margin-top:var(--sp-3)}
+.mb-3{margin-bottom:var(--sp-3)}
+.mx-3{margin-inline:var(--sp-3)}
+.my-3{margin-block:var(--sp-3)}
+.p-3{padding:var(--sp-3)}
+.pt-3{padding-top:var(--sp-3)}
+.pb-3{padding-bottom:var(--sp-3)}
+.px-3{padding-inline:var(--sp-3)}
+.py-3{padding-block:var(--sp-3)}
+.gap-3{gap:var(--sp-3)}
+.m-4{margin:var(--sp-4)}
+.mt-4{margin-top:var(--sp-4)}
+.mb-4{margin-bottom:var(--sp-4)}
+.mx-4{margin-inline:var(--sp-4)}
+.my-4{margin-block:var(--sp-4)}
+.p-4{padding:var(--sp-4)}
+.pt-4{padding-top:var(--sp-4)}
+.pb-4{padding-bottom:var(--sp-4)}
+.px-4{padding-inline:var(--sp-4)}
+.py-4{padding-block:var(--sp-4)}
+.gap-4{gap:var(--sp-4)}
+.m-5{margin:var(--sp-5)}
+.mt-5{margin-top:var(--sp-5)}
+.mb-5{margin-bottom:var(--sp-5)}
+.mx-5{margin-inline:var(--sp-5)}
+.my-5{margin-block:var(--sp-5)}
+.p-5{padding:var(--sp-5)}
+.pt-5{padding-top:var(--sp-5)}
+.pb-5{padding-bottom:var(--sp-5)}
+.px-5{padding-inline:var(--sp-5)}
+.py-5{padding-block:var(--sp-5)}
+.gap-5{gap:var(--sp-5)}
+.m-6{margin:var(--sp-6)}
+.mt-6{margin-top:var(--sp-6)}
+.mb-6{margin-bottom:var(--sp-6)}
+.mx-6{margin-inline:var(--sp-6)}
+.my-6{margin-block:var(--sp-6)}
+.p-6{padding:var(--sp-6)}
+.pt-6{padding-top:var(--sp-6)}
+.pb-6{padding-bottom:var(--sp-6)}
+.px-6{padding-inline:var(--sp-6)}
+.py-6{padding-block:var(--sp-6)}
+.gap-6{gap:var(--sp-6)}
+.m-8{margin:var(--sp-8)}
+.mt-8{margin-top:var(--sp-8)}
+.mb-8{margin-bottom:var(--sp-8)}
+.mx-8{margin-inline:var(--sp-8)}
+.my-8{margin-block:var(--sp-8)}
+.p-8{padding:var(--sp-8)}
+.pt-8{padding-top:var(--sp-8)}
+.pb-8{padding-bottom:var(--sp-8)}
+.px-8{padding-inline:var(--sp-8)}
+.py-8{padding-block:var(--sp-8)}
+.gap-8{gap:var(--sp-8)}
+.m-10{margin:var(--sp-10)}
+.mt-10{margin-top:var(--sp-10)}
+.mb-10{margin-bottom:var(--sp-10)}
+.mx-10{margin-inline:var(--sp-10)}
+.my-10{margin-block:var(--sp-10)}
+.p-10{padding:var(--sp-10)}
+.pt-10{padding-top:var(--sp-10)}
+.pb-10{padding-bottom:var(--sp-10)}
+.px-10{padding-inline:var(--sp-10)}
+.py-10{padding-block:var(--sp-10)}
+.gap-10{gap:var(--sp-10)}
+.m-12{margin:var(--sp-12)}
+.mt-12{margin-top:var(--sp-12)}
+.mb-12{margin-bottom:var(--sp-12)}
+.mx-12{margin-inline:var(--sp-12)}
+.my-12{margin-block:var(--sp-12)}
+.p-12{padding:var(--sp-12)}
+.pt-12{padding-top:var(--sp-12)}
+.pb-12{padding-bottom:var(--sp-12)}
+.px-12{padding-inline:var(--sp-12)}
+.py-12{padding-block:var(--sp-12)}
+.gap-12{gap:var(--sp-12)}
+
+/* ---------- 7. Movimento, contrasto forzato, stampa ---------- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+@media (forced-colors: active) {
+  .card, .card-outlined { border: 1px solid CanvasText; }
+  .muted { color: CanvasText; }
+  :focus-visible { outline-color: Highlight; }
+  ::selection { background: Highlight; color: HighlightText; }
+}
+@media print {
+  html, body { height: auto; overflow: visible; }
+  body { background: Canvas; color: CanvasText; }
+  .app-shell { display: block; height: auto; overflow: visible; }
+  .app-nav, .app-topbar, .skip-link { display: none !important; }
+  .view-outlet { overflow: visible; }
+  .view-header--sticky { position: static; }
+  .card, .card-outlined { box-shadow: none; break-inside: avoid; }
+}
