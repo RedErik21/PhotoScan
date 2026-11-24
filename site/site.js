@@ -1,7 +1,8 @@
-// PhotoScan site enhancements: light/dark theme toggle (syncs hero preview), copy-to-clipboard, and screenshot lightbox.
+// PhotoScan site enhancements: mobile nav drawer, light/dark theme toggle, copy-to-clipboard, and touch-enabled screenshot lightbox.
 (() => {
   const THEME_KEY = 'photoscan.site.theme';
   const root = document.documentElement;
+  const isIt = (root.lang || '').toLowerCase().startsWith('it');
   const mqDark = window.matchMedia('(prefers-color-scheme: dark)');
 
   function isDark() {
@@ -9,6 +10,17 @@
     if (saved === 'dark') return true;
     if (saved === 'light') return false;
     return mqDark.matches;
+  }
+
+  function syncThemeColor() {
+    const color = isDark() ? '#0f0e17' : '#f6f6fb';
+    let meta = document.querySelector('meta[name="theme-color"]:not([media])');
+    if (!meta) {
+      meta = document.createElement('meta');
+      meta.name = 'theme-color';
+      document.head.append(meta);
+    }
+    meta.content = color;
   }
 
   function syncHeroImage() {
@@ -36,7 +48,8 @@
 
   syncThemeBtn();
   syncHeroImage();
-  mqDark.addEventListener('change', () => { syncThemeBtn(); syncHeroImage(); });
+  syncThemeColor();
+  mqDark.addEventListener('change', () => { syncThemeBtn(); syncHeroImage(); syncThemeColor(); });
 
   document.getElementById('theme-toggle')?.addEventListener('click', () => {
     const next = isDark() ? 'light' : 'dark';
@@ -44,7 +57,45 @@
     try { localStorage.setItem(THEME_KEY, next); } catch { /* ignore */ }
     syncThemeBtn();
     syncHeroImage();
+    syncThemeColor();
   });
+
+  // Mobile navigation drawer
+  const menuBtn = document.getElementById('menu-toggle');
+  const mobileMenu = document.getElementById('mobile-menu');
+  if (menuBtn && mobileMenu) {
+    const icMenu = menuBtn.querySelector('.icon-menu');
+    const icClose = menuBtn.querySelector('.icon-close');
+    const setMenuOpen = (open) => {
+      mobileMenu.hidden = !open;
+      menuBtn.setAttribute('aria-expanded', String(open));
+      menuBtn.setAttribute(
+        'aria-label',
+        open
+          ? (isIt ? 'Chiudi menu di navigazione' : 'Close navigation menu')
+          : (isIt ? 'Apri menu di navigazione' : 'Open navigation menu'),
+      );
+      if (icMenu) icMenu.style.display = open ? 'none' : 'block';
+      if (icClose) icClose.style.display = open ? 'block' : 'none';
+    };
+
+    menuBtn.addEventListener('click', () => setMenuOpen(mobileMenu.hidden));
+    mobileMenu.querySelectorAll('a').forEach((link) => {
+      link.addEventListener('click', () => setMenuOpen(false));
+    });
+    document.addEventListener('click', (e) => {
+      if (!mobileMenu.hidden && !e.target.closest('.nav')) setMenuOpen(false);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !mobileMenu.hidden) {
+        setMenuOpen(false);
+        menuBtn.focus();
+      }
+    });
+    window.matchMedia('(min-width: 861px)').addEventListener('change', (e) => {
+      if (e.matches && !mobileMenu.hidden) setMenuOpen(false);
+    });
+  }
 
   // Copy command button
   document.querySelectorAll('[data-copy-target]').forEach((btn) => {
@@ -99,21 +150,23 @@
   lb.setAttribute('aria-modal', 'true');
   lb.setAttribute('aria-hidden', 'true');
   lb.innerHTML = `
-    <button type="button" class="lightbox__btn lightbox__close" aria-label="Close">
+    <button type="button" class="lightbox__btn lightbox__close" aria-label="${isIt ? 'Chiudi' : 'Close'}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M18 6L6 18M6 6l12 12"/></svg>
     </button>
-    <button type="button" class="lightbox__btn lightbox__prev" aria-label="Previous">
+    <button type="button" class="lightbox__btn lightbox__prev" aria-label="${isIt ? 'Precedente' : 'Previous'}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M15 18l-6-6 6-6"/></svg>
     </button>
     <img class="lightbox__img" alt="">
     <p class="lightbox__caption"></p>
-    <button type="button" class="lightbox__btn lightbox__next" aria-label="Next">
+    <div class="lightbox__counter" aria-live="polite"></div>
+    <button type="button" class="lightbox__btn lightbox__next" aria-label="${isIt ? 'Successiva' : 'Next'}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M9 18l6-6-6-6"/></svg>
     </button>`;
   document.body.append(lb);
 
   const lbImg = lb.querySelector('.lightbox__img');
   const lbCap = lb.querySelector('.lightbox__caption');
+  const lbCounter = lb.querySelector('.lightbox__counter');
   let cur = 0;
 
   function show(i) {
@@ -123,6 +176,7 @@
     lbImg.src = img.currentSrc || img.src;
     lbImg.alt = img.alt || '';
     lbCap.textContent = el.dataset.caption || img.alt || '';
+    lbCounter.textContent = `${cur + 1} / ${triggers.length}`;
     lb.classList.add('is-open');
     lb.setAttribute('aria-hidden', 'false');
     document.body.style.overflow = 'hidden';
@@ -141,6 +195,24 @@
   lb.querySelector('.lightbox__close').addEventListener('click', close);
   lb.querySelector('.lightbox__prev').addEventListener('click', () => show(cur - 1));
   lb.querySelector('.lightbox__next').addEventListener('click', () => show(cur + 1));
+
+  // Touch swipe navigation inside lightbox
+  let touchStartX = 0;
+  let touchStartY = 0;
+  lb.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  }, { passive: true });
+  lb.addEventListener('touchend', (e) => {
+    if (!lb.classList.contains('is-open') || e.changedTouches.length !== 1) return;
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    const dy = e.changedTouches[0].clientY - touchStartY;
+    if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+      show(dx > 0 ? cur - 1 : cur + 1);
+    }
+  }, { passive: true });
+
   document.addEventListener('keydown', (e) => {
     if (!lb.classList.contains('is-open')) return;
     if (e.key === 'Escape') close();

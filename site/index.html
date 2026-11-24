@@ -3,7 +3,9 @@
 
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f6f6fb" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0f0e17" media="(prefers-color-scheme: dark)">
   <title>PhotoScan — Organizza il tuo archivio di foto, 100% in locale</title>
   <meta name="description"
     content="PhotoScan indicizza l'archivio di foto e video sul tuo PC, riconosce il contenuto con l'intelligenza artificiale e propone un'organizzazione per anno, mese ed evento. Nessun dato lascia il tuo computer.">
@@ -45,13 +47,38 @@
           </svg>
         </button>
         <a class="lang-pill" href="en/index.html" lang="en" title="Switch to English">EN</a>
-        <a class="nav__gh" href="https://github.com/RedErik21/PhotoScan" target="_blank" rel="noopener">
+        <a class="nav__gh" href="https://github.com/RedErik21/PhotoScan" target="_blank" rel="noopener"
+          aria-label="PhotoScan su GitHub">
           <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path
               d="M12 2C6.48 2 2 6.58 2 12.26c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.48 0-.24-.01-.87-.01-1.7-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.63.07-.63 1 .07 1.53 1.05 1.53 1.05.9 1.57 2.36 1.12 2.94.86.09-.66.35-1.12.63-1.38-2.22-.26-4.56-1.14-4.56-5.08 0-1.12.39-2.04 1.03-2.76-.1-.26-.45-1.31.1-2.73 0 0 .84-.28 2.75 1.05a9.3 9.3 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.42.2 2.47.1 2.73.64.72 1.03 1.64 1.03 2.76 0 3.95-2.34 4.82-4.57 5.07.36.32.68.94.68 1.9 0 1.37-.01 2.48-.01 2.82 0 .27.18.59.69.48A10.02 10.02 0 0 0 22 12.26C22 6.58 17.52 2 12 2z" />
           </svg>
           <span>GitHub</span>
         </a>
+        <button type="button" id="menu-toggle" class="icon-btn nav__menu-btn" aria-label="Apri menu di navigazione"
+          aria-expanded="false" aria-controls="mobile-menu">
+          <svg class="icon-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round">
+            <line x1="4" y1="7" x2="20" y2="7" />
+            <line x1="4" y1="12" x2="20" y2="12" />
+            <line x1="4" y1="17" x2="20" y2="17" />
+          </svg>
+          <svg class="icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" style="display:none">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div id="mobile-menu" class="nav__drawer" hidden>
+      <div class="wrap nav__drawer-inner">
+        <a href="#perche">Funzioni</a>
+        <a href="#funzioni">Schermate</a>
+        <a href="#come">Come funziona</a>
+        <a href="#sicurezza">Sicurezza</a>
+        <a href="#installazione">Installa</a>
+        <a href="#domande">FAQ</a>
+        <a href="#requisiti">Requisiti</a>
       </div>
     </div>
   </nav>
