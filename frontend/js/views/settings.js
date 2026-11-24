@@ -407,7 +407,7 @@ export async function mount(root, { query = {}, navigate } = {}) {
   function onDocClick(e) {
     if (bypass || disposed || !dirtyAny()) return;
     const t = e.target;
-    if (!(t instanceof Element) || root.contains(t) || t.closest('.theme-btn')) return;
+    if (!(t instanceof Element) || root.contains(t) || t.closest('.theme-btn, .nav-support')) return;
     if (!t.closest('.app-nav, .app-topbar, a[href^="#/"]')) return;
     e.preventDefault();
     e.stopImmediatePropagation();

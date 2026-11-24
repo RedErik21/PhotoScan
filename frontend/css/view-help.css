@@ -125,6 +125,13 @@
 .help-info__actions { display: flex; flex-wrap: wrap; gap: var(--sp-1, 4px); }
 .help-diag-slot { display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
 .help-diagnostics { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-3, 12px); }
+.help-support-card {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: var(--sp-3, 12px) var(--sp-4, 16px);
+  padding: var(--sp-4, 16px) var(--sp-5, 20px);
+}
+.help-support-card__copy { display: flex; flex-direction: column; gap: var(--sp-1, 4px); flex: 1 1 260px; min-width: 0; }
+.help-support-card__copy h3, .help-support-card__copy p { margin: 0; }
 
 @media (max-width: 599px) {
   .help-info__row { grid-template-columns: 1fr; gap: 2px; }

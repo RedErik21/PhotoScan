@@ -1,5 +1,5 @@
 // Revisione dei duplicati: gruppi di foto identiche o quasi uguali, con la scelta dell'originale da tenere.
-// FotoScan non cancella mai nulla: scegliere un originale riassegna solo i ruoli nel piano (cartelle _Duplicati).
+// PhotoScan non cancella mai nulla: scegliere un originale riassegna solo i ruoli nel piano (cartelle _Duplicati).
 import { api, ApiError, fileUrl } from '../api.js';
 import { h, icon } from '../ui/el.js';
 import { showSnackbar } from '../ui/snackbar.js';
@@ -284,13 +284,14 @@ export async function mount(root, { query = {}, signal } = {}) {
       }
       const showKeepWholeGroups = groupCopyIds.length > 0 && groupCopyIds.some((id) => !state.selected.has(id));
 
-      actionInfo.replaceChildren(
+      actionInfo.replaceChildren(...[
         h('strong', {}, `${plural(selIds.length, 'foto selezionata', 'foto selezionate')} · ${formatBytes(bytes)}`),
         fullGroups > 0
           ? h('span', { class: 'dup-action-bar__warn' },
             icon('warning'),
             `${plural(fullGroups, 'gruppo selezionato per intero', 'gruppi selezionati per intero')}`)
-          : null);
+          : null,
+      ].filter(Boolean));
       actionButtons.replaceChildren(
         h('md-text-button', { disabled: state.bulkBusy, onclick: () => clearSelection() }, 'Deseleziona'),
         canSetMaster

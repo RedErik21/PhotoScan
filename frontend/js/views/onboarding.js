@@ -1,491 +1,617 @@
-// Benvenuto a schermo intero: 4 passi con stepper M3 (versione ridotta se l'archivio è già indicizzato).
-// La view copre la shell con un overlay fisso (classe .ob in css/view-onboarding.css).
+// Prima configurazione a schermo intero: 3 passi (Benvenuto, Cartella foto, Controllo e avvio)
+// oppure vista rapida per cambiare la cartella se l'archivio è già indicizzato.
+// Copre la shell con l'overlay .ob (css/view-onboarding.css).
 import { h, icon } from '../ui/el.js';
+import { createWordmark } from '../ui/brand.js';
 import { api } from '../api.js';
-import { store } from '../store.js';
+import { store, applyTheme } from '../store.js';
 import { showSnackbar } from '../ui/snackbar.js';
-import { formatNumber } from '../ui/format.js';
+import { formatBytes, formatNumber } from '../ui/format.js';
 
 const CSS_HREF = new URL('../../css/view-onboarding.css', import.meta.url).href;
-const STEPS = ['Benvenuto', 'Le tue foto', 'Dove creare le cartelle', 'Controllo e avvio'];
-const GB = 1024 ** 3;
-const LOW_SPACE = 5 * GB;
+const STEPS = ['Benvenuto', 'Cartella foto', 'Controllo e avvio'];
 const QUICK_LIMIT = 300;
+const THEME_ICON = { system: 'contrast', light: 'light_mode', dark: 'dark_mode' };
+const THEME_NEXT = { system: 'light', light: 'dark', dark: 'system' };
+const THEME_LABEL = { system: 'Tema di sistema', light: 'Tema chiaro', dark: 'Tema scuro' };
 
 function loadCss() {
+  if (document.querySelector('link[data-view-css="onboarding"]')) return;
   if ([...document.querySelectorAll('link[rel="stylesheet"]')].some((l) => l.href === CSS_HREF)) return;
   const link = document.createElement('link');
   link.rel = 'stylesheet';
   link.href = CSS_HREF;
+  link.dataset.viewCss = 'onboarding';
   document.head.append(link);
 }
 
-const fmtSize = (bytes) => (bytes >= GB
-  ? `${(bytes / GB).toFixed(1).replace('.', ',')} GB`
-  : `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`);
-
-/** Normalizza un percorso Windows per i confronti (minuscole, separatori uniformi, niente barra finale). */
-const normPath = (p) => String(p || '').trim().replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
-const isInside = (child, parent) => {
-  const c = normPath(child);
-  const p = normPath(parent);
-  return Boolean(c && p) && (c === p || c.startsWith(`${p}\\`));
-};
-const sameDrive = (a, b) => Boolean(a && b) && a.toLowerCase() === b.toLowerCase();
-
-/** Icona decorativa (icon() non accetta classi). */
-function deco(name, cls = 'callout__icon') {
-  const i = icon(name);
-  i.classList.add(cls);
-  i.setAttribute('aria-hidden', 'true');
-  return i;
-}
-
-/** Icona dentro un pulsante M3 (slot icon = iniziale, trailing-icon = finale). */
-function btnIcon(name, slot = 'icon') {
-  const i = deco(name, 'ob-icon');
-  i.slot = slot;
-  return i;
-}
-
 function notice(kind, iconName, text, { role = 'status', title } = {}) {
+  const ic = icon(iconName);
+  ic.classList.add('callout__icon');
+  ic.setAttribute('aria-hidden', 'true');
   return h('div', { class: `callout callout--${kind}`, role },
-    deco(iconName),
+    ic,
     h('div', {},
       title ? h('p', { class: 'callout__title' }, title) : null,
       h('p', { class: 'md-typescale-body-medium' }, text)));
 }
 
-function stepper(current) {
-  const items = STEPS.map((label, i) => h('li', {
-    class: `ob-stepper__item${i < current ? ' is-done' : ''}${i === current ? ' is-current' : ''}`,
-    'aria-current': i === current ? 'step' : null,
-  },
-  h('span', { class: 'ob-stepper__dot' }, i < current ? deco('check') : String(i + 1)),
-  h('span', { class: 'ob-stepper__label md-typescale-label-medium' }, label)));
-  const bar = document.createElement('md-linear-progress');
-  bar.className = 'ob-stepper__bar';
-  bar.value = (current + 1) / STEPS.length;
-  bar.setAttribute('aria-hidden', 'true');
-  return h('div', { class: 'ob-stepper' },
-    h('ol', { class: 'ob-stepper__list', 'aria-label': `Passo ${current + 1} di ${STEPS.length}` }, items),
-    bar);
-}
-
-function art() {
-  const wrap = h('div', { class: 'ob-art' });
-  wrap.innerHTML = `<svg viewBox="0 0 240 160" aria-hidden="true" focusable="false">
-    <rect class="ob-art__bg" width="240" height="160" rx="24"/>
-    <rect class="ob-art__card ob-art__card--back" x="62" y="28" width="116" height="84" rx="14" transform="rotate(8 120 70)"/>
-    <rect class="ob-art__card ob-art__card--mid" x="54" y="36" width="116" height="84" rx="14" transform="rotate(-4 112 78)"/>
-    <rect class="ob-art__card ob-art__card--front" x="60" y="40" width="120" height="88" rx="14"/>
-    <circle class="ob-art__sun" cx="92" cy="72" r="10"/>
-    <path class="ob-art__hill" d="M68 124 L102 88 L124 110 L142 94 L174 124 Z"/>
-  </svg>`;
+/** Illustrazioni SVG minimali per la colonna brand, coerenti con il passo corrente. */
+function asideArt(step) {
+  const wrap = h('div', { class: 'ob-aside__art', 'aria-hidden': 'true' });
+  if (step === 1) {
+    wrap.innerHTML = `<svg viewBox="0 0 220 140" fill="none">
+      <rect x="24" y="34" width="172" height="86" rx="16" fill="rgba(255,255,255,0.14)" stroke="rgba(255,255,255,0.34)" stroke-width="1.5"/>
+      <path d="M24 48 C24 39 31 32 40 32 L86 32 L98 44 L180 44 C189 44 196 51 196 60 L196 104 C196 113 189 120 180 120 L40 120 C31 120 24 113 24 104 Z" fill="rgba(255,255,255,0.18)" stroke="rgba(255,255,255,0.42)" stroke-width="1.5"/>
+      <rect x="48" y="58" width="46" height="44" rx="8" fill="rgba(255,255,255,0.92)" transform="rotate(-6 71 80)"/>
+      <circle cx="64" cy="72" r="5" fill="#e0742f"/>
+      <path d="M52 96 L66 80 L76 89 L84 82 L94 96 Z" fill="#4b45d8"/>
+      <rect x="108" y="64" width="64" height="8" rx="4" fill="rgba(255,255,255,0.75)"/>
+      <rect x="108" y="80" width="48" height="6" rx="3" fill="rgba(255,255,255,0.45)"/>
+      <rect x="108" y="94" width="36" height="6" rx="3" fill="rgba(255,255,255,0.32)"/>
+    </svg>`;
+  } else if (step === 2) {
+    wrap.innerHTML = `<svg viewBox="0 0 220 140" fill="none">
+      <rect x="28" y="22" width="164" height="96" rx="16" fill="rgba(255,255,255,0.14)" stroke="rgba(255,255,255,0.34)" stroke-width="1.5"/>
+      <circle cx="56" cy="50" r="10" fill="#6fdc9a"/>
+      <path d="M52 50 L55 53 L61 46" stroke="#0b3a1f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="76" y="45" width="92" height="9" rx="4.5" fill="rgba(255,255,255,0.85)"/>
+      <circle cx="56" cy="78" r="10" fill="#6fdc9a"/>
+      <path d="M52 78 L55 81 L61 74" stroke="#0b3a1f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="76" y="73" width="76" height="9" rx="4.5" fill="rgba(255,255,255,0.68)"/>
+      <rect x="46" y="100" width="128" height="6" rx="3" fill="rgba(255,255,255,0.22)"/>
+      <rect x="46" y="100" width="92" height="6" rx="3" fill="#ffffff"/>
+    </svg>`;
+  } else {
+    wrap.innerHTML = `<svg viewBox="0 0 220 140" fill="none">
+      <rect x="58" y="18" width="104" height="78" rx="14" fill="rgba(255,255,255,0.22)" transform="rotate(9 110 57)"/>
+      <rect x="48" y="26" width="104" height="78" rx="14" fill="rgba(255,255,255,0.34)" transform="rotate(-6 100 65)"/>
+      <rect x="54" y="30" width="112" height="84" rx="15" fill="rgba(255,255,255,0.96)"/>
+      <circle cx="84" cy="58" r="10" fill="#e0742f"/>
+      <path d="M62 106 L94 72 L116 92 L134 76 L158 106 Z" fill="#4b45d8"/>
+      <circle cx="164" cy="34" r="14" fill="#ffe2d1"/>
+      <path d="M164 26 L166.4 31.6 L172 34 L166.4 36.4 L164 42 L161.6 36.4 L156 34 L161.6 31.6 Z" fill="#9a4b1e"/>
+    </svg>`;
+  }
   return wrap;
 }
 
-export async function mount(root, { navigate }) {
+const ASIDE_COPY = [
+  {
+    quote: 'I tuoi ricordi, organizzati e ricercabili in locale.',
+    sub: 'Cerca foto descrivendole in italiano, esplora luoghi e persone, libera spazio in sicurezza.',
+  },
+  {
+    quote: 'Accesso in sola lettura alla tua libreria.',
+    sub: 'PhotoScan indicizza foto e video in un catalogo separato: i tuoi file originali restano intatti.',
+  },
+  {
+    quote: 'Pronto per la prima analisi.',
+    sub: 'Puoi provare subito con 300 file oppure indicizzare l’intero archivio in background.',
+  },
+];
+
+export async function mount(root, { navigate, signal }) {
   loadCss();
   let alive = true;
   let srcTimer = 0;
-  let dstTimer = 0;
   let srcSeq = 0;
-  let dstSeq = 0;
+  let hwLoaded = false;
   root.classList.add('ob-host');
 
+  const unsubs = [];
   const close = () => {
     alive = false;
     clearTimeout(srcTimer);
-    clearTimeout(dstTimer);
+    unsubs.forEach((off) => off());
+    unsubs.length = 0;
     root.classList.remove('ob-host');
   };
   const leave = () => { close(); navigate('/'); };
 
-  const frame = h('div', { class: 'ob', role: 'region', 'aria-label': 'Benvenuto in FotoScan' });
+  const frame = h('div', { class: 'ob', role: 'region', 'aria-label': 'Configurazione iniziale di PhotoScan' });
+  const stage = h('div', { class: 'ob-stage' });
+  frame.append(stage);
   root.append(frame);
-  frame.append(h('div', { class: 'ob__main' }, h('div', { class: 'ob__inner' },
-    h('div', { class: 'skeleton skeleton-line', style: { height: '40px', width: '60%' } }),
-    h('div', { class: 'skeleton skeleton-card' }))));
+
+  // Skeleton iniziale mentre carichiamo /status e /settings
+  stage.append(
+    h('div', { class: 'ob-workspace', style: { padding: 'var(--sp-8)', gap: 'var(--sp-5)' } },
+      h('div', { class: 'skeleton skeleton-line', style: { height: '32px', width: '48%' } }),
+      h('div', { class: 'skeleton skeleton-card', style: { minHeight: '220px' } }),
+      h('div', { class: 'skeleton skeleton-line', style: { height: '18px', width: '70%' } })));
 
   let status;
   let settings;
   try {
-    [status, settings] = await Promise.all([api.get('/status'), api.get('/settings')]);
+    [status, settings] = await Promise.all([
+      api.get('/status', undefined, signal),
+      api.get('/settings', undefined, signal),
+    ]);
   } catch (e) {
-    if (!alive) return () => {};
-    frame.replaceChildren(h('div', { class: 'ob__main' }, h('div', { class: 'ob__inner' },
-      notice('error', 'error', e.message || 'Server non raggiungibile.', { role: 'alert', title: 'Non riesco a leggere lo stato' }),
-      h('div', {}, h('md-filled-button', { onclick: () => location.reload() }, 'Riprova')))));
+    if (!alive || e?.name === 'AbortError') return close;
+    stage.replaceChildren(
+      h('div', { class: 'ob-workspace', style: { padding: 'var(--sp-8)', justifyContent: 'center', gap: 'var(--sp-4)' } },
+        notice('error', 'error', e.message || 'Server locale non raggiungibile.', {
+          role: 'alert',
+          title: 'Impossibile leggere lo stato di PhotoScan',
+        }),
+        h('div', {}, h('md-filled-button', { onclick: () => location.reload() }, icon('refresh', { slot: 'icon' }), 'Riprova'))));
     return close;
   }
+  if (!alive) return close;
 
   const wiz = {
     step: 0,
     reduced: (status.counts?.indicizzati || 0) > 0,
     indexed: status.counts?.indicizzati || 0,
     source: settings.source_dir || '',
-    output: settings.output_dir || '',
-    src: { state: 'empty' }, // empty | checking | ok | missing | error
-    dst: { state: 'empty' }, // empty | checking | ok | missing | inside | error
+    enableFaces: settings.enable_faces !== false,
+    facesAvailable: status.faces?.available !== false,
+    src: { state: 'empty', disk: null, msg: '' }, // empty | checking | ok | is_file | missing | error
     scope: 'quick',
-    env: null,
+    status,
+    hw: null,
     srcField: null,
-    dstField: null,
-    dstHelp: null,
-    modeLine: null,
+    folderBadge: null,
     hint: null,
   };
-  let dir = 1; // verso dell'ultima transizione (1 avanti, -1 indietro)
+  let dir = 1;
   let nextBtn = null;
+  let themeBtn = null;
 
-  // ---------------------------------------------------------- verifiche cartelle
-  const probe = (path) => api.get('/system/disk', { path });
+  // ---------------------------------------------------------- tema
+  function paintThemeBtn() {
+    if (!themeBtn) return;
+    const mode = store.get('theme', 'system');
+    themeBtn.replaceChildren(icon(THEME_ICON[mode] || 'contrast'));
+    themeBtn.title = `${THEME_LABEL[mode] || 'Tema'} (clicca per cambiare)`;
+    themeBtn.setAttribute('aria-label', `${THEME_LABEL[mode] || 'Tema'}: cambia tema`);
+  }
+  unsubs.push(store.subscribe('theme', paintThemeBtn));
 
-  /** Applica lo stato al campo sorgente (senza ridisegnare: il focus resta nel campo). */
+  // ---------------------------------------------------------- verifica cartella
   function paintSource() {
     if (!wiz.srcField) return;
     const s = wiz.src;
     const f = wiz.srcField;
     const view = {
-      empty: () => ({ error: false, text: 'Incolla il percorso oppure usa Sfoglia.' }),
-      checking: () => ({ error: false, text: 'Controllo la cartella...' }),
-      ok: () => ({ error: false, text: `Cartella trovata (disco ${s.disk?.drive || ''}).` }),
-      missing: () => ({ error: true, errorText: 'Questa cartella non esiste. Controlla il percorso.' }),
-      error: () => ({ error: true, errorText: s.msg || 'Controllo non riuscito.' }),
+      empty: () => ({ error: false, text: 'Incolla il percorso della cartella oppure usa Sfoglia.' }),
+      checking: () => ({ error: false, text: 'Controllo la cartella…' }),
+      ok: () => ({ error: false, text: 'Cartella valida e accessibile in lettura.' }),
+      is_file: () => ({ error: true, errorText: 'Questo è un file, non una cartella. Scegli la cartella che contiene le foto.' }),
+      missing: () => ({ error: true, errorText: 'Questa cartella non esiste. Controlla il percorso e riprova.' }),
+      error: () => ({ error: true, errorText: s.msg || 'Impossibile verificare questa cartella.' }),
     }[s.state]();
+
     f.error = view.error;
     f.errorText = view.errorText || '';
-    f.supportingText = view.text || '';
-    paintMode();
+    f.supportingText = view.error ? '' : (view.text || '');
+
+    if (wiz.folderBadge) {
+      if (s.state === 'ok' && s.disk) {
+        const parts = [`Cartella trovata`];
+        if (s.disk.drive) parts.push(`unità ${s.disk.drive}`);
+        if (s.disk.free_bytes != null) parts.push(`${formatBytes(s.disk.free_bytes)} liberi`);
+        wiz.folderBadge.hidden = false;
+        wiz.folderBadge.replaceChildren(
+          icon('check_circle'),
+          h('span', {}, parts.join(' · ')));
+      } else {
+        wiz.folderBadge.hidden = true;
+      }
+    }
     updateNext();
   }
 
-  function destMessages() {
-    const d = wiz.dst;
-    if (d.state === 'inside') {
-      return [notice('error', 'error', 'Le cartelle ordinate non possono stare tra le foto originali. Scegli un\'altra cartella.', { role: 'alert', title: 'Cartella non valida' })];
-    }
-    if (d.state !== 'ok') return [];
-    const out = [];
-    if (d.disk.free_bytes != null && d.disk.free_bytes < LOW_SPACE) {
-      out.push(notice('warning', 'warning', `Restano circa ${fmtSize(d.disk.free_bytes)} liberi. Se puoi, libera spazio prima di continuare.`, { title: 'Poco spazio libero' }));
-    }
-    return out;
-  }
-
-  /** Testo informativo: Collegamento o Copia, decisi in automatico dai dischi (nessuna scelta dell'utente). */
-  function modeText() {
-    if (wiz.src.state !== 'ok' || wiz.dst.state !== 'ok') {
-      return 'Quando scegli entrambe le cartelle, ti diciamo come verranno create le cartelle ordinate.';
-    }
-    return sameVolume()
-      ? 'FotoScan userà: Collegamento (hard link), perché cartelle e foto sono sullo stesso disco. Le foto non occupano spazio in più.'
-      : 'FotoScan userà: Copia, perché le cartelle ordinate sono su un altro disco. Le foto occuperanno altro spazio.';
-  }
-
-  function paintMode() {
-    if (wiz.modeLine) wiz.modeLine.textContent = modeText();
-  }
-
-  /** Solo nel passo unico: spiega perché Salva è disattivato. */
   function paintHint() {
     if (!wiz.hint || !nextBtn) return;
-    wiz.hint.textContent = nextBtn.disabled ? 'Per salvare servono due cartelle valide: quella delle foto e quella per le cartelle ordinate.' : '';
-  }
-
-  function paintDest() {
-    if (!wiz.dstField) return;
-    const d = wiz.dst;
-    const f = wiz.dstField;
-    const view = {
-      empty: () => ({ error: false, text: 'Scegli una cartella diversa da quella delle foto.' }),
-      inside: () => ({ error: true, errorText: 'Non può stare dentro la cartella delle foto.' }),
-      checking: () => ({ error: false, text: 'Controllo la cartella...' }),
-      ok: () => ({ error: false, text: `Cartella trovata (disco ${d.disk?.drive || ''}).` }),
-      missing: () => ({ error: true, errorText: 'Questa cartella non esiste. Creala in Esplora risorse e riprova.' }),
-      error: () => ({ error: true, errorText: d.msg || 'Controllo non riuscito.' }),
-    }[d.state]();
-    f.error = view.error;
-    f.errorText = view.errorText || '';
-    f.supportingText = view.text || '';
-    if (wiz.dstHelp) wiz.dstHelp.replaceChildren(...destMessages());
-    paintMode();
-    updateNext();
-  }
-
-  /** Vero se destinazione e foto stanno sullo stesso disco (lettera di unita' uguale). */
-  function sameVolume() {
-    return wiz.src.state === 'ok' && wiz.dst.state === 'ok' && sameDrive(wiz.src.disk?.drive, wiz.dst.disk?.drive);
+    wiz.hint.textContent = nextBtn.disabled
+      ? 'Indica una cartella esistente per salvare la modifica.'
+      : '';
   }
 
   function scheduleSource() {
     clearTimeout(srcTimer);
     srcTimer = setTimeout(checkSource, 350);
   }
-  function scheduleDest() {
-    clearTimeout(dstTimer);
-    dstTimer = setTimeout(checkDest, 350);
-  }
 
   async function checkSource() {
     const my = ++srcSeq;
     const v = wiz.source.trim();
     if (!v) {
-      wiz.src = { state: 'empty' };
+      wiz.src = { state: 'empty', disk: null, msg: '' };
     } else {
-      wiz.src = { state: 'checking' };
+      wiz.src = { state: 'checking', disk: null, msg: '' };
       paintSource();
       try {
-        const d = await probe(v);
+        const d = await api.get('/system/disk', { path: v });
         if (!alive || my !== srcSeq) return;
-        wiz.src = d.exists ? { state: 'ok', disk: d } : { state: 'missing' };
+        if (d.is_file) wiz.src = { state: 'is_file', disk: d, msg: '' };
+        else if (d.exists) wiz.src = { state: 'ok', disk: d, msg: '' };
+        else wiz.src = { state: 'missing', disk: d, msg: '' };
       } catch (e) {
         if (!alive || my !== srcSeq) return;
-        wiz.src = { state: 'error', msg: e.message };
+        wiz.src = { state: 'error', disk: null, msg: e.message };
       }
     }
     paintSource();
-    scheduleDest(); // la destinazione dipende dalla sorgente (dentro/fuori, stesso disco)
-  }
-
-  async function checkDest() {
-    const my = ++dstSeq;
-    const v = wiz.output.trim();
-    if (!v) {
-      wiz.dst = { state: 'empty' };
-    } else if (wiz.source.trim() && isInside(v, wiz.source)) {
-      wiz.dst = { state: 'inside' };
-    } else {
-      wiz.dst = { state: 'checking' };
-      paintDest();
-      try {
-        const d = await probe(v);
-        if (!alive || my !== dstSeq) return;
-        wiz.dst = d.exists ? { state: 'ok', disk: d } : { state: 'missing' };
-      } catch (e) {
-        if (!alive || my !== dstSeq) return;
-        wiz.dst = { state: 'error', msg: e.message };
-      }
-    }
-    paintDest();
   }
 
   function updateNext() {
     if (!nextBtn) return;
     if (wiz.reduced) {
-      nextBtn.disabled = !(wiz.src.state === 'ok' && wiz.dst.state === 'ok');
+      nextBtn.disabled = wiz.src.state !== 'ok';
       paintHint();
       return;
     }
-    const ready = [
-      () => true,
-      () => wiz.src.state === 'ok',
-      () => wiz.dst.state === 'ok',
-      () => true,
-    ][wiz.step]();
+    const ready = wiz.step === 1 ? wiz.src.state === 'ok' : true;
     nextBtn.disabled = !ready;
   }
 
-  /** Sfoglia: finestra nativa; path null = annullato (nessuna modifica). */
-  function pickFor(which, title) {
-    return async (btn) => {
-      btn.disabled = true;
-      try {
-        const current = which === 'source' ? wiz.source : wiz.output;
-        const r = await api.post('/system/pick-folder', { title, initial: current.trim() || undefined });
-        if (!r || !r.path || !alive) return;
-        if (which === 'source') {
-          wiz.source = r.path;
-          wiz.srcField.value = r.path;
-          checkSource();
-        } else {
-          wiz.output = r.path;
-          wiz.dstField.value = r.path;
-          checkDest();
-        }
-      } catch (e) {
-        if (alive) showSnackbar(e.status === 409 ? 'Una finestra di scelta è già aperta.' : e.message, { error: true });
-      } finally {
-        btn.disabled = false;
+  async function pickFolder(btn, btnLabel) {
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    btnLabel.textContent = 'Apro…';
+    try {
+      const r = await api.post('/system/pick-folder', {
+        title: 'Scegli la cartella delle tue foto',
+        initial: wiz.source.trim() || undefined,
+      });
+      if (!alive) return;
+      if (r && r.available === false) {
+        showSnackbar('La finestra di scelta cartella non è disponibile: incolla il percorso nel campo.', { error: true });
+        return;
       }
-    };
+      if (!r || !r.path) return;
+      wiz.source = r.path;
+      if (wiz.srcField) wiz.srcField.value = r.path;
+      checkSource();
+    } catch (e) {
+      if (alive) {
+        showSnackbar(e.status === 409 ? 'Una finestra di scelta è già aperta.' : e.message, { error: true });
+      }
+    } finally {
+      btn.disabled = false;
+      btn.removeAttribute('aria-busy');
+      btnLabel.textContent = 'Sfoglia…';
+    }
   }
 
-  /** Campo cartella: testo + Sfoglia. Il riferimento al campo è salvato in wiz per gli aggiornamenti. */
-  function folderRow({ which, label, pickTitle, onEnter }) {
-    const field = document.createElement('md-outlined-text-field');
-    field.label = label;
-    field.value = which === 'source' ? wiz.source : wiz.output;
-    field.className = 'ob-field__input';
-    field.addEventListener('input', () => {
-      // Il valore cambia: la verifica precedente non vale più. Avanti/Salva si bloccano subito.
-      if (which === 'source') { wiz.source = field.value; wiz.src = { state: 'checking' }; paintSource(); scheduleSource(); }
-      else { wiz.output = field.value; wiz.dst = { state: 'checking' }; paintDest(); scheduleDest(); }
-    });
-    field.addEventListener('keydown', (e) => { if (e.key === 'Enter' && onEnter) onEnter(); });
-    const pick = h('md-outlined-button', { class: 'ob-field__pick', onclick: () => pickFor(which, pickTitle)(pick) },
-      btnIcon('folder_open'), 'Sfoglia');
-    if (which === 'source') wiz.srcField = field; else wiz.dstField = field;
-    return h('div', { class: 'ob-field' }, h('div', { class: 'ob-field__row' }, field, pick));
-  }
-
-  /** Invio in un campo: nel passo unico salva (se valido); nel percorso guidato va avanti (next controlla già lo stato). */
   const enterKey = () => {
-    if (wiz.reduced) { if (nextBtn && !nextBtn.disabled) save(); }
-    else next();
+    if (wiz.reduced) {
+      if (nextBtn && !nextBtn.disabled) saveReduced();
+    } else if (nextBtn && !nextBtn.disabled) {
+      go(1);
+    }
   };
 
-  const sourceField = () => folderRow({
-    which: 'source',
-    label: 'Cartella delle foto',
-    pickTitle: 'Scegli la cartella delle tue foto',
-    onEnter: enterKey,
-  });
+  function sourceFieldBlock() {
+    const field = document.createElement('md-outlined-text-field');
+    field.label = 'Cartella delle foto';
+    field.value = wiz.source;
+    field.className = 'ob-field__input';
+    field.placeholder = 'Es. C:\\Users\\Nome\\Pictures';
+    field.addEventListener('input', () => {
+      wiz.source = field.value;
+      wiz.src = field.value.trim() ? { state: 'checking', disk: null, msg: '' } : { state: 'empty', disk: null, msg: '' };
+      paintSource();
+      scheduleSource();
+    });
+    field.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') enterKey();
+    });
 
-  function destField() {
-    wiz.dstHelp = h('div', { class: 'ob-help', 'aria-live': 'polite' });
-    wiz.modeLine = h('p', { class: 'md-typescale-body-medium ob-muted ob-mode-line' });
-    return [
-      folderRow({
-        which: 'output',
-        label: 'Cartella per le foto ordinate',
-        pickTitle: 'Scegli dove creare le cartelle ordinate',
-        onEnter: enterKey,
-      }),
-      wiz.dstHelp,
-      wiz.modeLine,
-    ];
+    const btnLabel = document.createTextNode('Sfoglia…');
+    const pick = h('md-outlined-button', {
+      class: 'ob-field__pick',
+      onclick: () => pickFolder(pick, btnLabel),
+    }, icon('folder_open', { slot: 'icon' }), btnLabel);
+
+    wiz.srcField = field;
+    wiz.folderBadge = h('div', { class: 'ob-folder-status', role: 'status', 'aria-live': 'polite', hidden: true });
+
+    return h('div', { class: 'ob-field' },
+      h('div', { class: 'ob-field__row' }, field, pick),
+      wiz.folderBadge);
   }
 
-  // ---------------------------------------------------------- contenuto dei passi
+  // ---------------------------------------------------------- passi
   const intro = (title, lead) => h('div', { class: 'ob-intro' },
-    h('h2', { class: 'md-typescale-headline-medium ob-title', tabindex: '-1' }, title),
-    h('p', { class: 'md-typescale-body-large ob-lead' }, lead));
+    h('h2', { class: 'ob-title', tabindex: '-1' }, title),
+    h('p', { class: 'ob-lead' }, lead));
 
   function welcomeStep() {
     const points = [
-      ['lock', 'Le tue foto restano sul tuo computer', 'Nessun servizio esterno. Serve internet solo una volta, per scaricare il modello di riconoscimento.'],
-      ['shield', 'Non cancelliamo e non spostiamo i tuoi originali', 'Le foto originali restano dove sono, identiche.'],
-      ['visibility', 'Prima vedi l\'anteprima, poi decidi', 'Ti mostriamo il piano delle cartelle e aspettiamo il tuo ok.'],
+      {
+        ic: 'lock',
+        tone: '',
+        title: '100% locale e privato',
+        desc: 'Le tue foto restano sul tuo computer, senza cloud né account. Internet serve solo una volta per scaricare il modello AI.',
+      },
+      {
+        ic: 'shield',
+        tone: 'ob-point--safe',
+        title: 'Originali sempre intatti',
+        desc: 'PhotoScan legge la tua cartella senza mai modificare, spostare o cancellare file senza il tuo consenso.',
+      },
+      {
+        ic: 'auto_awesome',
+        tone: 'ob-point--warm',
+        title: 'Ricerca, volti, luoghi e pulizia',
+        desc: 'Cerca foto descrivendole in italiano, esplora persone e mappa, e libera spazio da duplicati e video pesanti.',
+      },
     ];
     return [
-      art(),
-      intro('Benvenuto! Ritroviamo i tuoi ricordi', 'In pochi passi colleghiamo le tue foto e prepariamo l\'ordine. Ci vogliono circa due minuti.'),
-      h('ul', { class: 'ob-points' }, points.map(([ic, t, d]) => h('li', { class: 'ob-point' },
-        h('span', { class: 'ob-point__icon' }, deco(ic)),
-        h('span', { class: 'ob-point__text' },
-          h('span', { class: 'md-typescale-title-medium' }, t),
-          h('span', { class: 'md-typescale-body-medium ob-muted' }, d))))),
+      intro(
+        'Benvenuto in PhotoScan',
+        'In pochi passi colleghiamo la tua libreria fotografica e prepariamo l’analisi locale. Ci vogliono circa due minuti.',
+      ),
+      h('ul', { class: 'ob-points' }, points.map((p) => h('li', { class: `ob-point ${p.tone}`.trim() },
+        h('span', { class: 'ob-point__icon', 'aria-hidden': 'true' }, icon(p.ic)),
+        h('div', { class: 'ob-point__text' },
+          h('span', { class: 'ob-point__title' }, p.title),
+          h('span', { class: 'ob-point__desc' }, p.desc))))),
     ];
   }
 
   function sourceStep() {
     return [
-      intro('Dove sono le tue foto?', 'Scegli la cartella che contiene foto e video, anche con le sottocartelle. La leggiamo soltanto: non la modifichiamo.'),
-      sourceField(),
-    ];
-  }
-
-  function destStep() {
-    return [
-      intro('Dove creare le cartelle ordinate?', 'Qui creeremo le cartelle ordinate per anno, mese ed evento. Usa una cartella diversa da quella delle foto.'),
-      ...destField(),
+      intro(
+        'Dove sono le tue foto?',
+        'Scegli la cartella principale che contiene foto e video: includeremo automaticamente tutte le sottocartelle.',
+      ),
+      sourceFieldBlock(),
+      h('div', { class: 'ob-tip' },
+        icon('info'),
+        h('p', {}, 'Puoi cambiare cartella quando vuoi dalle Impostazioni, oppure importare nuove foto dal telefono Android dalla sezione Telefono.')),
     ];
   }
 
   function checksStep() {
-    const checks = h('div', { class: 'ob-checks' },
-      h('div', { class: 'skeleton skeleton-line', style: { height: '64px' } }));
+    const checksHost = h('div', { class: 'ob-checks' },
+      h('div', { class: 'skeleton skeleton-line', style: { height: '56px' } }),
+      h('div', { class: 'skeleton skeleton-line', style: { height: '56px' } }));
+
     const choices = [
-      { value: 'quick', label: `Prova veloce (${QUICK_LIMIT} file, circa 1 minuto)`, desc: 'Vedi subito il risultato. Poi potrai indicizzare tutto.' },
-      { value: 'all', label: 'Indicizza tutto', desc: 'Analizza tutte le foto e i video. Può richiedere molto tempo: puoi fermarti e riprendere quando vuoi.' },
+      {
+        value: 'quick',
+        title: `Prova veloce (${QUICK_LIMIT} file)`,
+        badge: 'Consigliato',
+        desc: 'Circa 1 minuto. Vedi subito galleria, ricerca e album; poi analizzi il resto quando vuoi.',
+      },
+      {
+        value: 'all',
+        title: 'Analizza tutto l’archivio',
+        badge: null,
+        desc: 'Indicizza tutte le foto e i video. Puoi mettere in pausa e riprendere in qualsiasi momento.',
+      },
     ];
-    const group = h('div', { class: 'ob-choices', role: 'radiogroup', 'aria-label': 'Quanti file analizzare' },
-      choices.map((c) => {
-        const radio = document.createElement('md-radio');
-        radio.name = 'scope';
-        radio.value = c.value;
-        radio.checked = wiz.scope === c.value;
-        radio.addEventListener('change', () => { if (radio.checked) wiz.scope = c.value; });
-        return h('label', { class: 'ob-choice' }, radio,
-          h('span', { class: 'ob-choice__text' },
-            h('span', { class: 'md-typescale-title-small' }, c.label),
-            h('span', { class: 'md-typescale-body-medium ob-muted' }, c.desc)));
-      }));
-    loadEnvironment(checks);
+
+    const choiceNodes = [];
+    const group = h('div', { class: 'ob-choices', role: 'radiogroup', 'aria-label': 'Quanti file analizzare' });
+    for (const c of choices) {
+      const radio = document.createElement('md-radio');
+      radio.name = 'ob-scope';
+      radio.value = c.value;
+      radio.checked = wiz.scope === c.value;
+      const card = h('label', { class: `ob-choice${wiz.scope === c.value ? ' is-selected' : ''}` },
+        radio,
+        h('span', { class: 'ob-choice__text' },
+          h('span', { class: 'ob-choice__head' },
+            h('span', { class: 'ob-choice__title' }, c.title),
+            c.badge ? h('span', { class: 'ob-choice__badge' }, c.badge) : null),
+          h('span', { class: 'ob-choice__desc' }, c.desc)));
+      radio.addEventListener('change', () => {
+        if (!radio.checked) return;
+        wiz.scope = c.value;
+        choiceNodes.forEach(({ el, val }) => el.classList.toggle('is-selected', val === wiz.scope));
+      });
+      choiceNodes.push({ el: card, val: c.value });
+      group.append(card);
+    }
+
+    let facesCard = null;
+    if (wiz.facesAvailable) {
+      const sw = document.createElement('md-switch');
+      sw.selected = wiz.enableFaces;
+      sw.setAttribute('aria-label', 'Attiva riconoscimento volti');
+      sw.addEventListener('change', () => { wiz.enableFaces = sw.selected; });
+      facesCard = h('div', { class: 'ob-toggle-card' },
+        h('span', { class: 'ob-toggle-card__icon', 'aria-hidden': 'true' }, icon('face')),
+        h('div', { class: 'ob-toggle-card__text' },
+          h('span', { class: 'ob-toggle-card__title' }, 'Riconoscimento volti'),
+          h('span', { class: 'ob-toggle-card__desc' }, 'Raggruppa automaticamente le persone nelle foto, tutto in locale sul tuo PC.')),
+        sw);
+    }
+
+    loadEnvironment(checksHost);
+
     return [
-      intro('Controllo e avvio', 'Ecco come è messo il tuo computer. Puoi iniziare anche senza cambiare nulla.'),
+      intro(
+        'Controllo e avvio',
+        'Tutto è pronto. Verifica lo stato del tuo computer e scegli come iniziare la prima analisi.',
+      ),
       h('div', { class: 'ob-summary' },
-        h('p', { class: 'md-typescale-label-large ob-muted' }, 'Cartelle'),
-        h('p', { class: 'md-typescale-body-medium ob-path' }, `Foto: ${wiz.source.trim() || '-'}`),
-        h('p', { class: 'md-typescale-body-medium ob-path' }, `Ordinate: ${wiz.output.trim() || '-'}`)),
-      checks,
+        h('span', { class: 'ob-summary__icon', 'aria-hidden': 'true' }, icon('folder')),
+        h('div', { class: 'ob-summary__body' },
+          h('span', { class: 'ob-summary__label' }, 'Cartella delle foto'),
+          h('p', { class: 'ob-path' }, wiz.source.trim() || '—')),
+        h('md-text-button', { onclick: () => goTo(1) }, 'Cambia')),
+      checksHost,
+      facesCard,
       h('div', { class: 'ob-modes' },
-        h('h3', { class: 'md-typescale-title-medium' }, 'Quanto analizzare adesso?'),
+        h('h3', { class: 'ob-modes__title' }, 'Quanto analizzare adesso?'),
         group),
     ];
   }
 
-  /** Controlli di ambiente da GET /status: dispositivo, FFmpeg, modello. */
   async function loadEnvironment(host) {
-    let st;
+    let st = wiz.status;
+    let hw = wiz.hw;
     try {
-      st = await api.get('/status');
+      const reqs = [api.get('/status')];
+      if (!hwLoaded) reqs.push(api.get('/hardware').catch(() => null));
+      const res = await Promise.all(reqs);
+      if (!alive) return;
+      st = res[0];
+      wiz.status = st;
+      if (!hwLoaded) {
+        hwLoaded = true;
+        hw = res[1];
+        wiz.hw = hw;
+      }
     } catch (e) {
       if (alive) host.replaceChildren(notice('error', 'error', e.message, { role: 'alert', title: 'Controllo non riuscito' }));
       return;
     }
-    if (!alive) return;
+
     const gpu = st.device === 'cuda' || st.device === 'mps';
+    const gpuName = hw?.hardware?.gpu_name;
+    const cpuName = hw?.hardware?.cpu_name;
+
     const rows = [
       gpu
-        ? { kind: 'ok', ic: 'memory', title: 'Elaborazione veloce', text: `Scheda grafica disponibile (${String(st.device).toUpperCase()}).` }
-        : { kind: 'info', ic: 'memory', title: 'Elaborazione sul processore', text: 'Funziona, ma l\'analisi delle foto sarà più lenta.' },
+        ? {
+            kind: 'ok',
+            title: 'Accelerazione attiva',
+            desc: gpuName
+              ? `Scheda grafica rilevata: ${gpuName} (${String(st.device).toUpperCase()}).`
+              : `Scheda grafica disponibile (${String(st.device).toUpperCase()}): l’analisi sarà veloce.`,
+          }
+        : {
+            kind: 'info',
+            title: 'Elaborazione sul processore',
+            desc: cpuName
+              ? `Userà ${cpuName}. Funziona regolarmente, ma l’analisi sarà più graduale.`
+              : 'Funziona regolarmente su CPU, ma l’analisi richiederà più tempo.',
+          },
       st.ffmpeg
-        ? { kind: 'ok', ic: 'movie', title: 'Video', text: 'FFmpeg trovato: le anteprime dei video sono disponibili.' }
-        : { kind: 'warning', ic: 'movie', title: 'Video', ffmpeg: true },
+        ? {
+            kind: 'ok',
+            title: 'Anteprime video pronte',
+            desc: 'FFmpeg trovato: PhotoScan può leggere e mostrare le anteprime dei video.',
+          }
+        : {
+            kind: 'warning',
+            title: 'FFmpeg non trovato (opzionale)',
+            ffmpeg: true,
+          },
       st.model_cached
-        ? { kind: 'ok', ic: 'psychology', title: 'Modello di riconoscimento', text: 'Pronto, nessun download necessario.' }
-        : { kind: 'info', ic: 'cloud_download', title: 'Modello di riconoscimento', text: 'Verrà scaricato una sola volta al primo avvio: serve una connessione internet.' },
+        ? {
+            kind: 'ok',
+            title: 'Modello AI pronto',
+            desc: 'Già presente su questo computer: nessun download necessario.',
+          }
+        : {
+            kind: 'info',
+            title: 'Download iniziale del modello AI',
+            desc: 'Al primo avvio verrà scaricato una sola volta (~1,5 GB): serve una connessione internet.',
+          },
     ];
-    host.replaceChildren(...rows.map((r) => h('div', { class: `ob-check ob-check--${r.kind}` },
-      h('span', { class: 'ob-check__icon' }, deco(r.kind === 'ok' ? 'check_circle' : r.kind === 'warning' ? 'warning' : 'info')),
-      h('div', { class: 'ob-check__body' },
-        h('p', { class: 'md-typescale-title-small' }, r.title),
-        r.ffmpeg
-          ? [
-            h('p', { class: 'md-typescale-body-medium ob-muted' },
-              'FFmpeg non trovato: le anteprime dei video non saranno disponibili. Per installarlo, apri il Prompt dei comandi e digita:'),
-            h('code', { class: 'ob-code' }, 'winget install Gyan.FFmpeg'),
-            h('p', { class: 'md-typescale-body-medium ob-muted' }, 'Poi riavvia FotoScan.'),
-          ]
-          : h('p', { class: 'md-typescale-body-medium ob-muted' }, r.text)))));
+
+    host.replaceChildren(...rows.map((r) => {
+      const icName = r.kind === 'ok' ? 'check_circle' : r.kind === 'warning' ? 'warning' : 'info';
+      const body = [h('p', { class: 'ob-check__title' }, r.title)];
+      if (r.ffmpeg) {
+        const cmd = 'winget install Gyan.FFmpeg';
+        body.push(
+          h('p', { class: 'ob-check__desc' },
+            'Senza FFmpeg le foto funzionano comunque, ma non verranno create le anteprime dei video. Per installarlo da terminale:'),
+          h('div', { class: 'ob-code-row' },
+            h('code', { class: 'ob-code' }, cmd),
+            h('md-text-button', {
+              onclick: async () => {
+                try {
+                  await navigator.clipboard.writeText(cmd);
+                  showSnackbar('Comando copiato negli appunti.');
+                } catch {
+                  showSnackbar('Copia il comando manualmente.');
+                }
+              },
+            }, icon('content_copy', { slot: 'icon' }), 'Copia')));
+      } else {
+        body.push(h('p', { class: 'ob-check__desc' }, r.desc));
+      }
+      return h('div', { class: `ob-check ob-check--${r.kind}` },
+        h('span', { class: 'ob-check__icon', 'aria-hidden': 'true' }, icon(icName)),
+        h('div', { class: 'ob-check__body' }, body));
+    }));
   }
 
   function reducedStep() {
-    wiz.hint = h('p', { class: 'ob-hint md-typescale-body-medium', 'aria-live': 'polite' });
+    wiz.hint = h('p', { class: 'ob-hint', 'aria-live': 'polite' });
     return [
-      intro('Vuoi cambiare cartelle?', `Il tuo archivio è già pronto con ${formatNumber(wiz.indexed)} file indicizzati. Le modifiche valgono dalla prossima indicizzazione.`),
-      sourceField(),
-      ...destField(),
+      intro(
+        'Cambia la cartella delle foto',
+        `Il tuo archivio ha già ${formatNumber(wiz.indexed)} file indicizzati. La nuova cartella verrà usata dalla prossima analisi.`,
+      ),
+      sourceFieldBlock(),
       wiz.hint,
     ];
   }
 
-  // ---------------------------------------------------------- navigazione
-  /** Il passo corrente è completo? (il passo 0 e 3 sempre; 1 serve la sorgente; 2 la destinazione). */
-  async function stepReady() {
-    if (wiz.step === 1 && wiz.src.state === 'empty' && wiz.source.trim()) await checkSource();
-    if (wiz.step === 2 && wiz.dst.state === 'empty' && wiz.output.trim()) await checkDest();
-    if (wiz.step === 1) return wiz.src.state === 'ok';
-    if (wiz.step === 2) return wiz.dst.state === 'ok';
-    return true;
+  // ---------------------------------------------------------- stepper & aside
+  function buildStepper(current) {
+    const items = STEPS.map((label, i) => {
+      const done = i < current;
+      const isCur = i === current;
+      const btn = h('button', {
+        type: 'button',
+        class: 'ob-stepper__btn',
+        disabled: !done,
+        'aria-label': done ? `Torna al passo ${i + 1}: ${label}` : label,
+        onclick: () => { if (done) goTo(i); },
+      },
+      h('span', { class: 'ob-stepper__dot', 'aria-hidden': 'true' }, done ? icon('check') : String(i + 1)),
+      h('span', { class: 'ob-stepper__label' }, label));
+
+      return h('li', {
+        class: `ob-stepper__item${done ? ' is-done' : ''}${isCur ? ' is-current' : ''}`,
+        'aria-current': isCur ? 'step' : null,
+      }, btn);
+    });
+
+    const bar = document.createElement('md-linear-progress');
+    bar.className = 'ob-stepper__bar';
+    bar.value = (current + 1) / STEPS.length;
+    bar.setAttribute('aria-hidden', 'true');
+
+    return h('div', { class: 'ob-stepper' },
+      h('ol', { class: 'ob-stepper__list', 'aria-label': `Passo ${current + 1} di ${STEPS.length}` }, items),
+      bar);
   }
 
-  function next() {
-    if (nextBtn && nextBtn.disabled) return;
-    go(1);
+  let asideAnimated = false;
+  function buildAside() {
+    const idx = wiz.reduced ? 1 : wiz.step;
+    const copy = ASIDE_COPY[idx] || ASIDE_COPY[0];
+    const wm = createWordmark({
+      className: 'ob-aside__wordmark',
+      strokeWidth: 11,
+      variant: 'hero',
+      animated: !asideAnimated,
+    });
+    asideAnimated = true;
+    return h('aside', { class: 'ob-aside', 'aria-hidden': 'true' },
+      h('div', { class: 'ob-aside__brand' },
+        h('img', { class: 'ob-aside__logo', src: 'favicon.svg', alt: '', width: 38, height: 38 }),
+        wm),
+      h('div', { class: 'ob-aside__visual' },
+        asideArt(idx),
+        h('div', {},
+          h('p', { class: 'ob-aside__quote' }, copy.quote),
+          h('p', { class: 'ob-aside__sub' }, copy.sub))),
+      h('div', { class: 'ob-aside__trust' },
+        icon('lock'),
+        h('span', {}, '100% locale · Originali intatti')));
+  }
+
+  // ---------------------------------------------------------- navigazione
+  async function stepReady() {
+    if (wiz.step === 1 && wiz.src.state === 'empty' && wiz.source.trim()) await checkSource();
+    if (wiz.step === 1) return wiz.src.state === 'ok';
+    return true;
   }
 
   async function go(delta) {
@@ -495,86 +621,118 @@ export async function mount(root, { navigate }) {
     render();
   }
 
+  function goTo(target) {
+    if (target === wiz.step || target < 0 || target >= STEPS.length) return;
+    dir = target > wiz.step ? 1 : -1;
+    wiz.step = target;
+    render();
+  }
+
+  function buildHeader() {
+    themeBtn = h('md-icon-button', {
+      class: 'ob-head__theme',
+      onclick: () => applyTheme(THEME_NEXT[store.get('theme', 'system')] || 'system'),
+    });
+    paintThemeBtn();
+
+    return h('header', { class: 'ob-head' },
+      h('span', { class: 'ob-head__brand-mobile' },
+        h('img', { class: 'ob-head__logo', src: 'favicon.svg', alt: '', width: 28, height: 28 }),
+        createWordmark({ className: 'ob-head__wordmark', strokeWidth: 11, variant: 'brand' })),
+      h('span', { class: 'ob-head__pill' }, wiz.reduced ? 'Impostazioni rapide' : `Passo ${wiz.step + 1} di ${STEPS.length}`),
+      h('span', { class: 'spacer' }),
+      themeBtn,
+      wiz.reduced ? null : h('md-text-button', { onclick: leave }, 'Salta per ora'));
+  }
+
+  function buildFooter() {
+    if (wiz.reduced) {
+      nextBtn = h('md-filled-button', { onclick: saveReduced }, icon('check', { slot: 'icon' }), 'Salva');
+      return h('footer', { class: 'ob-foot' },
+        h('md-text-button', { onclick: leave }, 'Annulla'),
+        h('span', { class: 'spacer' }),
+        nextBtn);
+    }
+
+    const last = wiz.step === STEPS.length - 1;
+    const back = wiz.step > 0
+      ? h('md-outlined-button', { onclick: () => go(-1) }, icon('arrow_back', { slot: 'icon' }), 'Indietro')
+      : null;
+
+    if (last) {
+      nextBtn = h('md-filled-button', { onclick: start }, icon('play_arrow', { slot: 'icon' }), 'Inizia l’analisi');
+    } else {
+      nextBtn = h('md-filled-button', { onclick: () => go(1), 'trailing-icon': true },
+        wiz.step === 0 ? 'Inizia' : 'Avanti',
+        icon('arrow_forward', { slot: 'icon' }));
+    }
+
+    return h('footer', { class: 'ob-foot' },
+      back,
+      h('span', { class: 'spacer' }),
+      nextBtn);
+  }
+
   function render() {
     wiz.srcField = null;
-    wiz.dstField = null;
-    wiz.dstHelp = null;
-    wiz.modeLine = null;
+    wiz.folderBadge = null;
     wiz.hint = null;
-    const body = wiz.reduced ? reducedStep() : [welcomeStep, sourceStep, destStep, checksStep][wiz.step]();
+
+    const body = wiz.reduced
+      ? reducedStep()
+      : [welcomeStep, sourceStep, checksStep][wiz.step]();
+
     const panel = h('section', { class: `ob-panel ${dir >= 0 ? 'is-fwd' : 'is-back'}` }, body);
-    const main = h('div', { class: 'ob__main' }, h('div', { class: 'ob__inner' },
-      wiz.reduced ? null : stepper(wiz.step),
-      panel));
-    const top = h('header', { class: 'ob__top' }, h('div', { class: 'ob__col' },
-      h('span', { class: 'ob__brand' },
-        h('img', { class: 'ob__brand-logo', src: 'favicon.svg', alt: '', width: 28, height: 28 }),
-        h('span', { class: 'md-typescale-title-large' }, 'FotoScan')),
-      h('span', { class: 'spacer' }),
-      wiz.reduced ? null : h('md-text-button', { onclick: leave }, 'Salta per ora')));
-    frame.replaceChildren(top, main, buildFooter());
-    // Il ridisegno ricrea i campi: riapplica lo stato già noto.
+    const workspace = h('div', { class: 'ob-workspace' },
+      buildHeader(),
+      wiz.reduced ? null : buildStepper(wiz.step),
+      h('div', { class: 'ob-body' }, panel),
+      buildFooter());
+
+    stage.replaceChildren(buildAside(), workspace);
     paintSource();
-    paintDest();
     updateNext();
+
     requestAnimationFrame(() => {
-      const t = frame.querySelector('.ob-title');
+      const t = stage.querySelector('.ob-title');
       if (t) t.focus({ preventScroll: true });
     });
   }
 
-  function buildFooter() {
-    // Stessa colonna del contenuto (.ob__col), così i pulsanti non stanno agli estremi dello schermo.
-    if (wiz.reduced) {
-      nextBtn = h('md-filled-button', { onclick: save }, 'Salva');
-      return h('footer', { class: 'ob__foot' }, h('div', { class: 'ob__col' },
-        h('md-text-button', { onclick: leave }, 'Annulla'),
-        h('span', { class: 'spacer' }),
-        nextBtn));
-    }
-    const last = wiz.step === STEPS.length - 1;
-    const back = wiz.step > 0
-      ? h('md-outlined-button', { onclick: () => go(-1) }, btnIcon('arrow_back'), 'Indietro')
-      : null;
-    nextBtn = last
-      ? h('md-filled-button', { onclick: start }, btnIcon('play_arrow'), 'Inizia')
-      : h('md-filled-button', { onclick: () => go(1) }, 'Avanti', btnIcon('arrow_forward', 'trailing-icon'));
-    return h('footer', { class: 'ob__foot' }, h('div', { class: 'ob__col' },
-      back, h('span', { class: 'spacer' }), nextBtn));
-  }
-
-  function settingsPayload() {
-    return {
-      source_dir: wiz.source.trim(),
-      output_dir: wiz.output.trim(),
-      link_mode: sameVolume() ? 'hardlink' : 'copy',
-    };
-  }
-
-  async function save() {
+  // ---------------------------------------------------------- salvataggio e avvio
+  async function saveReduced() {
+    if (!nextBtn) return;
     nextBtn.disabled = true;
     try {
-      await api.put('/settings', settingsPayload());
-      showSnackbar('Cartelle aggiornate.');
+      await api.put('/settings', { source_dir: wiz.source.trim() });
+      try { store.set('status', await api.get('/status')); } catch { /* non bloccante */ }
+      showSnackbar('Cartella delle foto aggiornata.');
       leave();
     } catch (e) {
-      if (alive) showSnackbar(e.message, { error: true });
-      nextBtn.disabled = false;
+      if (alive) {
+        showSnackbar(e.message || 'Salvataggio non riuscito.', { error: true });
+        nextBtn.disabled = false;
+      }
     }
   }
 
   async function start() {
+    if (!nextBtn) return;
     nextBtn.disabled = true;
     try {
-      await api.put('/settings', settingsPayload());
+      const payload = { source_dir: wiz.source.trim() };
+      if (wiz.facesAvailable) payload.enable_faces = wiz.enableFaces;
+      await api.put('/settings', payload);
       await api.post('/index/start', wiz.scope === 'quick' ? { limit: QUICK_LIMIT } : {});
     } catch (e) {
       if (e.status !== 409) {
-        if (alive) showSnackbar(e.message, { error: true });
-        if (alive) nextBtn.disabled = false;
+        if (alive) {
+          showSnackbar(e.message || 'Avvio non riuscito.', { error: true });
+          nextBtn.disabled = false;
+        }
         return;
       }
-      showSnackbar('L\'indicizzazione è già in corso.');
+      showSnackbar('L’analisi è già in corso.');
     }
     try { store.set('status', await api.get('/status')); } catch { /* non bloccante */ }
     close();
@@ -584,6 +742,5 @@ export async function mount(root, { navigate }) {
   // ---------------------------------------------------------- avvio
   render();
   if (wiz.source.trim()) checkSource();
-  if (wiz.output.trim()) checkDest();
   return close;
 }

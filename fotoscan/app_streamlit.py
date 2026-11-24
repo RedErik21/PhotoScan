@@ -37,7 +37,7 @@ try:  # HEIC: il decoder va registrato anche se scanner_metadata non e' ancora s
 except Exception:  # pragma: no cover
     pass
 
-st.set_page_config(page_title="FotoScan", page_icon="📷", layout="wide")
+st.set_page_config(page_title="PhotoScan", page_icon="📷", layout="wide")
 
 CSS = """
 <style>
@@ -920,7 +920,7 @@ def tab_apply() -> None:
     st.markdown(f"**Sorgente (non verrà toccata):** `{src or '—'}`  \n**Destinazione:** `{out}`")
     if same is False:
         st.warning(f"Sorgente e destinazione sono su volumi diversi: gli hard link non sono possibili, quindi "
-                   f"FotoScan **copierà** i file. Spazio necessario: **{human_size(total_bytes)}** (somma delle dimensioni). "
+                   f"PhotoScan **copierà** i file. Spazio necessario: **{human_size(total_bytes)}** (somma delle dimensioni). "
                    "Valore massimo: i file già presenti nella destinazione non vengono ricopiati.")
     elif same is None:
         st.warning("Impossibile verificare il volume della destinazione: la stima assume una copia.")
@@ -958,7 +958,7 @@ def tab_apply() -> None:
 
 # ================================================================= pagina
 st.markdown('<div class="fs-hero"><span class="fs-logo">📷</span><div>'
-            '<div class="fs-title">FotoScan</div>'
+            '<div class="fs-title">PhotoScan</div>'
             '<div class="fs-sub">Il tuo archivio di foto e video, ordinato in locale</div>'
             '</div></div>', unsafe_allow_html=True)
 tabs = st.tabs(["1 · Indicizzazione", "2 · Anteprima & regole (dry-run)", "3 · Ricerca", "4 · Galleria", "5 · Esporta / Applica"])

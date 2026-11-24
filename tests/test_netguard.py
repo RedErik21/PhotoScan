@@ -97,7 +97,7 @@ def test_load_pretrained_local_first() -> None:
 
 
 def _probe_from_fotoscan_embedder() -> None:
-    # simula un tentativo partito da codice di FotoScan (il registro deve dire "per cosa")
+    # simula un tentativo partito da codice di PhotoScan (il registro deve dire "per cosa")
     src = "import socket\ndef go():\n    socket.getaddrinfo('huggingface.co', 443)\n"
     code = compile(src, "embedder.py", "exec")
     ns = {"__name__": "fotoscan.embedder"}

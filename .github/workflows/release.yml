@@ -1,5 +1,5 @@
 # Crea la Release GitHub quando si spinge un tag v<versione> (es. v0.1.3 o v0.2.0-beta.1).
-# FotoScan controlla le Release per gli aggiornamenti (fotoscan/updater.py) e scarica lo zip del sorgente.
+# PhotoScan controlla le Release per gli aggiornamenti (fotoscan/updater.py) e scarica lo zip del sorgente.
 name: Release
 
 on:
@@ -29,4 +29,4 @@ jobs:
         run: |
           PRE=""
           case "$GITHUB_REF_NAME" in *-*) PRE="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" --title "FotoScan ${GITHUB_REF_NAME#v}" --generate-notes $PRE
+          gh release create "$GITHUB_REF_NAME" --title "PhotoScan ${GITHUB_REF_NAME#v}" --generate-notes $PRE

@@ -2,7 +2,7 @@
 // opzioni automatiche. Dati da GET /api/update (+ eventi SSE `update` e `job` per il download).
 // Le opzioni si salvano subito (PUT /settings con il solo campo cambiato): la sezione non usa la barra «Salva».
 // L'installazione avviene al riavvio: «Installa e riavvia» approva (POST /update/install) e chiede alla finestra
-// dell'app (pywebview) di riaprirsi; nel browser si chiede di chiudere e riaprire FotoScan.
+// dell'app (pywebview) di riaprirsi; nel browser si chiede di chiudere e riaprire PhotoScan.
 import { h, icon } from '../ui/el.js';
 import { api, onEvent } from '../api.js';
 import { confirmDialog } from '../ui/dialog.js';
@@ -61,11 +61,11 @@ const canRestart = () => typeof window.pywebview?.api?.restart_app === 'function
 
 const OPTIONS = [
   { key: 'update_check_on_start', title: 'Cerca aggiornamenti all’avvio',
-    hint: 'A ogni apertura FotoScan chiede a GitHub se c’è una versione nuova. Viene inviata solo la richiesta dell’elenco delle versioni: nessuna foto, nessun dato del catalogo.' },
+    hint: 'A ogni apertura PhotoScan chiede a GitHub se c’è una versione nuova. Viene inviata solo la richiesta dell’elenco delle versioni: nessuna foto, nessun dato del catalogo.' },
   { key: 'update_auto_download', title: 'Scarica automaticamente',
     hint: 'Quando trova una versione nuova la scarica subito, senza installarla.' },
   { key: 'update_auto_install', title: 'Installa automaticamente',
-    hint: 'La versione scaricata viene installata da sola alla prossima apertura di FotoScan. Prima viene fatta una copia di riserva dei file del programma; le foto, il catalogo e le impostazioni non vengono toccati.' },
+    hint: 'La versione scaricata viene installata da sola alla prossima apertura di PhotoScan. Prima viene fatta una copia di riserva dei file del programma; le foto, il catalogo e le impostazioni non vengono toccati.' },
   { key: 'update_prerelease', title: 'Includi le versioni di prova',
     hint: 'Considera anche le pre-release: novità in anticipo, ma meno collaudate.' },
 ];
@@ -113,8 +113,8 @@ export async function mountSection(container) {
     data = d;
     const c = d.check || {};
     if (c.error) showSnackbar(c.error, { error: true, duration: 6000 });
-    else if (c.available) showSnackbar(`È disponibile FotoScan ${c.latest.version}.`);
-    else showSnackbar('FotoScan è aggiornato.');
+    else if (c.available) showSnackbar(`È disponibile PhotoScan ${c.latest.version}.`);
+    else showSnackbar('PhotoScan è aggiornato.');
   });
 
   const download = () => run('download', async () => { await api.post('/update/download'); });
@@ -132,21 +132,21 @@ export async function mountSection(container) {
     const v = data.pending?.version;
     const restartable = canRestart();
     const ok = await confirmDialog({
-      title: restartable ? `Installare FotoScan ${v}?` : `Preparare l’installazione di FotoScan ${v}?`,
+      title: restartable ? `Installare PhotoScan ${v}?` : `Preparare l’installazione di PhotoScan ${v}?`,
       message: restartable
-        ? 'FotoScan si chiude, installa la nuova versione e si riapre. Un’analisi in corso viene interrotta e riprende alla riapertura.'
-        : (data.frozen ? 'L’aggiornamento verrà installato quando chiudi FotoScan: poi l’app si riapre da sola.'
-          : 'L’aggiornamento verrà installato quando chiudi e riapri FotoScan.'),
+        ? 'PhotoScan si chiude, installa la nuova versione e si riapre. Un’analisi in corso viene interrotta e riprende alla riapertura.'
+        : (data.frozen ? 'L’aggiornamento verrà installato quando chiudi PhotoScan: poi l’app si riapre da sola.'
+          : 'L’aggiornamento verrà installato quando chiudi e riapri PhotoScan.'),
       confirmLabel: restartable ? 'Installa e riavvia' : 'Va bene',
     });
     if (!ok || disposed) return;
     await api.post('/update/install');
     if (restartable) {
-      showSnackbar('Riavvio di FotoScan…');
+      showSnackbar('Riavvio di PhotoScan…');
       await window.pywebview.api.restart_app();
     } else {
-      showSnackbar(data.frozen ? 'Chiudi FotoScan: l’aggiornamento si installa e l’app si riapre.'
-        : 'Chiudi e riapri FotoScan per completare l’aggiornamento.', { duration: 8000 });
+      showSnackbar(data.frozen ? 'Chiudi PhotoScan: l’aggiornamento si installa e l’app si riapre.'
+        : 'Chiudi e riapri PhotoScan per completare l’aggiornamento.', { duration: 8000 });
     }
   });
 
@@ -188,12 +188,12 @@ export async function mountSection(container) {
 
     if (!d.configured) {
       out.push(callout('info', 'info', 'Aggiornamenti non configurati',
-        h('p', {}, 'Questa copia di FotoScan non indica da dove scaricare gli aggiornamenti. Nessuna connessione viene fatta.')));
+        h('p', {}, 'Questa copia di PhotoScan non indica da dove scaricare gli aggiornamenti. Nessuna connessione viene fatta.')));
       return out;
     }
     if (d.git_checkout) {
       out.push(callout('info', 'terminal', 'Copia scaricata con git',
-        h('p', {}, 'Puoi cercare gli aggiornamenti, ma per installarli usa «git pull» nella cartella di FotoScan.')));
+        h('p', {}, 'Puoi cercare gli aggiornamenti, ma per installarli usa «git pull» nella cartella di PhotoScan.')));
     }
     if (d.frozen && !d.exe_ready && !!d.check?.latest) {
       out.push(callout('info', 'download', 'Pacchetto Windows non ancora pubblicato',
@@ -220,14 +220,14 @@ export async function mountSection(container) {
         h('md-text-button', { onclick: discard, disabled: !!busy }, 'Annulla aggiornamento'),
       ];
       const when = p.approved || d.settings.update_auto_install
-        ? 'Verrà installato alla prossima apertura di FotoScan.'
+        ? 'Verrà installato alla prossima apertura di PhotoScan.'
         : 'Scaricato e verificato: si installa quando lo decidi tu.';
-      out.push(callout('warning', 'download_done', `FotoScan ${p.version} pronto da installare`, h('p', {}, when)));
+      out.push(callout('warning', 'download_done', `PhotoScan ${p.version} pronto da installare`, h('p', {}, when)));
       if (p.notes) out.push(h('pre', { class: 'upd-notes' }, p.notes));
       out.push(h('div', { class: 'upd-actions' }, actions));
     } else if (c?.available) {
       const l = c.latest;
-      out.push(callout('warning', 'new_releases', `È disponibile FotoScan ${l.version}${l.prerelease ? ' (versione di prova)' : ''}`,
+      out.push(callout('warning', 'new_releases', `È disponibile PhotoScan ${l.version}${l.prerelease ? ' (versione di prova)' : ''}`,
         h('p', {}, l.published_at ? `Pubblicata il ${formatDateTime(l.published_at)}.` : '')));
       if (l.notes) out.push(h('pre', { class: 'upd-notes' }, l.notes));
       out.push(h('div', { class: 'upd-actions' },
@@ -238,7 +238,7 @@ export async function mountSection(container) {
     } else if (c?.error) {
       out.push(callout('error', 'cloud_off', 'Controllo non riuscito', h('p', {}, c.error)));
     } else if (c) {
-      out.push(callout('ok', 'verified', 'FotoScan è aggiornato', h('p', {}, 'Stai usando l’ultima versione disponibile.')));
+      out.push(callout('ok', 'verified', 'PhotoScan è aggiornato', h('p', {}, 'Stai usando l’ultima versione disponibile.')));
     }
     return out;
   }

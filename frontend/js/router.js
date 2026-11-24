@@ -60,7 +60,7 @@ async function render() {
     outlet.scrollTop = 0;
     current = { path, query, params: {}, route: null };
     listeners.forEach((fn) => fn(current));
-    document.title = 'FotoScan';
+    document.title = 'PhotoScan';
     outlet.replaceChildren(emptyState({
       icon: 'search_off', title: 'Pagina non trovata', message: 'Questo indirizzo non esiste.',
       actionLabel: 'Vai alla Home', onAction: () => navigate('/'),
@@ -79,7 +79,7 @@ async function render() {
     outlet.scrollTop = 0;
     current = { path, query, params: m.params || {}, route: m.route };
     listeners.forEach((fn) => fn(current));
-    document.title = `${m.route.title} · FotoScan`;
+    document.title = `${m.route.title} · PhotoScan`;
     const ret = await mod.mount(outlet, { params: m.params, query, navigate, signal: abort.signal });
     if (my !== seq) { if (typeof ret === 'function') ret(); return; }
     if (typeof ret === 'function') cleanup = ret;

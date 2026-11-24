@@ -212,6 +212,20 @@
   flex-direction: column; align-items: center; gap: var(--sp-1);
 }
 .app-shell[data-nav="rail"] .nav-footer-help-row > .nav-link { width: 100%; }
+.nav-support {
+  width: 100%; border: 0; background: none; cursor: pointer; text-align: left;
+  color: var(--md-sys-color-tertiary);
+}
+.nav-support:hover {
+  background: color-mix(in srgb, var(--md-sys-color-tertiary) 10%, transparent);
+  color: var(--md-sys-color-tertiary);
+}
+.nav-support .nav-icon md-icon .material-symbols-outlined {
+  font-variation-settings: 'FILL' 1, 'wght' 500;
+}
+.app-shell[data-nav="rail"] .nav-support:hover .nav-icon {
+  background: color-mix(in srgb, var(--md-sys-color-tertiary) 14%, transparent);
+}
 .side-status {
   display: flex; align-items: flex-start; gap: var(--sp-3);
   padding: var(--sp-3); margin-bottom: var(--sp-2);

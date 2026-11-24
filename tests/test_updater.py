@@ -35,7 +35,7 @@ NEW = "9.9.9"
 
 
 def _release(tag, prerelease=False, draft=False):
-    return {"tag_name": tag, "name": f"FotoScan {tag}", "body": f"Novità di {tag}", "prerelease": prerelease,
+    return {"tag_name": tag, "name": f"PhotoScan {tag}", "body": f"Novità di {tag}", "prerelease": prerelease,
             "draft": draft, "published_at": "2026-11-24T10:00:00Z", "html_url": f"https://github.com/x/{tag}",
             "zipball_url": f"https://api.github.com/repos/esempio/fotoscan/zipball/{tag}"}
 
@@ -162,13 +162,13 @@ def test_download_stages_and_verifies():
         assert updater.read_pending(cache)["version"] == NEW
         assert not list((cache / "updates" / "download").glob("*.zip")), "lo zip va cancellato dopo l'estrazione"
 
-        # pacchetto senza FotoScan dentro
+        # pacchetto senza PhotoScan dentro
         updater.fetch_zip = _fake_fetch_zip(_zip_bytes(drop=("frontend/index.html",)))
         try:
             updater.download(_TMP / "cache_dl2", info)
             raise AssertionError("pacchetto incompleto accettato")
         except updater.UpdateError as e:
-            assert "non contiene FotoScan" in str(e)
+            assert "non contiene PhotoScan" in str(e)
 
         # versione non piu' recente
         updater.fetch_zip = _fake_fetch_zip(_zip_bytes(version="0.0.1"))
@@ -357,7 +357,7 @@ def test_exe_download_and_install():
     finally:
         updater.fetch_parts = orig_parts
     assert pending["kind"] == "exe" and (Path(pending["dir"]) / "PhotoScan.exe").is_file()
-    assert updater.start_exe_update(cache, app, no_launch=True, process_name="NessunProcessoFotoScanXYZ")
+    assert updater.start_exe_update(cache, app, no_launch=True, process_name="NessunProcessoPhotoScanXYZ")
     end = _t.time() + 60
     while not (cache / "updates" / "installed.json").exists() and _t.time() < end:
         _t.sleep(0.2)
@@ -383,7 +383,7 @@ def test_exe_rollback_when_package_broken():
     (staged / "_internal").mkdir()  # manca PhotoScan.exe: pacchetto rotto
     updater._write_json(cache / "updates" / "pending.json",
                         {"version": "0.3.0", "dir": str(staged), "kind": "exe", "approved": True})
-    assert updater.start_exe_update(cache, app, no_launch=True, process_name="NessunProcessoFotoScanXYZ")
+    assert updater.start_exe_update(cache, app, no_launch=True, process_name="NessunProcessoPhotoScanXYZ")
     log = cache / "updates" / "apply-exe.log"
     end = _t.time() + 60
     while not (log.exists() and "ripristino" in log.read_text(encoding="utf-8-sig")) and _t.time() < end:

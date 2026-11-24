@@ -1,13 +1,13 @@
-"""Blocco della rete in uscita per tutto il processo Python di FotoScan.
+"""Blocco della rete in uscita per tutto il processo Python di PhotoScan.
 
 Installato all'import del pacchetto `fotoscan` (quindi anche nel server e in ogni sottoprocesso
 `python -m fotoscan...`). Usa un audit hook di Python (`sys.addaudithook`), che una volta installato
 non si puo' piu' rimuovere: ogni connessione, risoluzione DNS o invio di pacchetti verso un indirizzo
 diverso da questo PC (127.0.0.1 / ::1 / localhost) viene rifiutata con ConnectionRefusedError.
-Vale per tutto il codice Python: FotoScan, transformers, huggingface_hub, urllib, requests, httpx...
+Vale per tutto il codice Python: PhotoScan, transformers, huggingface_hub, urllib, requests, httpx...
 
 Unica eccezione: `download_window()`, aperta solo quando un modello manca dalla cache locale o per
-gli aggiornamenti di FotoScan (fotoscan/updater.py: elenco delle Release e zip da GitHub).
+gli aggiornamenti di PhotoScan (fotoscan/updater.py: elenco delle Release e zip da GitHub).
 Anche allora sono raggiungibili soltanto Hugging Face e GitHub e solo per il tempo della richiesta.
 Nessuna foto o dato del catalogo passa da queste funzioni.
 
@@ -57,7 +57,7 @@ _NET_PREFIXES = ("socket", "ssl", "selectors", "http", "urllib", "requests", "ht
 
 
 class NetworkBlocked(ConnectionRefusedError):
-    """Connessione verso internet rifiutata da FotoScan (sottoclasse di OSError: le librerie la gestiscono)."""
+    """Connessione verso internet rifiutata da PhotoScan (sottoclasse di OSError: le librerie la gestiscono)."""
 
 
 def _host_str(host: Any) -> str:
@@ -96,7 +96,7 @@ def _is_net_module(mod: str) -> bool:
 
 
 def _origin() -> tuple[str, str]:
-    """(libreria che ha aperto la connessione, funzione di FotoScan da cui parte la richiesta)."""
+    """(libreria che ha aperto la connessione, funzione di PhotoScan da cui parte la richiesta)."""
     lib, fs = "", ""
     f = sys._getframe(1)
     while f is not None:
@@ -117,7 +117,7 @@ def _purpose(lib: str, fs: str) -> str:
     if "routes_network" in fs:
         return "Prova del blocco dalle Impostazioni"
     if "updater" in fs or "routes_update" in fs:
-        return "Aggiornamenti di FotoScan"
+        return "Aggiornamenti di PhotoScan"
     if "embedder" in fs:
         return "Caricamento del modello di riconoscimento"
     if "faces" in fs:
@@ -206,7 +206,7 @@ def _deny(event: str, host: Any, port: Any = None) -> None:
     global _blocked_count
     _blocked_count += 1
     _record(event, host, port, allowed=False)
-    msg = f"FotoScan: connessione a internet bloccata ({event} -> {_host_str(host)})"
+    msg = f"PhotoScan: connessione a internet bloccata ({event} -> {_host_str(host)})"
     log.warning(msg)
     raise NetworkBlocked(msg)
 

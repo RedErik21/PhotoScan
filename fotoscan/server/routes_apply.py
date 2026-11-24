@@ -26,7 +26,7 @@ router = APIRouter(prefix="/api", tags=["apply"])
 
 JOB_NAME = "apply"
 LOG_NAME = "_fotoscan_apply.log"
-SUGGEST_NAME = "FotoScan_Organizzato"
+SUGGEST_NAME = "PhotoScan_Organizzato"
 PREVIEW_TTL = 30.0  # secondi: l'anteprima si ricalcola anche senza modifiche al piano (es. file scritti altrove)
 PROGRESS_EVERY = 20  # file tra un aggiornamento del job e il successivo (annullamento controllato a ogni file)
 PROGRESS_SECONDS = 0.5

@@ -9,7 +9,7 @@ import { showSnackbar } from '../ui/snackbar.js';
 import { emptyState, errorState } from '../ui/empty-state.js';
 import { skeletonCard } from '../ui/skeleton.js';
 
-const BASE_TITLE = 'Analisi delle foto · FotoScan';
+const BASE_TITLE = 'Analisi delle foto · PhotoScan';
 const PHASES_BASE = ['Scansione', 'Metadati', 'Analisi immagini', 'Completato'];
 const PHASES_FACES = ['Scansione', 'Metadati', 'Analisi immagini', 'Volti', 'Completato'];
 const FAST_DEFAULT = 300;
@@ -348,7 +348,7 @@ export async function mount(root, { navigate, signal }) {
 
     // Titolo della scheda: percentuale mentre gira
     document.title = running
-      ? (pct !== null ? `${Math.floor(pct)}% · ${BASE_TITLE}` : `Analisi in corso · FotoScan`)
+      ? (pct !== null ? `${Math.floor(pct)}% · ${BASE_TITLE}` : `Analisi in corso · PhotoScan`)
       : BASE_TITLE;
     updateButtons();
   }

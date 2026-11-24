@@ -15,7 +15,7 @@
 <nav class="nav" aria-label="Navigazione principale">
   <div class="wrap nav__inner">
     <a class="nav__brand" href="#">
-      <img class="nav__logo-img" src="favicon.svg" alt="" width="32" height="32" aria-hidden="true">
+      <img class="nav__logo-img" src="icon-192.png" alt="" width="32" height="32" aria-hidden="true">
       <span>PhotoScan</span>
     </a>
 
@@ -54,7 +54,7 @@
     <div class="hero__content">
       <span class="hero__badge">
         <span class="hero__dot" aria-hidden="true"></span>
-        Versione 2.0 · Windows · Gratuito e open source (MIT)
+        Versione 0.1.4 · Windows · Gratuito e open source (MIT)
       </span>
       <h1>Metti ordine in anni di foto, <span class="hero__grad">100% in locale</span>.</h1>
       <p class="hero__lead">
@@ -77,24 +77,29 @@
       <div class="hero__pillars">
         <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Nessun upload sul cloud</span>
         <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Originali sempre in sola lettura</span>
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Importa da Android e iPhone via USB</span>
         <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>IA SigLIP2 su GPU NVIDIA o CPU</span>
       </div>
     </div>
 
     <div class="hero__stage">
-      <div class="window-frame">
+      <div class="window-frame window-frame--video">
         <div class="window-frame__bar" aria-hidden="true">
           <span class="window-frame__dots"><i></i><i></i><i></i></span>
-          <span class="window-frame__title">PhotoScan — Home</span>
+          <span class="window-frame__title">PhotoScan — Anteprima desktop</span>
         </div>
-        <img class="window-frame__img"
-             src="img/01-home.png"
-             data-hero-img
-             data-light-src="img/01-home.png"
-             data-dark-src="img/13-home-scuro.png"
-             data-lightbox
-             data-caption="Home: stato dell'archivio, ricordi e accesso rapido a tutte le sezioni"
-             alt="Interfaccia di PhotoScan — pagina Home">
+        <div class="window-frame__media">
+          <video class="window-frame__video"
+                 src="img/promo-pc.mp4"
+                 poster="img/13-home-scuro.png"
+                 autoplay muted loop playsinline preload="metadata"
+                 aria-label="Video dimostrativo dell'applicazione desktop PhotoScan">
+          </video>
+          <button type="button" class="video-toggle" data-video-toggle aria-label="Metti in pausa o riproduci il video" title="Pausa / Riproduci">
+            <svg class="ic-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+            <svg class="ic-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="display:none"><polygon points="6,4 20,12 6,20"/></svg>
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -157,6 +162,23 @@
         <h3>Esperienza da app desktop</h3>
         <p>Si apre in una finestra dedicata dall'icona sul Desktop, con tema chiaro o scuro e interfaccia adattiva anche per schermi piccoli.</p>
       </article>
+    </div>
+
+    <div class="phone-banner">
+      <div class="phone-banner__left">
+        <div class="feat-card__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2.5"/><path d="M12 18h.01"/></svg>
+        </div>
+        <div>
+          <h3>Importazione diretta da Android e iPhone</h3>
+          <p>Collega lo smartphone al PC via USB, scegli le cartelle e copia foto e video in locale: il telefono resta in sola lettura, i file già importati vengono saltati in automatico e il trasferimento è riprendibile.</p>
+        </div>
+      </div>
+      <div class="phone-banner__tags">
+        <span class="phone-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Android (MTP)</span>
+        <span class="phone-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>iPhone (USB / HEIC)</span>
+        <span class="phone-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Sola lettura</span>
+      </div>
     </div>
   </div>
 </section>
@@ -359,6 +381,10 @@ winget install Gyan.FFmpeg                                                      
         <p>Sì. Chiudendo l'app l'analisi si ferma in sicurezza e alla riapertura riprende esattamente dai file non ancora elaborati.</p>
       </details>
       <details>
+        <summary>Posso importare le foto direttamente da Android e iPhone?</summary>
+        <p>Sì. Collega il telefono al PC con il cavo USB: PhotoScan supporta sia Android (MTP) sia iPhone, legge il dispositivo in sola lettura, salta automaticamente i file già copiati e gestisce anche foto HEIC e video.</p>
+      </details>
+      <details>
         <summary>Quali formati supporta?</summary>
         <p>Foto JPEG, PNG, WebP, TIFF, HEIC (con supporto incluso) e video (MP4, MOV, MKV, ecc. tramite FFmpeg). HEIC e TIFF vengono mostrati in anteprima JPEG generata in locale.</p>
       </details>
@@ -396,6 +422,10 @@ winget install Gyan.FFmpeg                                                      
       <div class="req-card">
         <div class="req-card__label">Finestra app</div>
         <div class="req-card__val">WebView2 / Edge o Google Chrome</div>
+      </div>
+      <div class="req-card">
+        <div class="req-card__label">Smartphone (importazione)</div>
+        <div class="req-card__val">Android (MTP) e iPhone via cavo USB</div>
       </div>
       <div class="req-card">
         <div class="req-card__label">Spazio disco</div>

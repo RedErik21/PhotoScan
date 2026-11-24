@@ -165,7 +165,7 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
   async function startRecluster() {
     const ok = await confirmDialog({
       title: 'Ricalcolare i gruppi di persone?',
-      message: 'FotoScan raggrupperà nuovamente i volti non ancora assegnati manualmente. I nomi e le correzioni che hai fatto verranno mantenuti.',
+      message: 'PhotoScan raggrupperà nuovamente i volti non ancora assegnati manualmente. I nomi e le correzioni che hai fatto verranno mantenuti.',
       confirmLabel: 'Ricalcola',
     });
     if (!ok || disposed) return;

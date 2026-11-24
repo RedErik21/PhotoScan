@@ -1,6 +1,6 @@
 """Archivio Foto - avvio come applicazione: server FastAPI nascosto + finestra dedicata (Edge/Chrome in modalita' app).
 
-Uso: pythonw -m fotoscan.desktop   (oppure l'icona 'FotoScan' sul Desktop, o 'python -m fotoscan ui')
+Uso: pythonw -m fotoscan.desktop   (oppure l'icona 'PhotoScan' sul Desktop, o 'python -m fotoscan ui')
 
 - Se il server e' gia' attivo (seconda istanza) viene riusato: si apre solo la finestra.
 - Chiudendo la finestra il server si spegne e con lui un'eventuale indicizzazione
@@ -79,7 +79,7 @@ def _fail(motivo: str) -> int:
     tail = _log_tail()
     if tail:
         testo += f"\nUltime righe:\n{tail}"
-    _message("FotoScan - errore", testo, error=True)
+    _message("PhotoScan - errore", testo, error=True)
     return 1
 
 
@@ -150,7 +150,7 @@ def _clear_state() -> None:
 def _start_server(port: int) -> subprocess.Popen:
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
     with open(LOG, "a", encoding="utf-8") as log:  # azzerato da main() a ogni avvio
-        log.write(f"FotoScan: avvio server su 127.0.0.1:{port}\n")
+        log.write(f"PhotoScan: avvio server su 127.0.0.1:{port}\n")
         log.flush()
         return subprocess.Popen([_python(), "-m", "fotoscan.server", "--port", str(port)], cwd=str(ROOT),
                                 env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
@@ -183,14 +183,14 @@ def _install_pending_update() -> None:
             ok, out = updater.install_requirements(ROOT, _python())
             _log_line(out)
             if not ok:
-                _message("FotoScan - aggiornamento",
-                         f"FotoScan è stato aggiornato alla versione {res['to']}, ma l'installazione delle nuove "
-                         "librerie non è riuscita. Se qualcosa non funziona, esegui nella cartella di FotoScan:\n\n"
+                _message("PhotoScan - aggiornamento",
+                         f"PhotoScan è stato aggiornato alla versione {res['to']}, ma l'installazione delle nuove "
+                         "librerie non è riuscita. Se qualcosa non funziona, esegui nella cartella di PhotoScan:\n\n"
                          ".venv\\Scripts\\python.exe -m pip install -r requirements.txt\n\n"
                          f"Dettagli nel log:\n{LOG}", error=True)
     except Exception as e:  # noqa: BLE001
         _log_line(f"aggiornamento non installato: {e}")
-        _message("FotoScan - aggiornamento", f"{e}\n\nFotoScan si avvia con la versione precedente.", error=True)
+        _message("PhotoScan - aggiornamento", f"{e}\n\nPhotoScan si avvia con la versione precedente.", error=True)
 
 
 def _install_exe_on_exit() -> bool:
@@ -238,10 +238,10 @@ def _busy_description(base: str) -> str | None:
 def _confirm_close(desc: str) -> bool:
     """Avviso con Si/No (No di default). True = l'utente vuole chiudere comunque."""
     text = (f"Un'operazione è in corso: {desc}." + "\n\n"
-            "Chiudendo FotoScan ora viene interrotta. L'analisi riprende da dove si è fermata; "
+            "Chiudendo PhotoScan ora viene interrotta. L'analisi riprende da dove si è fermata; "
             "la copia dal telefono riprende saltando i file già copiati." + "\n\nChiudere comunque?")
     flags = MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_TOPMOST
-    return ctypes.windll.user32.MessageBoxW(0, text, "FotoScan", flags) == IDYES
+    return ctypes.windll.user32.MessageBoxW(0, text, "PhotoScan", flags) == IDYES
 
 
 def _may_close(base: str) -> bool:
@@ -304,7 +304,7 @@ def _expose_window_controls(window, base: str, allowed: dict, frameless: bool = 
         _set_titlebar_theme(window, bool(dark))
 
     def restart_app() -> bool:
-        """Chiude e riapre FotoScan (installa l'aggiornamento pronto). La conferma la chiede il frontend."""
+        """Chiude e riapre PhotoScan (installa l'aggiornamento pronto). La conferma la chiede il frontend."""
         if restart is None:
             return False
         restart["requested"] = True
@@ -316,7 +316,7 @@ def _expose_window_controls(window, base: str, allowed: dict, frameless: bool = 
 
 
 def _set_app_identity() -> None:
-    """Nome e icona di FotoScan nella barra delle applicazioni (senza, Windows mostra l'icona di Python)."""
+    """Nome e icona di PhotoScan nella barra delle applicazioni (senza, Windows mostra l'icona di Python)."""
     try:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
     except (AttributeError, OSError):
@@ -400,7 +400,7 @@ def main() -> int:
         owner_proc = _start_server(port)
         if not _wait_healthy(port, owner_proc):
             _kill_tree(owner_proc.pid)
-            return _fail("Il server di FotoScan non è partito.")
+            return _fail("Il server di PhotoScan non è partito.")
         _write_state(port, owner_proc.pid)
 
     url = f"http://127.0.0.1:{port}/"
@@ -414,13 +414,13 @@ def main() -> int:
                               f"--window-size={WINDOW_SIZE}", "--no-first-run", "--no-default-browser-check",
                               "--disable-session-crashed-bubble"])
             if not _wait_window(PROFILE):
-                return _fail(f"La finestra di FotoScan non si è aperta ({browser}).")
+                return _fail(f"La finestra di PhotoScan non si è aperta ({browser}).")
         else:
             # nessun Edge/Chrome: browser predefinito; non sappiamo quando la scheda si chiude,
             # quindi il server resta acceso finche' non si preme OK.
             webbrowser.open(url)
-            _message("FotoScan",
-                     "Edge e Chrome non sono stati trovati: FotoScan è aperto nel browser predefinito.\n\n"
+            _message("PhotoScan",
+                     "Edge e Chrome non sono stati trovati: PhotoScan è aperto nel browser predefinito.\n\n"
                      "Premi OK qui quando hai finito, per spegnere il server.")
         return 0
     finally:
@@ -431,7 +431,7 @@ def main() -> int:
             _kill_tree(state["pid"])    # seconda istanza: il riavvio spegne anche il server condiviso
             _clear_state()
         if FROZEN and _install_exe_on_exit():
-            pass                      # lo script installa e riapre FotoScan
+            pass                      # lo script installa e riapre PhotoScan
         elif restart["requested"]:
             _relaunch()
 

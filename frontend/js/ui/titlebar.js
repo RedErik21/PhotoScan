@@ -95,8 +95,8 @@ async function build() {
             const desc = w.busy_description ? await w.busy_description() : null;
             if (desc) {
               const ok = await confirmDialog({
-                title: 'Chiudere FotoScan?',
-                message: `Un’operazione è in corso: ${desc}.\n\nChiudendo FotoScan ora viene interrotta. L’analisi delle foto e dei volti riprenderà da dove si è fermata; la copia dal telefono salterà i file già copiati.`,
+                title: 'Chiudere PhotoScan?',
+                message: `Un’operazione è in corso: ${desc}.\n\nChiudendo PhotoScan ora viene interrotta. L’analisi delle foto e dei volti riprenderà da dove si è fermata; la copia dal telefono salterà i file già copiati.`,
                 confirmLabel: 'Chiudi comunque',
                 cancelLabel: 'Resta',
                 danger: true,

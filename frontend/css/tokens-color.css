@@ -1,4 +1,4 @@
-/* Token colore — palette "Indaco" di FotoScan: neutri freddi che lasciano parlare le foto, accento indaco,
+/* Token colore — palette "Indaco" di PhotoScan: neutri freddi che lasciano parlare le foto, accento indaco,
    terziario ambra. Chiaro di default; scuro con prefers-color-scheme o [data-theme="dark"]; [data-theme="light"] forza il chiaro.
    I componenti @material/web leggono questi --md-sys-color-*. */
 :root {
@@ -39,7 +39,7 @@
   --md-sys-color-surface-dim: #d9d9e2;
   --md-sys-color-surface-bright: #ffffff;
   --md-sys-color-surface-tint: #4b45d8;
-  /* Ruoli FotoScan (non M3): superficie delle card e successo. */
+  /* Ruoli PhotoScan (non M3): superficie delle card e successo. */
   --fs-card: #ffffff;
   --fs-sidebar: #ffffff;
   --fs-success: #1f8a4c;

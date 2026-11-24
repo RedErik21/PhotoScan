@@ -12,7 +12,7 @@ const app = document.getElementById('app');
 const splash = document.getElementById('fs-splash');
 const splashStatus = document.getElementById('fs-splash-status');
 const BOOT_START = performance.now();
-const MIN_SPLASH_MS = 2150;
+const MIN_SPLASH_MS = 2400;
 
 function setSplashStatus(text) {
   if (splashStatus) splashStatus.textContent = text;
@@ -29,7 +29,7 @@ async function dismissSplash() {
   const done = () => splash.remove();
   if (reduced) return done();
   splash.addEventListener('transitionend', done, { once: true });
-  setTimeout(done, 420);
+  setTimeout(done, 580);
 }
 
 async function fetchStatusWithRetry() {
@@ -67,7 +67,7 @@ async function boot() {
   if (!status) {
     outlet.replaceChildren(errorState({
       title: 'Impossibile collegarsi al server',
-      message: 'Controlla che FotoScan sia in funzione, poi riprova.',
+      message: 'Controlla che PhotoScan sia in funzione, poi riprova.',
       onRetry: () => location.reload(),
     }));
     await dismissSplash();

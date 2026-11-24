@@ -102,7 +102,7 @@ def _nvidia_gpus() -> list[dict]:
 
 
 def _other_gpus() -> list[dict]:
-    """Schede non NVIDIA (solo per informare: FotoScan accelera solo con CUDA)."""
+    """Schede non NVIDIA (solo per informare: PhotoScan accelera solo con CUDA)."""
     if os.name != "nt":
         return []
     out = _run(["powershell", "-NoProfile", "-Command",
@@ -147,7 +147,7 @@ def detect(refresh: bool = False) -> dict:
         })
     elif others and device == "cpu":
         issues.append({"code": "gpu_non_supportata",
-                       "message": f"La scheda video ({others[0]['name']}) non è NVIDIA: FotoScan userà il processore."})
+                       "message": f"La scheda video ({others[0]['name']}) non è NVIDIA: PhotoScan userà il processore."})
     best = max(gpus, key=lambda g: g["vram_gb"]) if gpus else None
     _cache = {
         "os": platform.platform(),

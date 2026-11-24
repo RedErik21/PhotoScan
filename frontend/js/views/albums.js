@@ -788,7 +788,7 @@ export async function mount(root, { navigate, signal }) {
         h('div', { class: 'card albums-suggested__cta' },
           h('div', { class: 'albums-suggested__cta-copy' },
             h('strong', {}, 'Scopri gli album suggeriti dal tuo archivio'),
-            h('p', {}, 'FotoScan analizza le foto simili che tornano nel tempo (palestra, viaggi, cucina…) e ti propone album automatici pronti all’uso.')),
+            h('p', {}, 'PhotoScan analizza le foto simili che tornano nel tempo (palestra, viaggi, cucina…) e ti propone album automatici pronti all’uso.')),
           h('md-filled-tonal-button', { onclick: () => runSuggestSearch() },
             icon('auto_awesome', { slot: 'icon' }), 'Cerca album suggeriti')));
     } else {

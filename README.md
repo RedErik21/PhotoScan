@@ -1,13 +1,13 @@
-# FotoScan
+# PhotoScan
 
-FotoScan è un'applicazione locale (nessun servizio online: solo il controllo degli aggiornamenti, disattivabile) che indicizza un archivio di foto e video
+PhotoScan è un'applicazione locale (nessun servizio online: solo il controllo degli aggiornamenti, disattivabile) che indicizza un archivio di foto e video
 (pensato per circa 200 GB, ~14.000 file), riconosce il contenuto delle immagini con un modello di
 intelligenza artificiale (SigLIP2, eseguito sul proprio PC) e propone un'organizzazione in cartelle
 per anno, mese ed evento. Permette di sfogliare, cercare a parole ("tramonto", "torta"), gestire
 duplicati, album e preferiti, e infine di creare la nuova struttura di cartelle.
-Può anche importare foto e video da un telefono Android collegato via USB: il telefono viene solo letto e nulla viene cancellato.
+Può anche importare foto e video da un telefono Android o da un iPhone collegato via USB: il telefono viene solo letto e nulla viene cancellato. Con l'iPhone si importa solo la cartella DCIM (foto e video della fotocamera).
 
-**Regola fondamentale: FotoScan non cancella mai nulla.** La cartella delle foto originali è
+**Regola fondamentale: PhotoScan non cancella mai nulla.** La cartella delle foto originali è
 sempre in sola lettura.
 
 | Home | Ricerca | Luoghi |
@@ -40,7 +40,7 @@ Il browser usato per la finestra è Microsoft Edge (già presente su Windows 10/
 
 ## Avvio
 
-**Dall'icona:** doppio clic su **FotoScan** sul Desktop. Si apre una finestra dedicata (senza barra
+**Dall'icona:** doppio clic su **PhotoScan** sul Desktop. Si apre una finestra dedicata (senza barra
 degli indirizzi). Chiudendo la finestra, il server si spegne da solo.
 
 **Dal terminale:**
@@ -55,7 +55,7 @@ cartella del progetto. Il log viene riscritto a ogni avvio.
 
 ### Primo avvio
 
-Al primo avvio, quando non c'è ancora una cartella sorgente né un catalogo, FotoScan mostra la
+Al primo avvio, quando non c'è ancora una cartella sorgente né un catalogo, PhotoScan mostra la
 procedura di configurazione: si sceglie la cartella delle foto (sola lettura) e la cartella di
 destinazione per l'organizzazione. Le impostazioni si modificano in qualsiasi momento nella
 sezione **Impostazioni** e vengono salvate in `config.json`.
@@ -86,7 +86,7 @@ interrompere e riavviare quante volte serve.
 
 ## Aggiornamenti
 
-FotoScan cerca le nuove versioni tra le [Release di GitHub](../../releases). Tutto si gestisce in
+PhotoScan cerca le nuove versioni tra le [Release di GitHub](../../releases). Tutto si gestisce in
 **Impostazioni > Aggiornamenti**:
 
 - **Cerca aggiornamenti all'avvio** (attivo di default): a ogni apertura chiede a GitHub l'elenco delle
@@ -99,7 +99,7 @@ FotoScan cerca le nuove versioni tra le [Release di GitHub](../../releases). Tut
 L'aggiornamento scaricato si installa alla riapertura, prima che il programma parta: i file del
 programma vengono sostituiti dopo una copia di riserva (in `cache/updates/backup/`, ultime due), e se
 qualcosa va storto vengono ripristinati. Foto, `catalogo.db`, `cache/` e `config.json` non vengono toccati.
-Se cambiano le librerie, FotoScan esegue `pip install -r requirements.txt` da solo.
+Se cambiano le librerie, PhotoScan esegue `pip install -r requirements.txt` da solo.
 
 Una copia ottenuta con `git clone` può cercare gli aggiornamenti ma non installarli: si aggiorna con `git pull`.
 
@@ -107,7 +107,7 @@ Una copia ottenuta con `git clone` può cercare gli aggiornamenti ma non install
 
 1. Una volta sola: in `fotoscan/version.py` impostare `UPDATE_REPO = "proprietario/repository"`.
 2. Alzare `__version__` in `fotoscan/version.py` e fare commit.
-3. Creare e spingere il tag: `git tag v0.1.3` e `git push origin v0.1.3` (con `-beta.1` diventa una versione di prova).
+3. Creare e spingere il tag: `git tag v0.1.4` e `git push origin v0.1.4` (con `-beta.1` diventa una versione di prova).
 
 Il workflow `.github/workflows/release.yml` verifica che il tag corrisponda a `__version__` e crea la Release;
 le note sono generate dai commit e compaiono nell'app.
@@ -195,13 +195,13 @@ tutti i file passano.
 
 - **La finestra non si apre / errore all'avvio:** leggere `fotoscan_ui.log` (nella cartella del
   progetto). Di solito manca una dipendenza: `pip install -r requirements.txt`.
-- **«Il server di FotoScan non è partito»:** il primo avvio può richiedere più tempo (caricamento di
+- **«Il server di PhotoScan non è partito»:** il primo avvio può richiedere più tempo (caricamento di
   torch, fino a 2 minuti). Se il log riporta un errore di importazione, completare l'installazione
   con `pip install -r requirements.txt` dentro il venv.
 - **Porta occupata:** il launcher usa la porta 8765 oppure una porta libera qualsiasi; non serve fare nulla.
-- **Seconda apertura:** se FotoScan è già in esecuzione, la seconda icona riusa il server e apre
+- **Seconda apertura:** se PhotoScan è già in esecuzione, la seconda icona riusa il server e apre
   soltanto una nuova finestra.
-- **Nessun Edge né Chrome:** FotoScan si apre nel browser predefinito e compare una finestra con il
+- **Nessun Edge né Chrome:** PhotoScan si apre nel browser predefinito e compare una finestra con il
   pulsante OK: premerlo per spegnere il server.
 - **Finestra chiusa ma indicizzazione ancora in corso:** chiudendo la finestra l'indicizzazione viene
   interrotta. Non è un problema: alla prossima apertura riprende dai file non ancora elaborati.

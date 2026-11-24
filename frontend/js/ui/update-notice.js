@@ -58,7 +58,7 @@ function model(st) {
 
   if (job && job.state === 'running') {
     const pct = job.total ? Math.round((100 * job.done) / job.total) : null;
-    return { key: null, text: `Download di FotoScan ${latest?.version ?? ''} in corso${pct === null ? '…' : ` · ${pct}%`}`,
+    return { key: null, text: `Download di PhotoScan ${latest?.version ?? ''} in corso${pct === null ? '…' : ` · ${pct}%`}`,
       progress: pct, actions: [] };
   }
 
@@ -66,11 +66,11 @@ function model(st) {
   if (p) {
     const queued = p.approved || st.settings?.update_auto_install;
     if (queued) {
-      const when = st.frozen ? 'alla chiusura di FotoScan' : 'alla prossima apertura';
-      return { key: `queued-${p.version}`, text: `FotoScan ${p.version} verrà installato ${when}.`,
+      const when = st.frozen ? 'alla chiusura di PhotoScan' : 'alla prossima apertura';
+      return { key: `queued-${p.version}`, text: `PhotoScan ${p.version} verrà installato ${when}.`,
         actions: canRestart() ? [restartButton()] : [] };
     }
-    return { key: `ready-${p.version}`, text: `FotoScan ${p.version} è pronto da installare.`,
+    return { key: `ready-${p.version}`, text: `PhotoScan ${p.version} è pronto da installare.`,
       actions: [actionButton('Installa al riavvio', 'system_update_alt', approve, true)] };
   }
 
@@ -79,7 +79,7 @@ function model(st) {
     const actions = canDownload
       ? [actionButton('Scarica', 'download', download, true)]
       : [linkButton('Apri su GitHub', latest.html_url)];
-    return { key: `avail-${v}`, text: `È disponibile FotoScan ${v}.`, actions };
+    return { key: `avail-${v}`, text: `È disponibile PhotoScan ${v}.`, actions };
   }
   return null;
 }
@@ -168,12 +168,12 @@ const approve = () => act(async () => {
 
 const restart = () => act(async () => {
   const ok = await confirmDialog({
-    title: 'Riavviare FotoScan ora?',
-    message: 'FotoScan si chiude, installa la nuova versione e si riapre. Un’analisi in corso viene interrotta e riprende alla riapertura.',
+    title: 'Riavviare PhotoScan ora?',
+    message: 'PhotoScan si chiude, installa la nuova versione e si riapre. Un’analisi in corso viene interrotta e riprende alla riapertura.',
     confirmLabel: 'Installa e riavvia',
   });
   if (!ok) return;
-  showSnackbar('Riavvio di FotoScan…');
+  showSnackbar('Riavvio di PhotoScan…');
   await window.pywebview.api.restart_app();
 });
 
@@ -181,7 +181,7 @@ function announceInstalled(st) {
   const li = st.last_install;
   if (li && li.to === st.current && localStorage.getItem(INSTALLED_KEY) !== li.to) {
     localStorage.setItem(INSTALLED_KEY, li.to);
-    showSnackbar(`FotoScan è stato aggiornato alla versione ${li.to}.`, { duration: 6000 });
+    showSnackbar(`PhotoScan è stato aggiornato alla versione ${li.to}.`, { duration: 6000 });
   }
 }
 

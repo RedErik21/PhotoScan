@@ -5,6 +5,7 @@ import { h, icon } from '../ui/el.js';
 import { emptyState, errorState } from '../ui/empty-state.js';
 import { skeletonCard } from '../ui/skeleton.js';
 import { showSnackbar } from '../ui/snackbar.js';
+import { openSupportDialog } from '../ui/support.js';
 
 /** Carica css/view-help.css una sola volta. */
 function loadCss() {
@@ -211,7 +212,7 @@ function renderSafety() {
         'Nell’esempio la stessa foto compare in due cartelle, ma sul disco esiste una volta sola.'),
       h('h4', { class: 'md-typescale-title-small' }, 'Quando usare la copia'),
       h('p', { class: 'md-typescale-body-medium' },
-        'Gli hard link funzionano solo all’interno dello stesso disco. Se la destinazione è su un altro disco o in rete, l’app copia il file: i due file sono indipendenti, occupano più spazio, e modificarne uno non tocca l’altro. FotoScan sceglie da sola in base ai dischi; puoi cambiarlo in Impostazioni, sezione Generale, o nella pagina Crea cartelle.'),
+        'Gli hard link funzionano solo all’interno dello stesso disco. Se la destinazione è su un altro disco o in rete, l’app copia il file: i due file sono indipendenti, occupano più spazio, e modificarne uno non tocca l’altro. PhotoScan sceglie da sola in base ai dischi; puoi cambiarlo in Impostazioni, sezione Generale, o nella pagina Crea cartelle.'),
       h('p', { class: 'md-typescale-body-medium' },
         'Attenzione: con un hard link, una modifica fatta in un collegamento vale anche per l’originale.')),
     h('article', { class: 'card help-card' },
@@ -357,7 +358,7 @@ function renderInfo(st) {
 function diagnosticText(st, errors) {
   const c = st.counts || {};
   const lines = [
-    'FotoScan diagnostica',
+    'PhotoScan diagnostica',
     `Data: ${new Date().toISOString()}`,
     `Versione: ${st.version}`,
     `Dispositivo: ${st.device}`,
@@ -405,12 +406,19 @@ export async function mount(root, { signal } = {}) {
     h('header', { class: 'help-header' },
       h('h1', { class: 'md-typescale-headline-medium' }, 'Aiuto'),
       h('p', { class: 'md-typescale-body-large help-muted' },
-        'Come funziona FotoScan, perché i tuoi file sono al sicuro e le risposte alle domande più comuni.')),
+        'Come funziona PhotoScan, perché i tuoi file sono al sicuro e le risposte alle domande più comuni.')),
     section('help-how-title', 'Come funziona', renderSteps()),
     section('help-safe-title', 'La tua sicurezza', renderSafety()),
     renderFaqSection(),
     renderShortcuts(),
     section('help-info-title', 'Informazioni', infoBody,
+      h('article', { class: 'card help-support-card' },
+        h('div', { class: 'help-support-card__copy' },
+          h('h3', { class: 'md-typescale-title-medium' }, 'Sostieni lo sviluppo'),
+          h('p', { class: 'md-typescale-body-medium help-muted' },
+            'PhotoScan è gratuito, open source e 100% locale. Se ti è utile, puoi aiutare lo sviluppatore con un supporto volontario.')),
+        h('md-filled-tonal-button', { onclick: () => openSupportDialog() },
+          icon('favorite', { slot: 'icon', filled: true }), 'Aiuta lo Sviluppatore')),
       h('div', { class: 'help-diag-slot' }, renderDiagnostics(() => status))));
 
   root.replaceChildren(h('div', { class: 'view help-view' }, page));

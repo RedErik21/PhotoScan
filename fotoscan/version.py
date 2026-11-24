@@ -1,4 +1,4 @@
-"""Versione di FotoScan e repository GitHub da cui arrivano gli aggiornamenti.
+"""Versione di PhotoScan e repository GitHub da cui arrivano gli aggiornamenti.
 
 Per pubblicare un aggiornamento: alzare __version__, fare commit, creare il tag `v<versione>` e spingerlo
 (`git tag v0.1.3 && git push origin v0.1.3`): il workflow .github/workflows/release.yml crea la Release.

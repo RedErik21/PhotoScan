@@ -78,7 +78,7 @@ class NoCacheStatic(StaticFiles):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="FotoScan", version=__version__, docs_url="/api/docs", openapi_url="/api/openapi.json")
+    app = FastAPI(title="PhotoScan", version=__version__, docs_url="/api/docs", openapi_url="/api/openapi.json")
     app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.include_router(core)
 

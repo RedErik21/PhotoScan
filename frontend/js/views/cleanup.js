@@ -377,7 +377,7 @@ export async function mount(root, ctx) {
       renderSummary();
     } catch (e) {
       if (alive && e?.name !== 'AbortError') {
-        heroSub.textContent = 'Riavvia FotoScan per attivare il calcolo dello spazio recuperabile.';
+        heroSub.textContent = 'Riavvia PhotoScan per attivare il calcolo dello spazio recuperabile.';
       }
     }
   }

@@ -7,6 +7,7 @@ import { navigate, onRoute, currentRoute, prefetchRoute } from './router.js';
 import { h, icon } from './ui/el.js';
 import { createWordmark } from './ui/brand.js';
 import { formatNumber } from './ui/format.js';
+import { openSupportDialog } from './ui/support.js';
 
 const MQ_MEDIUM = matchMedia('(min-width: 600px)');
 const MQ_EXPANDED = matchMedia('(min-width: 1024px)');
@@ -170,12 +171,22 @@ function buildSideNav() {
   const footerLinks = sysItems.map((i) => (i.id === 'help'
     ? h('div', { class: 'nav-footer-help-row' }, navLink(i), themeBtn)
     : navLink(i)));
+  const supportBtn = h('button', {
+    type: 'button',
+    class: 'nav-link nav-support',
+    title: 'Aiuta lo Sviluppatore',
+    onclick: () => openSupportDialog(),
+  },
+  h('span', { class: 'nav-icon' }, icon('favorite', { filled: true })),
+  h('span', { class: 'nav-label' }, 'Aiuta lo Sviluppatore'),
+  h('md-ripple'));
   return h('nav', { class: 'app-nav', 'aria-label': 'Navigazione' },
     buildBrand(),
     h('div', { class: 'nav-scroll' }, groups),
     h('div', { class: 'nav-footer' },
       buildSideStatus(),
-      ...footerLinks));
+      ...footerLinks,
+      supportBtn));
 }
 
 function refreshStepMarkers() {
@@ -189,7 +200,7 @@ function refreshStepMarkers() {
 // ---------- Top bar ----------
 function buildTopbar() {
   eyebrowEl = h('span', { class: 'topbar-eyebrow' });
-  titleEl = h('h1', { class: 'topbar-title' }, 'FotoScan');
+  titleEl = h('h1', { class: 'topbar-title' }, 'PhotoScan');
   const brandCompact = h('img', { class: 'topbar-logo', src: 'favicon.svg', alt: '', width: 28, height: 28 });
 
   searchField = h('input', {
@@ -228,7 +239,9 @@ function buildTopbar() {
     menuItem('#/stats', 'insights', 'Statistiche', 'menu-compact-only'),
     menuItem('#/phone', 'smartphone', 'Telefono', 'menu-compact-only'),
     menuItem('#/settings', 'settings', 'Impostazioni'),
-    menuItem('#/help', 'help', 'Aiuto e scorciatoie'));
+    menuItem('#/help', 'help', 'Aiuto e scorciatoie'),
+    h('md-menu-item', { class: 'nav-support', onclick: () => openSupportDialog() },
+      icon('favorite', { slot: 'start', filled: true }), h('div', { slot: 'headline' }, 'Aiuta lo Sviluppatore')));
   const more = h('md-icon-button', {
     id: 'shell-more-btn', 'aria-label': 'Altre opzioni', 'aria-haspopup': 'menu', title: 'Altre opzioni',
     onclick: () => { menu.open = !menu.open; },
@@ -468,7 +481,7 @@ export async function mountShell(appEl) {
   onRoute((cur) => {
     const id = activeNavId(cur.path);
     const item = navItems.find((i) => i.id === id);
-    titleEl.textContent = cur.route ? cur.route.title : 'FotoScan';
+    titleEl.textContent = cur.route ? cur.route.title : 'PhotoScan';
     eyebrowEl.textContent = cur.path === '/' ? '' : item ? (item.step ? `Organizza · Passo ${item.step} di ${flowSteps.length}` : GROUP_LABEL[item.group] || '') : '';
     shell.dataset.route = cur.path.split('/')[1] || 'home';
     setActive(cur.path);

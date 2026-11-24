@@ -123,10 +123,10 @@ export async function mountSection(container) {
       ? (g.window_open
         ? callout('warning', 'cloud_download', 'Download di un modello in corso',
           h('p', {}, `Rete aperta temporaneamente solo verso ${g.download_hosts.join(', ')} per: ${g.window_reason || 'download'}. Si richiude da sola al termine.`))
-        : callout('ok', 'shield_lock', 'Rete bloccata: FotoScan non comunica con internet',
+        : callout('ok', 'shield_lock', 'Rete bloccata: PhotoScan non comunica con internet',
           h('p', {}, 'Ogni connessione verso l\'esterno viene rifiutata. Sono permesse solo le comunicazioni interne a questo computer (127.0.0.1), che servono alla finestra dell\'app per parlare con il programma.')))
       : callout('error', 'gpp_bad', 'Blocco della rete NON attivo',
-        h('p', {}, 'Riavvia FotoScan. Se il problema resta, controlla il file fotoscan_ui.log.'));
+        h('p', {}, 'Riavvia PhotoScan. Se il problema resta, controlla il file fotoscan_ui.log.'));
 
     const testBtn = h('md-filled-tonal-button', { onclick: runTest }, icon('network_check', { slot: 'icon' }), 'Prova il blocco');
     testBtn.disabled = testing;
@@ -136,7 +136,7 @@ export async function mountSection(container) {
       h('div', { class: 'net-card' },
         head,
         h('dl', { class: 'net-info md-typescale-body-medium' },
-          h('dt', {}, 'Blocco connessioni'), h('dd', {}, g.installed ? 'Attivo (in tutti i processi di FotoScan)' : 'Non attivo'),
+          h('dt', {}, 'Blocco connessioni'), h('dd', {}, g.installed ? 'Attivo (in tutti i processi di PhotoScan)' : 'Non attivo'),
           h('dt', {}, 'Programma interno'), h('dd', {},
             s.host
               ? `In ascolto su ${s.host}:${s.port ?? '—'} — ${s.local_only ? 'raggiungibile solo da questo computer' : 'ATTENZIONE: raggiungibile da altri dispositivi della rete'}`
@@ -173,7 +173,7 @@ export async function mountSection(container) {
         h('span', { class: 'net-sub net-mono md-typescale-body-small' }, x.hosts.join(', ')),
         x.managed
           ? badge(x.ok ? 'ok' : 'allowed', x.ok ? 'Nessuna connessione' : 'Download una tantum', x.ok ? 'check' : 'download')
-          : badge('out', 'Fuori da FotoScan', 'open_in_new')),
+          : badge('out', 'Fuori da PhotoScan', 'open_in_new')),
       h('div', { class: 'md-typescale-body-medium' }, x.purpose),
       h('div', { class: 'net-sub md-typescale-body-small' }, `Quando: ${x.when}`),
       h('div', { class: 'net-sub md-typescale-body-small' }, `Cosa parte dal computer: ${x.sends}`),
@@ -212,7 +212,7 @@ export async function mountSection(container) {
     return [
       h('h2', { class: 'net-group__title' }, 'Tentativi di connessione verso internet'),
       h('div', { class: 'net-card' },
-        hint('Ogni volta che una parte di FotoScan prova a uscire su internet viene annotato qui: cosa, verso dove e se è stato fermato. Le comunicazioni interne al computer non sono elencate.'),
+        hint('Ogni volta che una parte di PhotoScan prova a uscire su internet viene annotato qui: cosa, verso dove e se è stato fermato. Le comunicazioni interne al computer non sono elencate.'),
         h('div', { class: 'net-stats' },
           h('div', { class: 'net-stat' }, h('span', { class: 'net-sub md-typescale-body-small' }, 'Bloccati'),
             h('span', { class: 'net-stat__value' }, formatNumber(sum.blocked))),
@@ -248,15 +248,15 @@ export async function mountSection(container) {
     load();
   }
 
-  // ---- 4. Fuori da FotoScan
+  // ---- 4. Fuori da PhotoScan
   function renderOutside() {
     const cmd = [
-      '# PowerShell come amministratore: blocca qualsiasi uscita del Python di FotoScan',
-      'New-NetFirewallRule -DisplayName "FotoScan blocca uscita" -Direction Outbound -Action Block `',
-      '  -Program "<cartella FotoScan>\\.venv\\Scripts\\python.exe"',
+      '# PowerShell come amministratore: blocca qualsiasi uscita del Python di PhotoScan',
+      'New-NetFirewallRule -DisplayName "PhotoScan blocca uscita" -Direction Outbound -Action Block `',
+      '  -Program "<cartella PhotoScan>\\.venv\\Scripts\\python.exe"',
     ].join('\n');
     return group('Per una garanzia anche a livello di sistema',
-      hint('Il blocco di FotoScan copre tutto il codice Python dell\'app e delle librerie di intelligenza artificiale. Non copre il browser (Edge/WebView2), i link che apri tu (OpenStreetMap) e Windows. Per bloccare tutto a livello di sistema puoi aggiungere una regola nel firewall di Windows dopo aver scaricato i modelli:'),
+      hint('Il blocco di PhotoScan copre tutto il codice Python dell\'app e delle librerie di intelligenza artificiale. Non copre il browser (Edge/WebView2), i link che apri tu (OpenStreetMap) e Windows. Per bloccare tutto a livello di sistema puoi aggiungere una regola nel firewall di Windows dopo aver scaricato i modelli:'),
       h('pre', { class: 'net-cmd' }, cmd),
       hint('Nota: in alcuni ambienti Python il programma vero gira con il python.exe di sistema; controlla in Gestione attività quale processo usare.'));
   }

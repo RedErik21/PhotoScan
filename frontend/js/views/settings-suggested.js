@@ -88,7 +88,7 @@ export function mountSection(container, { onPlanStale = () => {} } = {}) {
         h('div', { class: 'sugg-head__copy' },
           h('h3', { class: 'section-title' }, 'Temi trovati nelle tue foto'),
           h('p', { class: 'sugg-note md-typescale-body-medium' },
-            'FotoScan cerca gruppi ricorrenti che compaiono in più giorni e mesi (palestra, ufficio, giardino…). '
+            'PhotoScan cerca gruppi ricorrenti che compaiono in più giorni e mesi (palestra, ufficio, giardino…). '
             + 'I temi accettati creano cartelle dedicate per anno, es. «2024/Palestra».'),
           lastEl),
         h('div', { class: 'sugg-head__actions' }, restoreBtn, runBtn)),

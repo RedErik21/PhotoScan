@@ -145,7 +145,7 @@ export async function mount(root, ctx) {
   const brokenLabel = h('span', { class: 'gallery-broken__label' }, 'Nascondi danneggiati');
   const brokenRemove = h('md-text-button', {
     class: 'gallery-broken__remove',
-    title: 'Toglie dal catalogo di FotoScan le voci dei file che non esistono più o non si aprono. Nessun file viene cancellato dal disco.',
+    title: 'Toglie dal catalogo di PhotoScan le voci dei file che non esistono più o non si aprono. Nessun file viene cancellato dal disco.',
     onclick: () => removeBroken(),
   }, 'Rimuovi');
   const brokenEl = h('label', { class: 'gallery-broken', title: 'File che non esistono più sul disco o che non si riescono ad aprire' },
@@ -415,7 +415,7 @@ export async function mount(root, ctx) {
     if (!brokenCount) return;
     const ok = await confirmDialog({
       title: `Rimuovere ${plural(brokenCount, 'voce', 'voci')} dal catalogo?`,
-      message: 'Sono file che non esistono più sul disco o che non si riescono ad aprire. FotoScan toglie solo le loro voci dal proprio elenco: nessun file viene cancellato dal disco. Se un file ricompare, verrà ritrovato alla prossima analisi.',
+      message: 'Sono file che non esistono più sul disco o che non si riescono ad aprire. PhotoScan toglie solo le loro voci dal proprio elenco: nessun file viene cancellato dal disco. Se un file ricompare, verrà ritrovato alla prossima analisi.',
       confirmLabel: 'Rimuovi dal catalogo',
       danger: true,
     });

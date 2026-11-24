@@ -73,11 +73,11 @@ def _start_download(cfg: Config, info: dict) -> jobs.Job:
     def run(job: jobs.Job):
         def progress(done: int, total: int) -> None:
             job.update(stage="download", done=done, total=total,
-                       message=f"Download di FotoScan {info['version']}: {done / 1e6:.1f} MB")
+                       message=f"Download di PhotoScan {info['version']}: {done / 1e6:.1f} MB")
         try:
             pending = updater.download(cfg.cache_dir, info, progress=progress, cancelled=lambda: job.cancel_requested,
                                        exe=FROZEN)
-            job.update(stage="pronto", message=f"FotoScan {pending['version']} pronto da installare")
+            job.update(stage="pronto", message=f"PhotoScan {pending['version']} pronto da installare")
             return {"version": pending["version"]}
         finally:
             _publish()
@@ -126,7 +126,7 @@ def _self_update_off() -> bool:
 
 
 def _self_update_msg() -> str:
-    return "Questa copia di FotoScan viene da git: aggiornala con «git pull»."
+    return "Questa copia di PhotoScan viene da git: aggiornala con «git pull»."
 
 
 def _exe_ready(info: dict | None) -> bool:
@@ -143,7 +143,7 @@ def update_status():
 @router.post("/update/check")
 def update_check():
     if not update_repo():
-        raise HTTPException(400, "Aggiornamenti non configurati in questa copia di FotoScan.")
+        raise HTTPException(400, "Aggiornamenti non configurati in questa copia di PhotoScan.")
     return run_check()
 
 
@@ -161,7 +161,7 @@ def update_download():
 
 @router.post("/update/install")
 def update_install():
-    """Approva l'installazione dell'aggiornamento scaricato: avviene al prossimo avvio di FotoScan."""
+    """Approva l'installazione dell'aggiornamento scaricato: avviene al prossimo avvio di PhotoScan."""
     cfg = get_cfg()
     if _self_update_off():
         raise HTTPException(409, _self_update_msg())

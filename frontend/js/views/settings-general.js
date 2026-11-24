@@ -423,7 +423,7 @@ export function mountSection(container, { settings = {}, draft = null, onDirty =
           h('span', { class: 'callout__icon material-symbols-outlined', 'aria-hidden': 'true' }, 'warning'),
           h('div', {},
             h('p', { class: 'callout__title' }, 'ffmpeg non trovato'),
-            h('p', {}, 'Senza ffmpeg non si possono estrarre le anteprime dei video. Installalo e riavvia FotoScan.'))),
+            h('p', {}, 'Senza ffmpeg non si possono estrarre le anteprime dei video. Installalo e riavvia PhotoScan.'))),
     );
     // Stato riconoscimento volti
     const fi = status.faces || {};
@@ -482,7 +482,7 @@ export function mountSection(container, { settings = {}, draft = null, onDirty =
   // Cartella delle foto (solo sorgente)
   const folders = group('Cartella delle foto', [
     h('p', { class: 'settings-hint md-typescale-body-medium' },
-      'La cartella che contiene il tuo archivio fotografico. FotoScan la legge senza mai modificarla automaticamente.'),
+      'La cartella che contiene il tuo archivio fotografico. PhotoScan la legge senza mai modificarla automaticamente.'),
     h('div', { class: 'settings-stack' },
       folderRow('source_dir', 'Cartella delle foto')),
   ]);
@@ -522,7 +522,7 @@ export function mountSection(container, { settings = {}, draft = null, onDirty =
   const hwMount = mountHardware(hwSlot, { current: () => values, onApply: applyRecommendation });
   const hardware = group('Il tuo computer', [
     h('p', { class: 'settings-hint md-typescale-body-medium' },
-      'FotoScan riconosce la scheda video, il processore e la memoria, e propone il modello più adatto. '
+      'PhotoScan riconosce la scheda video, il processore e la memoria, e propone il modello più adatto. '
       + 'Puoi anche misurare quante foto al secondo riesce ad analizzare.'),
     hwSlot,
   ]);

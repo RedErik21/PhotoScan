@@ -167,7 +167,7 @@ export async function mount(root, { navigate, signal }) {
     if (st.first_run || c.totale === 0) {
       return promoCard({
         icon: 'add_photo_alternate', prominent: true,
-        title: 'Benvenuto in FotoScan',
+        title: 'Benvenuto in PhotoScan',
         text: 'Scegli la cartella delle tue foto. L’app la legge senza mai modificarla.',
         action: 'Inizia', onAction: () => navigate(st.first_run ? '/onboarding' : '/index'),
       });

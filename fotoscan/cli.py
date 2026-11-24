@@ -128,7 +128,7 @@ def cmd_ui_legacy(args, cfg):
 def cmd_serve(args, cfg):
     """Solo il server (sviluppo): stampa l'URL e resta in primo piano. Ctrl+C per fermarlo."""
     url = f"http://{args.host}:{args.port}/"
-    print(f"FotoScan server: {url}   (documentazione API: {url}api/docs)  Ctrl+C per fermare", flush=True)
+    print(f"PhotoScan server: {url}   (documentazione API: {url}api/docs)  Ctrl+C per fermare", flush=True)
     subprocess.run([sys.executable, "-m", "fotoscan.server", "--host", args.host, "--port", str(args.port)], cwd=ROOT)
 
 

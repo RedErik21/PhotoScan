@@ -1,4 +1,4 @@
-/* components.css — componenti riutilizzabili di FotoScan 2 (posseduto dall'agente "css-components").
+/* components.css — componenti riutilizzabili di PhotoScan 2 (posseduto dall'agente "css-components").
    Solo token: --md-sys-color-*, --shape-*, --elev-*, --sp-*, --dur-*, --motion-*, --md-sys-typescale-*.
    Nessun colore hard-coded. Overlay scuri = color-mix con --md-sys-color-scrim.
 
@@ -1100,7 +1100,7 @@ md-filled-button.fs-btn-danger:not([disabled]):hover {
 
 /* ripristino slot-05 */
 
-/* Slot 05 - pulsanti FotoScan: focus da tastiera piu' evidente (solo :focus-visible).
+/* Slot 05 - pulsanti PhotoScan: focus da tastiera piu' evidente (solo :focus-visible).
    Tutti i pulsanti @material/web e .fs-btn-danger. Colori e spaziature dai token; niente !important. */
 :is(md-filled-button, md-filled-tonal-button, md-outlined-button, md-elevated-button, md-text-button,
     md-icon-button, md-filled-icon-button, md-filled-tonal-icon-button, md-outlined-icon-button, md-fab,

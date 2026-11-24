@@ -24,7 +24,7 @@ def _expected_updates(cfg) -> dict:
         state = "Controllo all'avvio spento: solo quando premi «Cerca aggiornamenti»"
     return {
         "id": "github-updates", "name": "GitHub (aggiornamenti)", "hosts": ["api.github.com", "codeload.github.com"],
-        "purpose": "Sapere se c'è una versione nuova di FotoScan e scaricarla",
+        "purpose": "Sapere se c'è una versione nuova di PhotoScan e scaricarla",
         "when": "All'avvio (se attivo) o quando cerchi gli aggiornamenti",
         "sends": f"Richiesta delle versioni pubblicate{f' di {repo}' if repo else ''}. Nessuna foto.",
         "state": state,
@@ -67,13 +67,13 @@ def _expected(cfg) -> list[dict]:
             "purpose": "Aprire la mappa di un luogo",
             "when": "Solo quando clicchi il link della mappa (si apre nel browser)",
             "sends": "Coordinate GPS della foto nell'indirizzo della pagina",
-            "state": "Fuori dal blocco: lo apre il browser, non FotoScan",
+            "state": "Fuori dal blocco: lo apre il browser, non PhotoScan",
             "ok": None, "managed": False,
         },
         {
             "id": "microsoft", "name": "Microsoft (Edge / WebView2, Windows)", "hosts": ["vari"],
             "purpose": "Servizi del browser e di Windows (aggiornamenti, SmartScreen, telemetria di sistema)",
-            "when": "Indipendente da FotoScan",
+            "when": "Indipendente da PhotoScan",
             "sends": "Dati del browser o del sistema, non le tue foto",
             "state": "Fuori dal blocco: si controlla dalle impostazioni di Windows o con il firewall",
             "ok": None, "managed": False,
@@ -117,7 +117,7 @@ def network_test():
         with socket.create_connection(("example.com", 443), timeout=5):
             pass
     except netguard.NetworkBlocked:
-        return {"blocked": True, "message": "Bloccato: FotoScan non può uscire su internet."}
+        return {"blocked": True, "message": "Bloccato: PhotoScan non può uscire su internet."}
     except OSError as e:
         return {"blocked": False, "message": f"Connessione non riuscita ma NON fermata dal blocco: {e}"}
     return {"blocked": False, "message": "Attenzione: la connessione è riuscita, il blocco non è attivo."}

@@ -185,7 +185,7 @@ def ensure_models(cfg: Config | None = None, progress: Callable[[str], None] | N
     say("Scarico i modelli volti buffalo_l (~280 MB, una sola volta)…")
     tmp_zip = Path(tempfile.mkstemp(prefix="fs_buffalo_", suffix=".zip", dir=str(d))[1])
     try:
-        req = urllib.request.Request(BUFFALO_URL, headers={"User-Agent": "FotoScan/2.0"})
+        req = urllib.request.Request(BUFFALO_URL, headers={"User-Agent": "PhotoScan/2.0"})
         with netguard.download_window("download modelli volti buffalo_l (GitHub)"):
             with urllib.request.urlopen(req, timeout=180) as resp, open(tmp_zip, "wb") as out:
                 while True:

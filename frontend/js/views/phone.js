@@ -1,4 +1,4 @@
-// Importa dal telefono: sfoglia le cartelle del telefono Android (MTP), scegli quelle con foto/video
+// Importa dal telefono: sfoglia le cartelle del telefono (Android via MTP, iPhone solo DCIM), scegli quelle con foto/video
 // e copiale in una cartella di destinazione. Il telefono resta in sola lettura; la copia gira sul server
 // come job (phone_import) e l'avanzamento arriva via SSE. Non modifica la cartella delle foto originali.
 // Aggiornamenti: l'SSE e le scelte aggiornano solo la loro sezione (niente ricostruzione di tutta la pagina),
@@ -125,7 +125,9 @@ function header() {
   return h('div', { class: 'view-header' },
     h('div', {},
       h('h1', { class: 'md-typescale-headline-medium' }, 'Importa dal telefono'),
-      h('p', { class: 'muted md-typescale-body-medium' }, 'Il telefono viene solo letto. Le foto vengono copiate nella cartella di destinazione: nulla viene cancellato.')));
+      h('p', { class: 'muted md-typescale-body-medium' }, 'Copia foto e video da Android o iPhone sul tuo PC in sola lettura: nulla viene mai cancellato dal telefono.')),
+    h('div', { class: 'view-header-actions' },
+      h('span', { class: 'phone-head-pill' }, icon('verified_user'), 'Sola lettura · USB')));
 }
 
 function crumbs() {
@@ -155,29 +157,37 @@ function folderRow(f) {
     renderSelection();
     renderList(k);
   });
-  const countText = anc ? `Già inclusa in «${anc[anc.length - 1]}»`
-    : empty ? 'Nessun file'
-      : f.media ? `${plural(f.media, 'file in questa cartella', 'file in questa cartella')}`
-        : 'Solo sottocartelle';
-  return h('li', { class: 'phone-row' },
+  const isSel = S.selected.has(k) || !!anc;
+  const countText = anc ? `Inclusa in «${anc[anc.length - 1]}»`
+    : empty ? 'Vuota'
+      : f.media ? `${plural(f.media, 'file', 'file')}`
+        : 'Sottocartelle';
+  return h('li', { class: `phone-row${isSel ? ' is-selected' : ''}` },
     cb,
     h('button', { class: 'phone-row__name', type: 'button', onclick: () => {
       if (!f.sub) { if (!cb.disabled) cb.click(); return; }
       S.path = path; loadFolder();
     } },
-      icon(f.sub ? 'folder' : f.media ? 'photo_library' : 'folder_off'),
-      h('span', {}, f.name),
+      h('span', { class: `phone-row__icon${empty ? ' phone-row__icon--empty' : ''}`, 'aria-hidden': 'true' },
+        icon(f.sub ? 'folder' : f.media ? 'photo_library' : 'folder_off')),
+      h('span', { class: 'phone-row__title' }, f.name),
       h('span', { class: 'phone-row__count' }, countText)),
     f.sub ? h('md-icon-button', { 'aria-label': `Apri ${f.name}`, onclick: () => { S.path = path; loadFolder(); } },
       icon('chevron_right')) : null);
 }
 
 function selectedSummary() {
-  if (!S.selected.size) return h('p', { class: 'muted md-typescale-body-medium' }, 'Nessuna cartella selezionata.');
+  if (!S.selected.size) return h('p', { class: 'muted md-typescale-body-medium' }, 'Spunta una o più cartelle nell’elenco a sinistra.');
   return h('div', { class: 'phone-selected' },
-    h('strong', {}, `${S.selected.size} ${S.selected.size === 1 ? 'cartella scelta' : 'cartelle scelte'}`),
-    h('ul', {}, ...[...S.selected.values()].map((p) => h('li', {}, p.join(' / ')))),
-    h('md-text-button', { onclick: () => { S.selected.clear(); renderSelection(); renderList(); } }, 'Deseleziona tutte'));
+    h('div', { class: 'phone-selected__chips' },
+      ...[...S.selected.entries()].map(([k, p]) => h('span', { class: 'phone-sel-chip', title: p.join(' / ') },
+        h('span', { class: 'phone-sel-chip__path' }, p.join(' / ')),
+        h('button', {
+          type: 'button', class: 'phone-sel-chip__rm', 'aria-label': `Rimuovi ${p.join(' / ')}`,
+          onclick: () => { S.selected.delete(k); renderSelection(); renderList(); },
+        }, icon('close'))))),
+    h('div', { class: 'phone-actions' },
+      h('md-text-button', { onclick: () => { S.selected.clear(); renderSelection(); renderList(); } }, 'Deseleziona tutte')));
 }
 
 function destField() {
@@ -318,25 +328,51 @@ function renderDevices() {
   const kids = [];
   if (S.devices === null) {
     kids.push(h('section', { class: 'card phone-connect' },
-      h('div', { class: 'phone-connect__icon', 'aria-hidden': 'true' }, icon('smartphone')),
-      h('div', { class: 'phone-connect__body' },
-        h('h2', { class: 'section-title md-typescale-title-medium phone-h2' }, 'Collega il telefono Android via USB'),
-        h('ol', { class: 'phone-connect__steps' },
-          h('li', {}, 'Collega il cavo USB al computer e sblocca lo schermo.'),
-          h('li', {}, 'Nella notifica USB sul telefono scegli «Trasferimento file» (MTP).'),
-          h('li', {}, 'Premi il pulsante qui sotto per sfogliare le cartelle in sola lettura.')),
-        h('div', { class: 'phone-actions' },
-          h('md-filled-button', { disabled: busy || undefined, onclick: () => { S.error = null; loadDevices(); } },
-            icon('phonelink_setup', { slot: 'icon' }), 'Cerca telefono')),
-        busy ? busyLine('Cerco il telefono collegato… può volerci qualche secondo.') : null,
-        !busy && S.error ? errorState({ title: 'Telefono non raggiungibile', message: S.error, onRetry: () => loadDevices() }) : null)));
+      h('div', { class: 'phone-connect__top' },
+        h('div', { class: 'phone-connect__lead' },
+          h('div', { class: 'phone-connect__icon', 'aria-hidden': 'true' }, icon('smartphone')),
+          h('div', { class: 'phone-connect__copy' },
+            h('h2', { class: 'section-title md-typescale-title-medium phone-h2' }, 'Collega lo smartphone via USB'),
+            h('p', {}, 'Scegli le cartelle da copiare: i file già importati vengono saltati automaticamente.'))),
+        h('md-filled-button', { disabled: busy || undefined, onclick: () => { S.error = null; loadDevices(); } },
+          icon('phonelink_setup', { slot: 'icon' }), 'Cerca telefono')),
+      h('div', { class: 'phone-os-grid' },
+        h('div', { class: 'phone-os-card' },
+          h('div', { class: 'phone-os-card__head' },
+            h('span', { class: 'phone-os-card__badge', 'aria-hidden': 'true' }, icon('android')),
+            h('span', {}, 'Android'),
+            h('span', { class: 'phone-os-card__tag' }, 'MTP')),
+          h('ol', { class: 'phone-connect__steps' },
+            h('li', {}, 'Collega il cavo USB e sblocca lo schermo.'),
+            h('li', {}, 'Nella notifica USB scegli ', h('strong', {}, '«Trasferimento file»'), '.'),
+            h('li', {}, 'Premi ', h('strong', {}, 'Cerca telefono'), ' per sfogliare tutte le cartelle.'))),
+        h('div', { class: 'phone-os-card' },
+          h('div', { class: 'phone-os-card__head' },
+            h('span', { class: 'phone-os-card__badge', 'aria-hidden': 'true' }, icon('phone_iphone')),
+            h('span', {}, 'iPhone'),
+            h('span', { class: 'phone-os-card__tag' }, 'DCIM / HEIC')),
+          h('ol', { class: 'phone-connect__steps' },
+            h('li', {}, 'Collega il cavo USB e sblocca iPhone.'),
+            h('li', {}, 'Tocca ', h('strong', {}, '«Consenti»'), ' e ', h('strong', {}, '«Considera attendibile»'), '.'),
+            h('li', {}, 'Premi ', h('strong', {}, 'Cerca telefono'), ' per importare da DCIM.')))),
+      busy ? busyLine('Cerco il telefono collegato… può volerci qualche secondo.') : null,
+      !busy && S.error ? errorState({ title: 'Telefono non raggiungibile', message: S.error, onRetry: () => loadDevices() }) : null));
   } else if (!S.devices.length) {
     kids.push(busy ? busyLine('Cerco il telefono collegato…') : h('section', { class: 'card phone-empty-card' },
       emptyState({ icon: 'smartphone', title: 'Nessun telefono trovato',
-        message: 'Collega il telefono con il cavo USB, sbloccalo e scegli «Trasferimento file» (MTP) nella notifica USB. Poi riprova.',
+        message: 'Collega il telefono con il cavo USB e sbloccalo. Android: scegli «Trasferimento file» (MTP) nella notifica USB. iPhone: tocca «Consenti». Poi riprova.',
         actionLabel: 'Riprova', onAction: () => loadDevices() })));
   } else {
+    const activeDev = S.devices.find((d) => d.name === S.device);
+    const isApple = !!activeDev?.apple;
     kids.push(h('section', { class: 'card phone-device-bar' },
+      h('div', { class: 'phone-device-bar__head' },
+        h('span', { class: 'phone-status-pill' },
+          h('span', { class: 'phone-status-dot', 'aria-hidden': 'true' }),
+          'Dispositivo collegato'),
+        h('span', { class: 'phone-os-chip' },
+          icon(isApple ? 'phone_iphone' : 'android'),
+          isApple ? 'iPhone (DCIM)' : 'Android (MTP)')),
       h('div', { class: 'phone-pick' },
         h('md-outlined-select', { label: 'Telefono', 'aria-label': 'Telefono', onchange: (e) => {
           S.device = e.target.value; S.storage = S.devices.find((d) => d.name === S.device)?.storages[0] || ''; S.path = []; S.selected.clear();
@@ -345,12 +381,15 @@ function renderDevices() {
         h('md-outlined-select', { label: 'Memoria', 'aria-label': 'Memoria', onchange: (e) => {
           S.storage = e.target.value; S.path = []; S.selected.clear(); renderSelection(); loadFolder();
         } },
-          ...(S.devices.find((d) => d.name === S.device)?.storages || []).map((s) => h('md-select-option', { value: s, selected: s === S.storage ? true : undefined }, h('div', { slot: 'headline' }, s)))),
+          ...(activeDev?.storages || []).map((s) => h('md-select-option', { value: s, selected: s === S.storage ? true : undefined }, h('div', { slot: 'headline' }, s)))),
         h('md-icon-button', { 'aria-label': 'Cerca di nuovo il telefono', title: 'Cerca di nuovo', disabled: busy || undefined,
           onclick: () => loadDevices() }, icon('refresh'))),
+      isApple ? h('div', { class: 'callout callout--info phone-apple-note' },
+        icon('info'),
+        h('p', {}, 'iPhone espone la cartella DCIM (fotocamera). Per gli originali HEIC/MOV: Impostazioni › Foto › Trasferisci su Mac o PC › Conserva originali. Su Windows serve l’app Dispositivi Apple (o iTunes).')) : null,
       busy ? busyLine('Cerco il telefono collegato…') : null,
       !S.storage ? emptyState({ icon: 'lock', title: 'Memoria del telefono non disponibile',
-        message: 'Il telefono è collegato ma non mostra la memoria. Sbloccalo, lascia lo schermo acceso e scegli «Trasferimento file» (MTP) nella notifica USB. Poi premi Riprova.',
+        message: 'Il telefono è collegato ma non mostra la memoria. Sbloccalo e lascia lo schermo acceso. Android: scegli «Trasferimento file» (MTP) nella notifica USB. iPhone: tocca «Consenti». Poi premi Riprova.',
         actionLabel: 'Riprova', onAction: () => loadDevices() }) : null));
   }
   box.replaceChildren(...kids);
@@ -360,11 +399,13 @@ function renderSelection() {
   const box = UI.selSlot;
   if (!box) return;
   if (!S.devices?.length || !S.storage) { box.replaceChildren(); UI.importBtn = null; return; }
-  UI.importBtn = h('md-filled-button', { onclick: () => startImport() }, icon('file_download', { slot: 'icon' }), 'Importa');
+  UI.importBtn = h('md-filled-button', { class: 'phone-import-btn', onclick: () => startImport() }, icon('file_download', { slot: 'icon' }), 'Importa foto e video');
   UI.hint = h('p', { class: 'muted md-typescale-body-medium phone-hint', 'aria-live': 'polite' });
   UI.scanBar = h('md-linear-progress', { indeterminate: true, hidden: true });
   box.replaceChildren(h('section', { class: 'card phone-selection' },
-    h('h2', { class: 'section-title md-typescale-title-medium phone-h2' }, 'Cosa importare'),
+    h('div', { class: 'phone-selection__head' },
+      h('h2', { class: 'section-title md-typescale-title-medium phone-h2' }, 'Cosa importare'),
+      S.selected.size ? h('span', { class: 'phone-selection__count' }, plural(S.selected.size, 'cartella', 'cartelle')) : null),
     selectedSummary(),
     destField(),
     h('div', { class: 'phone-actions' }, UI.importBtn),
@@ -377,22 +418,27 @@ function renderList(focusKey) {
   const box = UI.listSlot;
   if (!box) return;
   if (!S.devices?.length || !S.storage) { box.replaceChildren(); return; }
-  const kids = [crumbs()];
-  if (S.error) kids.push(errorState({ title: 'Cartella non letta', message: S.error, onRetry: () => loadFolder() }));
-  else if (S.busy === 'folder' || !S.view) kids.push(busyLine('Caricamento cartelle…'));
-  else {
+  let metaText = '';
+  let content;
+  if (S.error) {
+    content = h('div', { class: 'phone-browser__empty' }, errorState({ title: 'Cartella non letta', message: S.error, onRetry: () => loadFolder() }));
+  } else if (S.busy === 'folder' || !S.view) {
+    content = h('div', { class: 'phone-browser__empty' }, busyLine('Caricamento cartelle…'));
+  } else {
     const list = S.view.folders || [];
     const anySub = list.some((f) => f.sub);
-    const note = anySub ? ' (le sottocartelle sono incluse nell’importazione)' : '';
-    kids.push(h('p', { class: 'muted md-typescale-body-medium' },
-      S.view.media
-        ? `${plural(S.view.media, 'file in questa cartella', 'file in questa cartella')}${note}.`
-        : (anySub ? 'Nessun file diretto in questa cartella: le sottocartelle sono incluse nell’importazione.' : 'Nessun file in questa cartella.')));
-    kids.push(list.length
-      ? h('ul', { class: 'card phone-list' }, ...list.map(folderRow))
-      : h('p', { class: 'muted md-typescale-body-medium' }, 'Nessuna sottocartella.'));
+    metaText = S.view.media
+      ? `${plural(S.view.media, 'file diretto', 'file diretti')}${anySub ? ' · sottocartelle incluse' : ''}`
+      : (anySub ? 'Sottocartelle incluse nell’importazione' : 'Cartella vuota');
+    content = list.length
+      ? h('ul', { class: 'phone-list' }, ...list.map(folderRow))
+      : h('p', { class: 'muted md-typescale-body-medium phone-browser__empty' }, 'Nessuna sottocartella.');
   }
-  box.replaceChildren(...kids);
+  box.replaceChildren(h('section', { class: 'card phone-browser' },
+    h('div', { class: 'phone-browser__head' },
+      crumbs(),
+      metaText ? h('span', { class: 'phone-browser__meta' }, metaText) : null),
+    content));
   if (focusKey) [...box.querySelectorAll('md-checkbox')].find((c) => c.dataset.key === focusKey)?.focus();
 }
 
@@ -400,15 +446,19 @@ function historyRow(r) {
   const folders = (r.folders || []).join(', ');
   const parts = [
     `${formatNumber(r.new_files)} copiati`,
-    r.skipped_known ? `${formatNumber(r.skipped_known)} già presenti non copiati` : null,
+    r.skipped_known ? `${formatNumber(r.skipped_known)} saltati` : null,
     r.errors ? `${formatNumber(r.errors)} errori` : null,
   ].filter(Boolean);
   return h('li', { class: 'phone-history__row' },
     h('div', { class: 'phone-history__head' },
-      h('strong', {}, formatDateTime(r.when)),
+      h('span', { class: 'phone-history__when' },
+        icon('smartphone'),
+        h('strong', {}, r.device || 'Telefono'),
+        h('span', { class: 'muted' }, '· ' + formatDateTime(r.when))),
       h('span', { class: `phone-history__state phone-history__state--${r.state}` }, STATE_LABEL[r.state] || r.state)),
-    h('div', { class: 'phone-hint' }, `${r.device} · ${folders || '—'}`),
-    h('div', { class: 'phone-hint' }, parts.join(' · ') || 'Nessun file copiato'),
+    h('div', { class: 'phone-history__meta' },
+      folders ? h('span', {}, folders) : null,
+      h('strong', {}, parts.join(' · ') || 'Nessun file copiato')),
     r.dest ? h('code', { class: 'phone-history__dest' }, r.dest) : null,
     r.error ? h('div', { class: 'phone-hint phone-history__error' }, r.error) : null);
 }

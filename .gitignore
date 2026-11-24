@@ -39,6 +39,7 @@ desktop.ini
 
 # Materiale personale e locale (screenshot dell'archivio vero, video, appunti interni)
 _privato/
+video/
 
 # Varie
 node_modules/

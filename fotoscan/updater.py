@@ -1,4 +1,4 @@
-"""Aggiornamenti di FotoScan dalle Release di GitHub.
+"""Aggiornamenti di PhotoScan dalle Release di GitHub.
 
 Tre passi, ognuno separato:
 1. check()          chiede a GitHub l'elenco delle Release e confronta la versione con quella installata.
@@ -6,7 +6,7 @@ Tre passi, ognuno separato:
                     Il programma in uso non viene toccato: l'aggiornamento resta "pronto" (pending.json).
 3. apply_pending()  installa l'aggiornamento pronto. Lo chiama il launcher (fotoscan.desktop) PRIMA di avviare
                     il server, quindi nessun file e' in uso. Prima fa una copia di riserva dei file sostituiti;
-                    se qualcosa va storto la ripristina e FotoScan parte con la versione precedente.
+                    se qualcosa va storto la ripristina e PhotoScan parte con la versione precedente.
 
 Rete: le connessioni passano da netguard.download_window(), aperta solo verso github.com e
 githubusercontent.com e solo per la durata della richiesta. A GitHub arriva soltanto la richiesta
@@ -35,7 +35,7 @@ from .version import __version__, update_repo
 log = logging.getLogger("fotoscan")
 
 API = "https://api.github.com"
-USER_AGENT = "FotoScan-updater"
+USER_AGENT = "PhotoScan-updater"
 TIMEOUT = 20
 CHUNK = 256 * 1024
 KEEP_BACKUPS = 2
@@ -204,7 +204,7 @@ def _release_info(r: dict) -> dict:
 
 def fetch_releases(repo: str) -> list[dict]:
     """Elenco delle Release (unica richiesta del controllo). Sostituibile nei test."""
-    with netguard.download_window("controllo aggiornamenti di FotoScan"):
+    with netguard.download_window("controllo aggiornamenti di PhotoScan"):
         with _open(f"{API}/repos/{repo}/releases?per_page=20") as r:
             return json.loads(r.read().decode("utf-8"))
 
@@ -215,7 +215,7 @@ def check(cache_dir, prerelease: bool = False, current: str = __version__) -> di
     state: dict[str, Any] = {"checked_at": datetime.now().isoformat(timespec="seconds"), "current": current,
                              "latest": None, "available": False, "error": None}
     if not repo:
-        state["error"] = "Aggiornamenti non configurati in questa copia di FotoScan."
+        state["error"] = "Aggiornamenti non configurati in questa copia di PhotoScan."
     else:
         try:
             rel = _pick_release(fetch_releases(repo), prerelease)
@@ -253,7 +253,7 @@ def fetch_zip(url: str, dest: Path, progress: Callable[[int, int], None] | None 
               cancelled: Callable[[], bool] | None = None) -> None:
     """Scarica lo zip della Release in dest. Sostituibile nei test."""
     tmp = dest.with_name(dest.name + ".part")
-    with netguard.download_window("download dell'aggiornamento di FotoScan"):
+    with netguard.download_window("download dell'aggiornamento di PhotoScan"):
         with _open(url, accept="application/octet-stream") as r, open(tmp, "wb") as out:
             total = int(r.headers.get("Content-Length") or 0)
             done = 0
@@ -276,7 +276,7 @@ def fetch_parts(parts: list[dict], dest: Path, progress: Callable[[int, int], No
     tmp = dest.with_name(dest.name + ".part")
     total = sum(p.get("size") or 0 for p in parts)
     done = 0
-    with netguard.download_window("download dell'aggiornamento di FotoScan"):
+    with netguard.download_window("download dell'aggiornamento di PhotoScan"):
         with open(tmp, "wb") as out:
             for p in parts:
                 with _open(p["url"], accept="application/octet-stream") as r:
@@ -319,7 +319,7 @@ def download(cache_dir, info: dict, approved: bool = False,
             raise UpdateError("Il file scaricato è danneggiato. Riprova.") from e
         missing = [p for p in REQUIRED if not (staging / p).is_file()]
         if missing:
-            raise UpdateError("Il pacchetto scaricato non contiene FotoScan (" + ", ".join(missing) + ").")
+            raise UpdateError("Il pacchetto scaricato non contiene PhotoScan (" + ", ".join(missing) + ").")
         staged_version = read_version(staging)
         if not staged_version or not is_newer(staged_version, read_version(Path(__file__).resolve().parent.parent) or __version__):
             raise UpdateError(f"Il pacchetto scaricato ha la versione {staged_version or '?'}, non più recente di quella installata.")
@@ -369,8 +369,8 @@ def _download_exe(cache_dir, info: dict, approved: bool, progress, cancelled) ->
 # ------------------------------------------------------------------ 2b. installazione dell'eseguibile
 EXE_NAME = "PhotoScan.exe"
 
-# Script PowerShell lanciato dal launcher alla chiusura di FotoScan (PhotoScan.exe non puo' sostituire se stesso).
-# Aspetta che il programma esca, sposta la cartella vecchia in backup, mette la nuova e riapre FotoScan.
+# Script PowerShell lanciato dal launcher alla chiusura di PhotoScan (PhotoScan.exe non puo' sostituire se stesso).
+# Aspetta che il programma esca, sposta la cartella vecchia in backup, mette la nuova e riapre PhotoScan.
 # Se qualcosa va storto ripristina la vecchia. Scritto in UTF-8 con BOM per PowerShell 5.1.
 EXE_HELPER = r"""param(
   [string]$AppDir, [string]$Staged, [string]$Backup, [string]$ExeName, [string]$ProcessName = 'PhotoScan',
@@ -382,7 +382,7 @@ function Log($m) { Add-Content -LiteralPath $LogFile -Value ("{0} {1}" -f (Get-D
 Log "installazione $FromVersion -> $Version"
 $deadline = (Get-Date).AddSeconds(120)
 while (Get-Process -Name $ProcessName -ErrorAction SilentlyContinue) {
-  if ((Get-Date) -gt $deadline) { Log 'FotoScan ancora aperto: installazione rinviata'; exit 2 }
+  if ((Get-Date) -gt $deadline) { Log 'PhotoScan ancora aperto: installazione rinviata'; exit 2 }
   Start-Sleep -Milliseconds 500
 }
 $movedOld = $false
@@ -417,7 +417,7 @@ if (-not $NoLaunch) { Start-Process -FilePath (Join-Path $AppDir $ExeName) -Work
 
 def start_exe_update(cache_dir, app_dir: Path, *, no_launch: bool = False, process_name: str = "PhotoScan") -> bool:
     """Se c'e' un eseguibile scaricato e approvato, lancia lo script che lo installa dopo la chiusura.
-    True = installazione avviata (lo script riapre FotoScan da solo)."""
+    True = installazione avviata (lo script riapre PhotoScan da solo)."""
     pending = read_pending(cache_dir)
     if not pending or pending.get("kind") != "exe" or not pending.get("approved"):
         return False
@@ -528,7 +528,7 @@ def apply_pending(root: Path, cache_dir, force: bool = False, logger: Callable[[
     except Exception as e:
         say(f"installazione fallita ({type(e).__name__}: {e}): ripristino della versione {old_version}")
         _restore(root, backup, names)  # le voci nuove, senza copia di riserva, vengono solo tolte
-        raise UpdateError(f"Installazione dell'aggiornamento non riuscita: {e}. FotoScan resta alla versione {old_version}.") from e
+        raise UpdateError(f"Installazione dell'aggiornamento non riuscita: {e}. PhotoScan resta alla versione {old_version}.") from e
 
     new_req = (root / "requirements.txt").read_bytes() if (root / "requirements.txt").exists() else b""
     result = {"from": old_version, "to": new_version, "requirements_changed": new_req != old_req,
@@ -545,7 +545,7 @@ def apply_pending(root: Path, cache_dir, force: bool = False, logger: Callable[[
 
 def install_requirements(root: Path, python: str, timeout: int = 1800) -> tuple[bool, str]:
     """pip install -r requirements.txt (le dipendenze sono cambiate). pip e' un processo separato:
-    non passa dal blocco di rete di FotoScan e scarica da PyPI."""
+    non passa dal blocco di rete di PhotoScan e scarica da PyPI."""
     try:
         proc = subprocess.run([python, "-m", "pip", "install", "--disable-pip-version-check", "-r", "requirements.txt"],
                               cwd=str(root), capture_output=True, text=True, timeout=timeout,

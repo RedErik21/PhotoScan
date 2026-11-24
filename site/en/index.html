@@ -15,7 +15,7 @@
 <nav class="nav" aria-label="Main navigation">
   <div class="wrap nav__inner">
     <a class="nav__brand" href="#">
-      <img class="nav__logo-img" src="../favicon.svg" alt="" width="32" height="32" aria-hidden="true">
+      <img class="nav__logo-img" src="../icon-192.png" alt="" width="32" height="32" aria-hidden="true">
       <span>PhotoScan</span>
     </a>
 
@@ -54,7 +54,7 @@
     <div class="hero__content">
       <span class="hero__badge">
         <span class="hero__dot" aria-hidden="true"></span>
-        Version 2.0 · Windows · Free and open source (MIT)
+        Version 0.1.4 · Windows · Free and open source (MIT)
       </span>
       <h1>Bring order to years of photos, <span class="hero__grad">100% locally</span>.</h1>
       <p class="hero__lead">
@@ -77,24 +77,29 @@
       <div class="hero__pillars">
         <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Zero cloud uploads</span>
         <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Originals always read-only</span>
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Import from Android &amp; iPhone via USB</span>
         <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>SigLIP2 AI on NVIDIA GPU or CPU</span>
       </div>
     </div>
 
     <div class="hero__stage">
-      <div class="window-frame">
+      <div class="window-frame window-frame--video">
         <div class="window-frame__bar" aria-hidden="true">
           <span class="window-frame__dots"><i></i><i></i><i></i></span>
-          <span class="window-frame__title">PhotoScan — Home</span>
+          <span class="window-frame__title">PhotoScan — Desktop Preview</span>
         </div>
-        <img class="window-frame__img"
-             src="../img/01-home.png"
-             data-hero-img
-             data-light-src="../img/01-home.png"
-             data-dark-src="../img/13-home-scuro.png"
-             data-lightbox
-             data-caption="Home: archive overview, memories and quick actions at a glance"
-             alt="PhotoScan desktop app interface — Home">
+        <div class="window-frame__media">
+          <video class="window-frame__video"
+                 src="../img/promo-pc.mp4"
+                 poster="../img/13-home-scuro.png"
+                 autoplay muted loop playsinline preload="metadata"
+                 aria-label="PhotoScan desktop app walkthrough video">
+          </video>
+          <button type="button" class="video-toggle" data-video-toggle aria-label="Pause or play preview video" title="Pause / Play">
+            <svg class="ic-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+            <svg class="ic-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="display:none"><polygon points="6,4 20,12 6,20"/></svg>
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -157,6 +162,23 @@
         <h3>Dedicated desktop app</h3>
         <p>Launches in its own window from the desktop shortcut, with light and dark themes and a responsive layout for smaller screens.</p>
       </article>
+    </div>
+
+    <div class="phone-banner">
+      <div class="phone-banner__left">
+        <div class="feat-card__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2.5"/><path d="M12 18h.01"/></svg>
+        </div>
+        <div>
+          <h3>Direct import from Android &amp; iPhone</h3>
+          <p>Plug your phone into your PC over USB, pick folders and copy photos and videos locally: your phone stays read-only, already-copied files are skipped automatically, and transfers can be resumed anytime.</p>
+        </div>
+      </div>
+      <div class="phone-banner__tags">
+        <span class="phone-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Android (MTP)</span>
+        <span class="phone-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>iPhone (USB / HEIC)</span>
+        <span class="phone-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>Read-only</span>
+      </div>
     </div>
   </div>
 </section>
@@ -359,6 +381,10 @@ winget install Gyan.FFmpeg                                                      
         <p>Yes. Closing the app stops indexing cleanly, and reopening resumes from the files not yet processed.</p>
       </details>
       <details>
+        <summary>Can I import photos directly from Android and iPhone?</summary>
+        <p>Yes. Connect your phone via USB: PhotoScan supports both Android (MTP) and iPhone, reads your device in read-only mode, skips already-copied files automatically, and handles HEIC photos and videos.</p>
+      </details>
+      <details>
         <summary>Which formats are supported?</summary>
         <p>JPEG, PNG, WebP, TIFF, HEIC (built-in support) and videos (MP4, MOV, MKV, etc. via FFmpeg). HEIC and TIFF files are displayed via locally generated JPEG previews.</p>
       </details>
@@ -396,6 +422,10 @@ winget install Gyan.FFmpeg                                                      
       <div class="req-card">
         <div class="req-card__label">App window</div>
         <div class="req-card__val">WebView2 / Edge or Google Chrome</div>
+      </div>
+      <div class="req-card">
+        <div class="req-card__label">Phone import</div>
+        <div class="req-card__val">Android (MTP) &amp; iPhone via USB cable</div>
       </div>
       <div class="req-card">
         <div class="req-card__label">Disk space</div>
