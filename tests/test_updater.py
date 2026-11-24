@@ -130,14 +130,18 @@ def test_check_saves_state_and_errors():
 
 
 def test_check_without_repo_makes_no_request():
+    from fotoscan import version
     orig_repo, orig_fetch = os.environ.pop("FOTOSCAN_UPDATE_REPO"), updater.fetch_releases
+    orig_default = version.UPDATE_REPO
     try:
+        version.UPDATE_REPO = ""  # repository di default non impostato: nessuna richiesta
         def never(repo):
             raise AssertionError("nessuna richiesta senza repository")
         updater.fetch_releases = never
         st = updater.check(_TMP / "cache_norepo")
         assert "non configurati" in st["error"]
     finally:
+        version.UPDATE_REPO = orig_default
         os.environ["FOTOSCAN_UPDATE_REPO"] = orig_repo
         updater.fetch_releases = orig_fetch
     print("ok check_without_repo")

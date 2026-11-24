@@ -11,7 +11,7 @@ __version__ = "0.1.2"
 
 # "proprietario/repository" su GitHub. Vuoto = aggiornamenti disattivati (nessun controllo, nessuna connessione).
 # FOTOSCAN_UPDATE_REPO lo sostituisce (test, fork).
-UPDATE_REPO = ""
+UPDATE_REPO = "RedErik21/PhotoScan"
 
 
 def update_repo() -> str:
