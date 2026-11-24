@@ -6,6 +6,8 @@
   <title>PhotoScan — Organize your photo archive, 100% locally</title>
   <meta name="description" content="PhotoScan indexes the photo and video archive on your PC, recognizes what is in each picture with AI and suggests an organization by year, month and event. No data leaves your computer.">
   <link rel="icon" type="image/svg+xml" href="../favicon.svg">
+  <link rel="alternate icon" type="image/x-icon" href="../favicon.ico">
+  <link rel="apple-touch-icon" href="../icon-192.png">
   <link rel="stylesheet" href="../style.css">
 </head>
 <body>
@@ -13,13 +15,7 @@
 <nav class="nav" aria-label="Main navigation">
   <div class="wrap nav__inner">
     <a class="nav__brand" href="#">
-      <span class="nav__logo" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="17" height="17">
-          <rect x="3" y="5" width="18" height="14" rx="3"/>
-          <circle cx="12" cy="12" r="3.5"/>
-          <path d="M8 5l1.5-2h5L16 5"/>
-        </svg>
-      </span>
+      <img class="nav__logo-img" src="../favicon.svg" alt="" width="32" height="32" aria-hidden="true">
       <span>PhotoScan</span>
     </a>
 
@@ -146,6 +142,13 @@
         </div>
         <h3>People (optional)</h3>
         <p>Groups recurring faces and lets you name them. Face recognition is off by default and only runs if you enable it.</p>
+      </article>
+      <article class="feat-card">
+        <div class="feat-card__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/><path d="M12 8v6M9 11l3 3 3-3"/></svg>
+        </div>
+        <h3>Import from phone</h3>
+        <p>Copies photos and videos from an Android phone connected via USB. The phone is only read, nothing is deleted, and existing files are never overwritten.</p>
       </article>
       <article class="feat-card">
         <div class="feat-card__icon" aria-hidden="true">

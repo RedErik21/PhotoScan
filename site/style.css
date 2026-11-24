@@ -141,16 +141,13 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .nav__brand:hover { text-decoration: none; }
 
-.nav__logo {
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  background: linear-gradient(135deg, #4b47c9 0%, #7c5cff 55%, #f08a5d 100%);
-  display: grid;
-  place-items: center;
-  color: #fff;
-  box-shadow: 0 4px 12px -2px rgba(75, 71, 201, 0.45);
+.nav__logo-img {
+  width: 32px;
+  height: 32px;
+  display: block;
+  border-radius: 8px;
   flex: none;
+  filter: drop-shadow(0 3px 8px rgba(75, 71, 201, 0.32));
 }
 
 .nav__links {
