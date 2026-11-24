@@ -135,7 +135,8 @@ export async function mountSection(container) {
       title: restartable ? `Installare FotoScan ${v}?` : `Preparare l’installazione di FotoScan ${v}?`,
       message: restartable
         ? 'FotoScan si chiude, installa la nuova versione e si riapre. Un’analisi in corso viene interrotta e riprende alla riapertura.'
-        : 'L’aggiornamento verrà installato quando chiudi e riapri FotoScan.',
+        : (data.frozen ? 'L’aggiornamento verrà installato quando chiudi FotoScan: poi l’app si riapre da sola.'
+          : 'L’aggiornamento verrà installato quando chiudi e riapri FotoScan.'),
       confirmLabel: restartable ? 'Installa e riavvia' : 'Va bene',
     });
     if (!ok || disposed) return;
@@ -144,7 +145,8 @@ export async function mountSection(container) {
       showSnackbar('Riavvio di FotoScan…');
       await window.pywebview.api.restart_app();
     } else {
-      showSnackbar('Chiudi e riapri FotoScan per completare l’aggiornamento.', { duration: 8000 });
+      showSnackbar(data.frozen ? 'Chiudi FotoScan: l’aggiornamento si installa e l’app si riapre.'
+        : 'Chiudi e riapri FotoScan per completare l’aggiornamento.', { duration: 8000 });
     }
   });
 
@@ -193,9 +195,9 @@ export async function mountSection(container) {
       out.push(callout('info', 'terminal', 'Copia scaricata con git',
         h('p', {}, 'Puoi cercare gli aggiornamenti, ma per installarli usa «git pull» nella cartella di FotoScan.')));
     }
-    if (d.frozen) {
-      out.push(callout('info', 'download', 'Versione con eseguibile',
-        h('p', {}, 'Puoi cercare gli aggiornamenti. Per installarne uno, scarica PhotoScan.exe dalla pagina Release e sostituisci il file attuale.')));
+    if (d.frozen && !d.exe_ready && !!d.check?.latest) {
+      out.push(callout('info', 'download', 'Pacchetto Windows non ancora pubblicato',
+        h('p', {}, 'Questa versione è disponibile ma la Release non include ancora PhotoScan.exe: scaricala dalla pagina Release.')));
     }
     if (d.last_install && d.last_install.to === d.current) {
       out.push(callout('ok', 'task_alt', `Aggiornato alla versione ${d.last_install.to}`,
@@ -213,7 +215,7 @@ export async function mountSection(container) {
           h('md-text-button', { onclick: discard, disabled: !!busy }, icon('close', { slot: 'icon' }), 'Annulla'))));
     } else if (p) {
       const actions = [
-        h('md-filled-button', { onclick: install, disabled: !!busy || d.git_checkout || d.frozen },
+        h('md-filled-button', { onclick: install, disabled: !!busy || d.git_checkout },
           icon('system_update_alt', { slot: 'icon' }), canRestart() ? 'Installa e riavvia' : 'Installa alla riapertura'),
         h('md-text-button', { onclick: discard, disabled: !!busy }, 'Annulla aggiornamento'),
       ];
@@ -229,7 +231,7 @@ export async function mountSection(container) {
         h('p', {}, l.published_at ? `Pubblicata il ${formatDateTime(l.published_at)}.` : '')));
       if (l.notes) out.push(h('pre', { class: 'upd-notes' }, l.notes));
       out.push(h('div', { class: 'upd-actions' },
-        h('md-filled-button', { onclick: download, disabled: !!busy || d.git_checkout || d.frozen },
+        h('md-filled-button', { onclick: download, disabled: !!busy || d.git_checkout || (d.frozen && !d.exe_ready) },
           icon('download', { slot: 'icon' }), busy === 'download' ? 'Avvio del download…' : 'Scarica'),
         l.html_url ? h('md-text-button', { href: l.html_url, target: '_blank', rel: 'noopener' },
           icon('open_in_new', { slot: 'icon' }), 'Novità su GitHub') : null));

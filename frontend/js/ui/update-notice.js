@@ -53,7 +53,8 @@ const canRestart = () => typeof window.pywebview?.api?.restart_app === 'function
 function model(st) {
   const job = st.download_job;
   const latest = st.check?.latest;
-  const manualOnly = st.frozen || st.git_checkout; // eseguibile o clone git: il programma non si sostituisce da solo
+  // clone git: si aggiorna con git pull. Eseguibile: si scarica solo se la Release ha PhotoScan.exe
+  const canDownload = !st.git_checkout && (!st.frozen || st.exe_ready);
 
   if (job && job.state === 'running') {
     const pct = job.total ? Math.round((100 * job.done) / job.total) : null;
@@ -65,7 +66,8 @@ function model(st) {
   if (p) {
     const queued = p.approved || st.settings?.update_auto_install;
     if (queued) {
-      return { key: `queued-${p.version}`, text: `FotoScan ${p.version} verrà installato alla prossima apertura.`,
+      const when = st.frozen ? 'alla chiusura di FotoScan' : 'alla prossima apertura';
+      return { key: `queued-${p.version}`, text: `FotoScan ${p.version} verrà installato ${when}.`,
         actions: canRestart() ? [restartButton()] : [] };
     }
     return { key: `ready-${p.version}`, text: `FotoScan ${p.version} è pronto da installare.`,
@@ -74,9 +76,9 @@ function model(st) {
 
   if (st.check?.available && latest) {
     const v = latest.version;
-    const actions = manualOnly
-      ? [linkButton('Apri su GitHub', latest.html_url)]
-      : [actionButton('Scarica', 'download', download, true)];
+    const actions = canDownload
+      ? [actionButton('Scarica', 'download', download, true)]
+      : [linkButton('Apri su GitHub', latest.html_url)];
     return { key: `avail-${v}`, text: `È disponibile FotoScan ${v}.`, actions };
   }
   return null;
@@ -112,16 +114,18 @@ function render() {
     banner = h('div', { class: 'fs-update-banner', role: 'status', 'aria-live': 'polite' });
     document.body.append(banner);
   }
-  banner.replaceChildren(
+  // h() ignora i null, replaceChildren no: per questo i figli passano da h() e il filtro
+  const progress = m.progress === null || m.progress === undefined ? null
+    : h('md-linear-progress', { class: 'fs-update-banner__progress', value: m.progress / 100 });
+  banner.replaceChildren(...[
     h('span', { class: 'fs-update-banner__icon material-symbols-outlined', 'aria-hidden': 'true' }, 'new_releases'),
     h('p', { class: 'fs-update-banner__text md-typescale-body-large' }, m.text),
     h('div', { class: 'fs-update-banner__actions' },
       ...m.actions,
       h('md-text-button', { onclick: () => dismiss(m.key) }, 'Più tardi'),
       h('md-text-button', { onclick: () => { location.hash = SETTINGS_HASH; } }, 'Dettagli')),
-    m.progress === null || m.progress === undefined ? null
-      : h('md-linear-progress', { class: 'fs-update-banner__progress', value: m.progress / 100 })
-  );
+    progress,
+  ].filter(Boolean));
   if (lastState?.download_job?.state === 'running') startPolling(); else stopPolling();
 }
 

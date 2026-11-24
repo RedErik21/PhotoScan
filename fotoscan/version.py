@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 
 # "proprietario/repository" su GitHub. Vuoto = aggiornamenti disattivati (nessun controllo, nessuna connessione).
 # FOTOSCAN_UPDATE_REPO lo sostituisce (test, fork).

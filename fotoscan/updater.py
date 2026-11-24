@@ -92,7 +92,7 @@ def updates_dir(cache_dir: str | Path) -> Path:
 
 def _read_json(p: Path) -> dict | None:
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(p.read_text(encoding="utf-8-sig"))  # tollera il BOM di PowerShell
         return data if isinstance(data, dict) else None
     except (OSError, ValueError):
         return None
@@ -170,9 +170,27 @@ def _pick_release(releases: list[dict], prerelease: bool) -> dict | None:
     return best
 
 
+_EXE_ASSET_RE = re.compile(r"^PhotoScan-(?P<v>\d[\w.\-]*?)-windows\.zip(?:\.(?P<n>\d{3}))?$")
+
+
+def _exe_assets(assets: list, version: str) -> list[dict]:
+    """Asset dell'eseguibile per Windows della versione `version`: PhotoScan-<v>-windows.zip, oppure le parti
+    PhotoScan-<v>-windows.zip.001, .002, ... (GitHub accetta asset fino a 2 GB). In ordine di parte."""
+    found = []
+    for a in assets or []:
+        if not isinstance(a, dict):
+            continue
+        m = _EXE_ASSET_RE.match(a.get("name") or "")
+        if m and m.group("v") == version and a.get("browser_download_url"):
+            found.append((int(m.group("n") or 0), {"name": a["name"], "url": a["browser_download_url"],
+                                                   "size": int(a.get("size") or 0)}))
+    return [p for _, p in sorted(found, key=lambda t: t[0])]
+
+
 def _release_info(r: dict) -> dict:
+    version = r["tag_name"].lstrip("vV")
     return {
-        "version": r["tag_name"].lstrip("vV"),
+        "version": version,
         "tag": r["tag_name"],
         "name": r.get("name") or r["tag_name"],
         "notes": (r.get("body") or "")[:20000],
@@ -180,6 +198,7 @@ def _release_info(r: dict) -> dict:
         "prerelease": bool(r.get("prerelease")),
         "html_url": r.get("html_url"),
         "zip_url": r.get("zipball_url"),
+        "exe_assets": _exe_assets(r.get("assets"), version),
     }
 
 
@@ -251,9 +270,37 @@ def fetch_zip(url: str, dest: Path, progress: Callable[[int, int], None] | None 
     os.replace(tmp, dest)
 
 
+def fetch_parts(parts: list[dict], dest: Path, progress: Callable[[int, int], None] | None = None,
+                cancelled: Callable[[], bool] | None = None) -> None:
+    """Scarica in sequenza le parti dell'eseguibile e le unisce in un solo zip (dest)."""
+    tmp = dest.with_name(dest.name + ".part")
+    total = sum(p.get("size") or 0 for p in parts)
+    done = 0
+    with netguard.download_window("download dell'aggiornamento di FotoScan"):
+        with open(tmp, "wb") as out:
+            for p in parts:
+                with _open(p["url"], accept="application/octet-stream") as r:
+                    while True:
+                        if cancelled and cancelled():
+                            raise UpdateError("Download annullato.")
+                        buf = r.read(CHUNK)
+                        if not buf:
+                            break
+                        out.write(buf)
+                        done += len(buf)
+                        if progress:
+                            progress(done, total)
+    os.replace(tmp, dest)
+
+
 def download(cache_dir, info: dict, approved: bool = False,
-             progress: Callable[[int, int], None] | None = None, cancelled: Callable[[], bool] | None = None) -> dict:
-    """Scarica, estrae e verifica la Release `info` (da check()). Ritorna il nuovo pending."""
+             progress: Callable[[int, int], None] | None = None, cancelled: Callable[[], bool] | None = None,
+             exe: bool = False) -> dict:
+    """Scarica, estrae e verifica la Release `info` (da check()). Ritorna il nuovo pending.
+    exe=True (PhotoScan.exe): scarica gli asset Windows della Release, la cartella del programma va in staging
+    e l'installazione la fa start_exe_update() alla chiusura. exe=False (sorgente): zip del sorgente."""
+    if exe:
+        return _download_exe(cache_dir, info, approved, progress, cancelled)
     if not info or not info.get("zip_url"):
         raise UpdateError("Nessun aggiornamento da scaricare.")
     d = updates_dir(cache_dir)
@@ -285,6 +332,114 @@ def download(cache_dir, info: dict, approved: bool = False,
                "dir": str(staging), "approved": bool(approved), "downloaded_at": datetime.now().isoformat(timespec="seconds")}
     _write_json(d / "pending.json", pending)
     return pending
+
+
+def _download_exe(cache_dir, info: dict, approved: bool, progress, cancelled) -> dict:
+    parts = (info or {}).get("exe_assets") or []
+    if not parts:
+        raise UpdateError("Questa versione non include l'eseguibile per Windows: scaricala dalla pagina Release.")
+    d = updates_dir(cache_dir)
+    (d / "download").mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^0-9A-Za-z._-]", "_", info["version"])
+    zpath = d / "download" / f"photoscan-exe-{safe}.zip"
+    staging = d / "staging" / f"exe-{safe}"
+    try:
+        fetch_parts(parts, zpath, progress, cancelled)
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True)
+        try:
+            with zipfile.ZipFile(zpath) as zf:
+                _safe_extract(zf, staging)
+        except zipfile.BadZipFile as e:
+            raise UpdateError("Il file scaricato è danneggiato. Riprova.") from e
+        if not (staging / EXE_NAME).is_file() or not (staging / "_internal").is_dir():
+            raise UpdateError(f"Il pacchetto scaricato non contiene {EXE_NAME}.")
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    finally:
+        zpath.unlink(missing_ok=True)
+    pending = {"version": info["version"], "tag": info.get("tag"), "name": info.get("name"),
+               "notes": info.get("notes", ""), "dir": str(staging), "kind": "exe", "approved": bool(approved),
+               "downloaded_at": datetime.now().isoformat(timespec="seconds")}
+    _write_json(d / "pending.json", pending)
+    return pending
+
+
+# ------------------------------------------------------------------ 2b. installazione dell'eseguibile
+EXE_NAME = "PhotoScan.exe"
+
+# Script PowerShell lanciato dal launcher alla chiusura di FotoScan (PhotoScan.exe non puo' sostituire se stesso).
+# Aspetta che il programma esca, sposta la cartella vecchia in backup, mette la nuova e riapre FotoScan.
+# Se qualcosa va storto ripristina la vecchia. Scritto in UTF-8 con BOM per PowerShell 5.1.
+EXE_HELPER = r"""param(
+  [string]$AppDir, [string]$Staged, [string]$Backup, [string]$ExeName, [string]$ProcessName = 'PhotoScan',
+  [string]$Version, [string]$FromVersion, [string]$PendingFile, [string]$InstalledFile, [string]$LogFile,
+  [switch]$NoLaunch
+)
+$ErrorActionPreference = 'Stop'
+function Log($m) { Add-Content -LiteralPath $LogFile -Value ("{0} {1}" -f (Get-Date -Format s), $m) -Encoding utf8 }
+Log "installazione $FromVersion -> $Version"
+$deadline = (Get-Date).AddSeconds(120)
+while (Get-Process -Name $ProcessName -ErrorAction SilentlyContinue) {
+  if ((Get-Date) -gt $deadline) { Log 'FotoScan ancora aperto: installazione rinviata'; exit 2 }
+  Start-Sleep -Milliseconds 500
+}
+$movedOld = $false
+try {
+  Move-Item -LiteralPath $AppDir -Destination $Backup
+  $movedOld = $true
+  Move-Item -LiteralPath $Staged -Destination $AppDir
+  if (-not (Test-Path -LiteralPath (Join-Path $AppDir $ExeName))) { throw "$ExeName mancante nel pacchetto" }
+} catch {
+  Log "errore: $($_.Exception.Message): ripristino della versione $FromVersion"
+  if ($movedOld) {
+    if (Test-Path -LiteralPath $AppDir) { Remove-Item -LiteralPath $AppDir -Recurse -Force }
+    Move-Item -LiteralPath $Backup -Destination $AppDir
+  }
+  Remove-Item -LiteralPath $PendingFile -Force -ErrorAction SilentlyContinue  # pacchetto scartato: niente nuovo tentativo in loop
+  if (-not $NoLaunch) { Start-Process -FilePath (Join-Path $AppDir $ExeName) -WorkingDirectory $AppDir }
+  exit 1
+}
+Remove-Item -LiteralPath $PendingFile -Force -ErrorAction SilentlyContinue
+$info = [ordered]@{ from = $FromVersion; to = $Version; at = (Get-Date -Format s); backup = $Backup;
+  requirements_changed = $false; notes = '' }
+# senza BOM: Python legge il file con json
+[IO.File]::WriteAllText($InstalledFile, ($info | ConvertTo-Json), (New-Object Text.UTF8Encoding $false))
+# tiene solo la copia di riserva piu' recente
+$keep = (Get-Item -LiteralPath $Backup).FullName  # percorso lungo: Python puo' passare quello corto (ANDREA~1)
+Get-ChildItem -LiteralPath (Split-Path -Parent $keep) -Directory | Where-Object { $_.FullName -ne $keep } |
+  Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+Log "installata la versione $Version"
+if (-not $NoLaunch) { Start-Process -FilePath (Join-Path $AppDir $ExeName) -WorkingDirectory $AppDir }
+"""
+
+
+def start_exe_update(cache_dir, app_dir: Path, *, no_launch: bool = False, process_name: str = "PhotoScan") -> bool:
+    """Se c'e' un eseguibile scaricato e approvato, lancia lo script che lo installa dopo la chiusura.
+    True = installazione avviata (lo script riapre FotoScan da solo)."""
+    pending = read_pending(cache_dir)
+    if not pending or pending.get("kind") != "exe" or not pending.get("approved"):
+        return False
+    d = updates_dir(cache_dir)
+    (d / "backup-exe").mkdir(parents=True, exist_ok=True)
+    helper = d / "apply_exe_update.ps1"
+    helper.write_text(EXE_HELPER, encoding="utf-8-sig")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = d / "backup-exe" / f"{__version__}-{stamp}"
+    cmd = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", str(helper),
+           "-AppDir", str(app_dir), "-Staged", str(pending["dir"]), "-Backup", str(backup), "-ExeName", EXE_NAME,
+           "-Version", str(pending["version"]), "-FromVersion", __version__,
+           "-PendingFile", str(d / "pending.json"), "-InstalledFile", str(d / "installed.json"),
+           "-LogFile", str(d / "apply-exe.log")]
+    cmd += ["-ProcessName", process_name]
+    if no_launch:
+        cmd.append("-NoLaunch")
+    # niente DETACHED_PROCESS: senza console PowerShell non parte. CREATE_NO_WINDOW basta.
+    flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     creationflags=flags, close_fds=True)
+    return True
 
 
 # ------------------------------------------------------------------ 3. installazione
@@ -334,6 +489,8 @@ def apply_pending(root: Path, cache_dir, force: bool = False, logger: Callable[[
     say = logger or (lambda m: log.info(m))
     pending = read_pending(cache_dir)
     if not pending or not (pending.get("approved") or force):
+        return None
+    if pending.get("kind") == "exe":  # eseguibile: lo installa start_exe_update() alla chiusura
         return None
     if is_git_checkout(root):
         say("aggiornamento non installato: questa copia è un clone git (usa git pull)")

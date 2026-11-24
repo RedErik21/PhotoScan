@@ -193,6 +193,18 @@ def _install_pending_update() -> None:
         _message("FotoScan - aggiornamento", f"{e}\n\nFotoScan si avvia con la versione precedente.", error=True)
 
 
+def _install_exe_on_exit() -> bool:
+    """PhotoScan.exe: installa l'eseguibile approvato a programma chiuso. True = lo script e' partito."""
+    try:
+        from . import updater
+        from .config import load_config
+
+        return updater.start_exe_update(load_config().cache_dir, Path(sys.executable).parent)
+    except Exception as e:  # noqa: BLE001 - la chiusura non si blocca per un aggiornamento
+        _log_line(f"aggiornamento non installato: {e}")
+        return False
+
+
 def _relaunch() -> None:
     """Nuova istanza del launcher (dopo «Installa e riavvia»): installa l'aggiornamento e riapre la finestra."""
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
@@ -418,7 +430,9 @@ def main() -> int:
         elif restart["requested"] and state:
             _kill_tree(state["pid"])    # seconda istanza: il riavvio spegne anche il server condiviso
             _clear_state()
-        if restart["requested"]:
+        if FROZEN and _install_exe_on_exit():
+            pass                      # lo script installa e riapre FotoScan
+        elif restart["requested"]:
             _relaunch()
 
 

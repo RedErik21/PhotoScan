@@ -52,7 +52,8 @@ def status(cfg: Config | None = None) -> dict:
             "available": bool(latest and updater.is_newer(latest.get("version") or "0", __version__)),
         },
         "pending": None if not pending else {k: pending.get(k) for k in
-                                             ("version", "name", "notes", "approved", "downloaded_at")},
+                                             ("version", "name", "notes", "approved", "downloaded_at", "kind")},
+        "exe_ready": _exe_ready(latest),
         "download_job": job.public() if job else None,
         "last_install": updater.read_last_install(cfg.cache_dir),
     }
@@ -74,7 +75,8 @@ def _start_download(cfg: Config, info: dict) -> jobs.Job:
             job.update(stage="download", done=done, total=total,
                        message=f"Download di FotoScan {info['version']}: {done / 1e6:.1f} MB")
         try:
-            pending = updater.download(cfg.cache_dir, info, progress=progress, cancelled=lambda: job.cancel_requested)
+            pending = updater.download(cfg.cache_dir, info, progress=progress, cancelled=lambda: job.cancel_requested,
+                                       exe=FROZEN)
             job.update(stage="pronto", message=f"FotoScan {pending['version']} pronto da installare")
             return {"version": pending["version"]}
         finally:
@@ -95,7 +97,7 @@ def run_check(cfg: Config | None = None, auto: bool = False) -> dict:
         _check_lock.release()
     latest = state.get("latest")
     pending = updater.read_pending(cfg.cache_dir)
-    if (state.get("available") and cfg.update_auto_download and not _self_update_off()
+    if (state.get("available") and cfg.update_auto_download and not _self_update_off() and _exe_ready(latest)
             and not (pending and pending.get("version") == latest.get("version"))):
         log.info("aggiornamento %s disponibile: download automatico", latest.get("version"))
         _start_download(cfg, latest)
@@ -119,14 +121,17 @@ def startup_check() -> None:
 
 
 def _self_update_off() -> bool:
-    """Nell'eseguibile (PhotoScan.exe) o in una copia git l'app non sostituisce i propri file."""
-    return FROZEN or updater.is_git_checkout(ROOT)
+    """In una copia git l'app non sostituisce i propri file (si usa git pull). L'eseguibile si aggiorna da solo."""
+    return updater.is_git_checkout(ROOT)
 
 
 def _self_update_msg() -> str:
-    if FROZEN:
-        return "Questa copia è l'eseguibile di PhotoScan: scarica la nuova versione dalla pagina Release e sostituiscilo."
     return "Questa copia di FotoScan viene da git: aggiornala con «git pull»."
+
+
+def _exe_ready(info: dict | None) -> bool:
+    """Nell'eseguibile serve l'asset Windows della Release, altrimenti non c'e' nulla da installare."""
+    return not FROZEN or bool(info and info.get("exe_assets"))
 
 
 # ------------------------------------------------------------------ API

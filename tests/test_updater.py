@@ -313,6 +313,88 @@ def test_api_flow():
     print("ok api_flow")
 
 
+
+# ------------------------------------------------------------------ eseguibile (PhotoScan.exe)
+def _exe_zip(path: Path, version: str) -> None:
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("PhotoScan/PhotoScan.exe", b"exe nuovo " + version.encode())
+        zf.writestr("PhotoScan/_internal/base.dll", b"dll " + version.encode())
+
+
+def test_exe_assets_selection():
+    assets = [
+        {"name": "PhotoScan-0.2.0-windows.zip.002", "browser_download_url": "u2", "size": 5},
+        {"name": "PhotoScan-0.2.0-windows.zip.001", "browser_download_url": "u1", "size": 9},
+        {"name": "PhotoScan-0.1.9-windows.zip", "browser_download_url": "old", "size": 1},
+        {"name": "PhotoScan-0.2.0-windows.zip", "browser_download_url": "single", "size": 3},
+        {"name": "fotoscan-source.zip", "browser_download_url": "src", "size": 2},
+    ]
+    got = updater._exe_assets(assets, "0.2.0")
+    assert [a["url"] for a in got] == ["single", "u1", "u2"], [a["url"] for a in got]
+    assert updater._exe_assets(assets[2:3], "0.2.0") == [], "versione diversa non deve valere"
+    assert [a["url"] for a in updater._exe_assets(assets[:2], "0.2.0")] == ["u1", "u2"], "parti in ordine"
+    print("ok exe_assets_selection")
+
+
+def test_exe_download_and_install():
+    import time as _t
+    cache = _TMP / "cache_exe"
+    app = _TMP / "app_exe" / "PhotoScan"
+    (app / "_internal").mkdir(parents=True)
+    (app / "PhotoScan.exe").write_bytes(b"exe vecchio")
+    (app / "_internal" / "base.dll").write_bytes(b"dll vecchio")
+    (app / "config_utente.txt").write_text("resta", encoding="utf-8")  # non e' nella cartella: non deve sparire
+    info = {"version": "0.2.0", "tag": "v0.2.0", "name": "x", "notes": "",
+            "exe_assets": [{"name": "PhotoScan-0.2.0-windows.zip", "url": "u", "size": 1}]}
+    orig_parts = updater.fetch_parts
+
+    def fake_parts(parts, dest, progress=None, cancelled=None):
+        _exe_zip(dest, "0.2.0")
+
+    updater.fetch_parts = fake_parts
+    try:
+        pending = updater.download(cache, info, approved=True, exe=True)
+    finally:
+        updater.fetch_parts = orig_parts
+    assert pending["kind"] == "exe" and (Path(pending["dir"]) / "PhotoScan.exe").is_file()
+    assert updater.start_exe_update(cache, app, no_launch=True, process_name="NessunProcessoFotoScanXYZ")
+    end = _t.time() + 60
+    while not (cache / "updates" / "installed.json").exists() and _t.time() < end:
+        _t.sleep(0.2)
+    installed = json.loads((cache / "updates" / "installed.json").read_text(encoding="utf-8-sig"))
+    assert installed["to"] == "0.2.0", installed
+    assert (app / "PhotoScan.exe").read_bytes() == b"exe nuovo 0.2.0"
+    assert (app / "_internal" / "base.dll").read_bytes() == b"dll 0.2.0"
+    backup = Path(installed["backup"])
+    assert (backup / "PhotoScan.exe").read_bytes() == b"exe vecchio", "copia di riserva del vecchio"
+    assert updater.read_pending(cache) is None, "pending consumato"
+    print("ok exe_download_and_install")
+
+
+
+def test_exe_rollback_when_package_broken():
+    import time as _t
+    cache = _TMP / "cache_exe_rb"
+    app = _TMP / "app_exe_rb" / "PhotoScan"
+    (app / "_internal").mkdir(parents=True)
+    (app / "PhotoScan.exe").write_bytes(b"exe vecchio")
+    staged = cache / "updates" / "staging" / "exe-rotto"
+    staged.mkdir(parents=True)
+    (staged / "_internal").mkdir()  # manca PhotoScan.exe: pacchetto rotto
+    updater._write_json(cache / "updates" / "pending.json",
+                        {"version": "0.3.0", "dir": str(staged), "kind": "exe", "approved": True})
+    assert updater.start_exe_update(cache, app, no_launch=True, process_name="NessunProcessoFotoScanXYZ")
+    log = cache / "updates" / "apply-exe.log"
+    end = _t.time() + 60
+    while not (log.exists() and "ripristino" in log.read_text(encoding="utf-8-sig")) and _t.time() < end:
+        _t.sleep(0.2)
+    assert "ripristino" in log.read_text(encoding="utf-8-sig"), "lo script doveva segnalare il ripristino"
+    assert (app / "PhotoScan.exe").read_bytes() == b"exe vecchio", "la versione vecchia torna al suo posto"
+    assert not (cache / "updates" / "installed.json").exists(), "nessuna installazione registrata"
+    assert updater.read_pending(cache) is None, "pacchetto rotto scartato"
+    print("ok exe_rollback")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     for t in tests:
