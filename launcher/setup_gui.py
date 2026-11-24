@@ -505,6 +505,21 @@ html, body {{
 }}
 @keyframes shimmer {{ from {{ background-position: 200% 0; }} to {{ background-position: -200% 0; }} }}
 
+/* Hero di caricamento (passo 1 mentre si rileva il PC) */
+.hero {{
+  display: flex; align-items: center; gap: 18px; margin-bottom: 18px;
+  padding: 18px 22px; border-radius: 20px; color: #fff;
+  background:
+    radial-gradient(120% 130% at 100% 0%, color-mix(in srgb, var(--hero-c) 68%, transparent) 0%, transparent 48%),
+    radial-gradient(95% 115% at 0% 100%, color-mix(in srgb, var(--hero-b) 92%, transparent) 0%, transparent 62%),
+    linear-gradient(145deg, var(--hero-a), var(--hero-b));
+  box-shadow: 0 14px 30px -18px var(--shadow);
+}}
+.hero__art {{ flex: none; width: 112px; }}
+.hero__art svg {{ width: 100%; height: auto; display: block; }}
+.hero__t {{ margin: 0; font-size: 1.125rem; font-weight: 700; letter-spacing: -0.01em; }}
+.hero__s {{ margin: 4px 0 0; font-size: 0.875rem; line-height: 1.45; color: rgba(255, 255, 255, 0.86); }}
+
 /* Footer fisso in basso */
 .foot {{
   flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -706,6 +721,13 @@ function renderScan() {{
   const foot = document.getElementById('foot');
   if (!S.data) {{
     body.innerHTML = `<div class="panel">
+      <div class="hero">
+        <div class="hero__art">${{ASIDE[0].art}}</div>
+        <div>
+          <p class="hero__t">Benvenuto in PhotoScan</p>
+          <p class="hero__s">Stiamo controllando il tuo PC per consigliarti la configurazione giusta. Ci vuole solo un momento.</p>
+        </div>
+      </div>
       <h1 class="title">Analisi del tuo computer</h1>
       <p class="lead">Stiamo rilevando processore, memoria RAM, scheda video NVIDIA e spazio libero su disco…</p>
       <div class="hw-grid"><div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>
