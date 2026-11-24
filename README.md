@@ -20,23 +20,28 @@ Altre schermate in [`docs/screenshots/`](docs/screenshots/) (create su una libre
 
 ## Installazione (Windows)
 
-Requisiti: Python 3.13 e, consigliata, una scheda NVIDIA (funziona anche solo con la CPU, più lentamente).
+1. Scarica **PhotoScan-Setup.exe** dall'[ultima Release](https://github.com/RedErik21/PhotoScan/releases/latest).
+2. Aprilo e segui la procedura guidata: il programma controlla il PC e propone la configurazione migliore.
+3. Al termine trovi l'icona **PhotoScan** sul Desktop.
+
+Il modello di riconoscimento si scarica una sola volta, al primo avvio. Nessun dato lascia il computer.
+
+<details>
+<summary>Per sviluppatori: installazione dal codice</summary>
+
+Requisiti: Python 3.13 e, consigliata, una scheda NVIDIA.
 
 ```powershell
-git clone <url-del-repository> PhotoScan
+git clone https://github.com/RedErik21/PhotoScan.git
 cd PhotoScan
-copy config.example.json config.json   # facoltativo: l'app lo crea al primo avvio
 python -m venv .venv
 .\.venv\Scripts\activate
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126   # GPU NVIDIA
-# oppure, solo CPU:  pip install torch torchvision
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126   # GPU NVIDIA (oppure: pip install torch torchvision)
 pip install -r requirements.txt
-winget install Gyan.FFmpeg          # per i video (fotogrammi e durata)
+winget install Gyan.FFmpeg          # facoltativo, per i video
 ```
 
-Il modello (`google/siglip2-base-patch16-224`, circa 400 MB) viene scaricato da Hugging Face
-al primo utilizzo. Per le foto HEIC serve `pillow-heif` (già in `requirements.txt`).
-Il browser usato per la finestra è Microsoft Edge (già presente su Windows 10/11) oppure Google Chrome.
+</details>
 
 ## Avvio
 
