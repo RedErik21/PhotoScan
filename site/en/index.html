@@ -481,35 +481,53 @@
       <div class="sec-head">
         <span class="sec-eyebrow">Quick start</span>
         <h2>Installation (Windows)</h2>
-        <p>Requires Python 3.13 and, recommended, an NVIDIA GPU. Also runs CPU-only if no NVIDIA card is present.</p>
+        <p>Download a single file, open it and follow the guided setup. The program checks your PC and picks the best configuration for you.</p>
       </div>
 
-      <div class="term">
-        <div class="term__head">
-          <div class="term__left">
-            <span class="window-frame__dots" aria-hidden="true"><i></i><i></i><i></i></span>
-            <span>PowerShell</span>
+      <div class="install-card">
+        <div class="install-card__top">
+          <div class="install-card__info">
+            <div class="feat-card__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+            </div>
+            <div>
+              <h3>PhotoScan-Setup.exe</h3>
+              <p>Guided installer for Windows 10 &amp; 11 · Automatically detects NVIDIA GPU or CPU.</p>
+            </div>
           </div>
-          <button type="button" class="term__copy" data-copy-target="install-cmd" data-copied-label="Copied!">
+          <a class="btn btn--primary install-card__cta"
+            href="https://github.com/RedErik21/PhotoScan/releases/latest" target="_blank" rel="noopener">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="9" y="9" width="13" height="13" rx="2" />
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
             </svg>
-            <span>Copy</span>
-          </button>
+            Download PhotoScan-Setup.exe
+          </a>
         </div>
-        <pre><code id="install-cmd">git clone https://github.com/RedErik21/PhotoScan.git
-cd PhotoScan
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126   # NVIDIA GPU (or: pip install torch torchvision)
-pip install -r requirements.txt
-winget install Gyan.FFmpeg                                                         # optional, for videos</code></pre>
+
+        <ol class="install-steps">
+          <li>
+            <strong>Download the program</strong>
+            <span>Open the latest published version and download <code>PhotoScan-Setup.exe</code>.</span>
+          </li>
+          <li>
+            <strong>Open and follow the steps</strong>
+            <span>The program checks your computer and suggests the recommended package. You can change it before installing.</span>
+          </li>
+          <li>
+            <strong>Install and launch</strong>
+            <span>A desktop icon is created. The recognition model is downloaded once, on first launch.</span>
+          </li>
+        </ol>
       </div>
 
       <p class="install-note">
-        On first use, the recognition model (~400 MB) is downloaded once.
-        Start PhotoScan with <code>.\.venv\Scripts\pythonw.exe -m fotoscan.desktop</code> or from the desktop shortcut.
+        No data leaves your computer. Your original photos stay untouched.
       </p>
     </div>
   </section>
@@ -575,8 +593,8 @@ winget install Gyan.FFmpeg                                                      
           <div class="req-card__val">Windows 10 or 11</div>
         </div>
         <div class="req-card">
-          <div class="req-card__label">Python</div>
-          <div class="req-card__val">Python 3.13</div>
+          <div class="req-card__label">Program</div>
+          <div class="req-card__val">One file to download, no technical skills needed</div>
         </div>
         <div class="req-card">
           <div class="req-card__label">Graphics</div>

@@ -488,35 +488,53 @@
       <div class="sec-head">
         <span class="sec-eyebrow">Avvio rapido</span>
         <h2>Installazione su Windows</h2>
-        <p>Servono Python 3.13 e, consigliata, una scheda grafica NVIDIA. Senza NVIDIA funziona comunque su CPU.</p>
+        <p>Scarica un solo file, aprilo e segui la procedura guidata. Il programma verifica il tuo PC e sceglie da solo la configurazione migliore.</p>
       </div>
 
-      <div class="term">
-        <div class="term__head">
-          <div class="term__left">
-            <span class="window-frame__dots" aria-hidden="true"><i></i><i></i><i></i></span>
-            <span>PowerShell</span>
+      <div class="install-card">
+        <div class="install-card__top">
+          <div class="install-card__info">
+            <div class="feat-card__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+            </div>
+            <div>
+              <h3>PhotoScan-Setup.exe</h3>
+              <p>Installer guidato per Windows 10 e 11 · Rileva automaticamente GPU NVIDIA o CPU.</p>
+            </div>
           </div>
-          <button type="button" class="term__copy" data-copy-target="install-cmd" data-copied-label="Copiato!">
+          <a class="btn btn--primary install-card__cta"
+            href="https://github.com/RedErik21/PhotoScan/releases/latest" target="_blank" rel="noopener">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="9" y="9" width="13" height="13" rx="2" />
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
             </svg>
-            <span>Copia</span>
-          </button>
+            Scarica PhotoScan-Setup.exe
+          </a>
         </div>
-        <pre><code id="install-cmd">git clone https://github.com/RedErik21/PhotoScan.git
-cd PhotoScan
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126   # GPU NVIDIA (oppure: pip install torch torchvision)
-pip install -r requirements.txt
-winget install Gyan.FFmpeg                                                         # facoltativo, per i video</code></pre>
+
+        <ol class="install-steps">
+          <li>
+            <strong>Scarica il programma</strong>
+            <span>Apri l'ultima versione pubblicata e scarica <code>PhotoScan-Setup.exe</code>.</span>
+          </li>
+          <li>
+            <strong>Apri e segui i passi</strong>
+            <span>Il programma controlla il computer e propone il pacchetto consigliato. Puoi cambiarlo prima di installare.</span>
+          </li>
+          <li>
+            <strong>Installa e avvia</strong>
+            <span>Viene creata l'icona sul Desktop. Il modello di riconoscimento si scarica una sola volta, al primo avvio.</span>
+          </li>
+        </ol>
       </div>
 
       <p class="install-note">
-        Al primo utilizzo viene scaricato il modello di riconoscimento (~400 MB, una sola volta).
-        Avvia PhotoScan con <code>.\.venv\Scripts\pythonw.exe -m fotoscan.desktop</code> oppure dall'icona sul Desktop.
+        Nessun dato lascia il tuo computer. Le foto originali restano intatte.
       </p>
     </div>
   </section>
@@ -585,16 +603,12 @@ winget install Gyan.FFmpeg                                                      
           <div class="req-card__val">Windows 10 o 11</div>
         </div>
         <div class="req-card">
-          <div class="req-card__label">Python</div>
-          <div class="req-card__val">Python 3.13</div>
+          <div class="req-card__label">Programma</div>
+          <div class="req-card__val">Un solo file da scaricare, nessuna competenza tecnica richiesta</div>
         </div>
         <div class="req-card">
           <div class="req-card__label">Scheda grafica</div>
-          <div class="req-card__val">NVIDIA consigliata (funziona anche solo su CPU)</div>
-        </div>
-        <div class="req-card">
-          <div class="req-card__label">Finestra app</div>
-          <div class="req-card__val">WebView2 / Edge o Google Chrome</div>
+          <div class="req-card__val">NVIDIA consigliata (funziona anche solo su processore)</div>
         </div>
         <div class="req-card">
           <div class="req-card__label">Smartphone (importazione)</div>
