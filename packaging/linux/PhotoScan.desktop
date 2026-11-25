@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=PhotoScan
+Comment=Organizza l'archivio di foto e video, tutto sul tuo computer
+Exec=PhotoScan
+Icon=PhotoScan
+Categories=Graphics;Photography;
+Terminal=false
+StartupWMClass=PhotoScan

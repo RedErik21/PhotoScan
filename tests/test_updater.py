@@ -329,14 +329,44 @@ def test_exe_assets_selection():
         {"name": "PhotoScan-0.2.0-windows.zip", "browser_download_url": "single", "size": 3},
         {"name": "fotoscan-source.zip", "browser_download_url": "src", "size": 2},
     ]
-    got = updater._exe_assets(assets, "0.2.0")
+    got = updater._exe_assets(assets, "0.2.0", platform="win32")
     assert [a["url"] for a in got] == ["single", "u1", "u2"], [a["url"] for a in got]
-    assert updater._exe_assets(assets[2:3], "0.2.0") == [], "versione diversa non deve valere"
-    assert [a["url"] for a in updater._exe_assets(assets[:2], "0.2.0")] == ["u1", "u2"], "parti in ordine"
+    assert updater._exe_assets(assets[2:3], "0.2.0", platform="win32") == [], "versione diversa non deve valere"
+    assert [a["url"] for a in updater._exe_assets(assets[:2], "0.2.0", platform="win32")] == ["u1", "u2"], "parti in ordine"
     print("ok exe_assets_selection")
 
 
+def test_appimage_install_replaces_running_file():
+    """Linux: l'AppImage scaricato sostituisce quello in uso ($APPIMAGE), con copia di riserva."""
+    with tempfile.TemporaryDirectory() as td:
+        cache = Path(td) / "cache"
+        target = Path(td) / "PhotoScan-old.AppImage"
+        target.write_bytes(b"old")
+        new = updater.updates_dir(cache) / "download" / "PhotoScan-0.2.0-x86_64.AppImage"
+        new.parent.mkdir(parents=True, exist_ok=True)
+        new.write_bytes(b"new")
+        updater._write_json(updater.updates_dir(cache) / "pending.json",
+                            {"version": "0.2.0", "kind": "appimage", "approved": True, "dir": str(new)})
+        old_env = os.environ.get("APPIMAGE")
+        os.environ["APPIMAGE"] = str(target)
+        try:
+            assert updater.start_exe_update(cache, Path(td)) is True
+        finally:
+            if old_env is None:
+                os.environ.pop("APPIMAGE", None)
+            else:
+                os.environ["APPIMAGE"] = old_env
+        assert target.read_bytes() == b"new", "AppImage non sostituito"
+        backups = list((updater.updates_dir(cache) / "backup-appimage").glob("*.AppImage"))
+        assert backups and backups[0].read_bytes() == b"old", "copia di riserva mancante"
+        assert updater.read_pending(cache) is None, "pending non rimosso"
+    print("ok appimage_install_replaces_running_file")
+
+
 def test_exe_download_and_install():
+    if sys.platform != "win32":
+        print("skip exe_download_and_install (solo Windows: su Linux il pacchetto e' un AppImage)")
+        return
     import time as _t
     cache = _TMP / "cache_exe"
     app = _TMP / "app_exe" / "PhotoScan"
@@ -373,6 +403,9 @@ def test_exe_download_and_install():
 
 
 def test_exe_rollback_when_package_broken():
+    if sys.platform != "win32":
+        print("skip exe_rollback (solo Windows: il ripristino usa lo script PowerShell)")
+        return
     import time as _t
     cache = _TMP / "cache_exe_rb"
     app = _TMP / "app_exe_rb" / "PhotoScan"

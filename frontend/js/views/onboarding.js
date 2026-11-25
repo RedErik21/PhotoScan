@@ -178,7 +178,12 @@ export async function mount(root, { navigate, signal }) {
     const view = {
       empty: () => ({ error: false, text: 'Incolla il percorso della cartella oppure usa Sfoglia.' }),
       checking: () => ({ error: false, text: 'Controllo la cartella…' }),
-      ok: () => ({ error: false, text: 'Cartella valida e accessibile in lettura.' }),
+      ok: () => ({
+        error: false,
+        text: s.disk?.network
+          ? 'Disco di rete: l’analisi è più lenta e il NAS deve restare acceso.'
+          : 'Cartella valida e accessibile in lettura.',
+      }),
       is_file: () => ({ error: true, errorText: 'Questo è un file, non una cartella. Scegli la cartella che contiene le foto.' }),
       missing: () => ({ error: true, errorText: 'Questa cartella non esiste. Controlla il percorso e riprova.' }),
       error: () => ({ error: true, errorText: s.msg || 'Impossibile verificare questa cartella.' }),

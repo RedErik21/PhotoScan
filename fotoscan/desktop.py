@@ -49,8 +49,22 @@ JOB_LABELS = {
 
 
 # ------------------------------------------------------------------ utilita'
+def _zenity(args: list[str]) -> int | None:
+    """Finestra di dialogo di GNOME/KDE tramite zenity. None = zenity non disponibile."""
+    import shutil
+    if not shutil.which("zenity"):
+        return None
+    return subprocess.run(["zenity", *args], capture_output=True).returncode
+
+
 def _message(title: str, text: str, error: bool = False) -> None:
     """Finestra di dialogo nativa (funziona anche con pythonw, senza console)."""
+    if sys.platform != "win32":
+        kind = "--error" if error else "--info"
+        if _zenity([kind, f"--title={title}", f"--text={text}", "--width=480"]) is None:
+            _log_line(f"{title}: {text}")
+            print(f"{title}: {text}", file=sys.stderr)
+        return
     flags = (MB_ICONERROR if error else MB_ICONINFO) | MB_TOPMOST | MB_OK
     ctypes.windll.user32.MessageBoxW(0, text, title, flags)
 
@@ -97,6 +111,14 @@ def free_port(preferred: int = PREFERRED_PORT) -> int:
 
 def find_browser() -> str | None:
     """Edge, poi Chrome. None = usare il browser predefinito."""
+    if sys.platform != "win32":
+        import shutil
+        for name in ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable",
+                     "microsoft-edge", "microsoft-edge-stable", "brave-browser"):
+            found = shutil.which(name)
+            if found:
+                return found
+        return None
     bases = [os.environ.get("ProgramFiles(x86)", ""), os.environ.get("ProgramFiles", ""),
              os.environ.get("LOCALAPPDATA", "")]
     rel = [r"Microsoft\Edge\Application\msedge.exe", r"Google\Chrome\Application\chrome.exe"]
@@ -128,6 +150,13 @@ def _wait_healthy(port: int, proc: subprocess.Popen, timeout: float = START_TIME
 
 def _kill_tree(pid: int) -> None:
     """Termina il server e tutti i sottoprocessi (es. l'indicizzazione)."""
+    if sys.platform != "win32":
+        import signal
+        try:
+            os.killpg(pid, signal.SIGTERM)   # il server e' il capo del suo gruppo di processi (start_new_session)
+        except OSError:
+            pass
+        return
     subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
 
 
@@ -152,9 +181,10 @@ def _start_server(port: int) -> subprocess.Popen:
     with open(LOG, "a", encoding="utf-8") as log:  # azzerato da main() a ogni avvio
         log.write(f"PhotoScan: avvio server su 127.0.0.1:{port}\n")
         log.flush()
+        extra = {"creationflags": NO_WINDOW} if sys.platform == "win32" else {"start_new_session": True}
         return subprocess.Popen([_python(), "-m", "fotoscan.server", "--port", str(port)], cwd=str(ROOT),
                                 env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                                creationflags=NO_WINDOW)
+                                **extra)
 
 
 def _log_line(text: str) -> None:
@@ -240,6 +270,11 @@ def _confirm_close(desc: str) -> bool:
     text = (f"Un'operazione è in corso: {desc}." + "\n\n"
             "Chiudendo PhotoScan ora viene interrotta. L'analisi riprende da dove si è fermata; "
             "la copia dal telefono riprende saltando i file già copiati." + "\n\nChiudere comunque?")
+    if sys.platform != "win32":
+        # zenity --question: codice 0 = Sì. Senza zenity la chiusura non si puo' chiedere: si chiude e
+        # l'operazione riprende alla prossima apertura (e' riprendibile).
+        rc = _zenity(["--question", "--title=PhotoScan", f"--text={text}", "--width=480", "--default-cancel"])
+        return rc is None or rc == 0
     flags = MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_TOPMOST
     return ctypes.windll.user32.MessageBoxW(0, text, "PhotoScan", flags) == IDYES
 
@@ -360,7 +395,16 @@ def _open_app_window(url: str, restart: dict | None = None) -> bool:
 
 def _window_open(profile: Path) -> bool:
     """True se almeno un processo del browser usa il profilo dedicato (cioe' la finestra e' aperta)."""
-    ps = ("@(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and "
+    if sys.platform != "win32":
+        needle = str(profile).encode()
+        for cmd in Path("/proc").glob("[0-9]*/cmdline"):
+            try:
+                if needle in cmd.read_bytes():
+                    return True
+            except OSError:
+                continue
+        return False
+    ps =("@(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and "
           "$_.CommandLine.Contains($env:FS_PROFILE) }).Count")
     out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
                          env=dict(os.environ, FS_PROFILE=str(profile)), capture_output=True, text=True,
@@ -405,7 +449,8 @@ def main() -> int:
 
     url = f"http://127.0.0.1:{port}/"
     try:
-        if _open_app_window(url, restart):
+        # Windows: finestra WebView2 (pywebview). Linux: browser in modalita' app (niente GTK/Qt nel pacchetto).
+        if sys.platform == "win32" and _open_app_window(url, restart):
             return 0
         browser = find_browser()
         if browser:

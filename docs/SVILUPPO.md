@@ -122,6 +122,23 @@ Test:
 Il venv non include pytest: i test sono script autonomi. Il comando termina con codice 0 solo se
 tutti i file passano.
 
+## Versione Linux (AppImage)
+
+Il pacchetto Linux è un unico file `PhotoScan-<versione>-x86_64.AppImage`, costruito dentro Docker: chi lo
+costruisce ha bisogno di Docker, chi lo usa no.
+
+```powershell
+docker build -t photoscan-linux-build -f packaging/linux/Dockerfile .
+docker run --rm --entrypoint cat photoscan-linux-build /out/PhotoScan-<versione>-x86_64.AppImage > PhotoScan-<versione>-x86_64.AppImage
+```
+
+Note di progetto:
+- la finestra è il browser predefinito in modalità app (Chromium/Chrome/Edge/Brave se presenti); niente GTK o Qt;
+- l'import da telefono legge la cartella montata da GNOME o KDE (gvfs): nessun programma esterno;
+- l'aggiornamento scarica l'AppImage nuovo e lo mette al posto di quello in uso (`$APPIMAGE`), con copia di riserva;
+- ffmpeg statico è incluso nel pacchetto (video);
+- PyTorch è solo CPU: il pacchetto Linux non include CUDA.
+
 ## Pubblicare una nuova versione
 
 1. Una volta sola: in `fotoscan/version.py` impostare `UPDATE_REPO = "proprietario/repository"`.
