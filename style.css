@@ -267,9 +267,18 @@ code {
 .btn--primary {
   background: var(--brand);
   color: #fff;
+  box-shadow: 0 8px 20px -10px rgba(75, 71, 201, 0.7);
 }
 
-.btn--primary:hover { background: var(--brand-hover); }
+.btn--primary:hover {
+  background: var(--brand-hover);
+  box-shadow: 0 10px 24px -8px rgba(75, 71, 201, 0.78);
+}
+
+.btn--lg {
+  padding: 13px 22px;
+  font-size: 0.96rem;
+}
 
 .btn--ghost {
   border-color: var(--line-strong);
@@ -601,7 +610,71 @@ h2 {
   background: var(--brand);
 }
 
-/* ---------- Download Band & Specs Strip ---------- */
+/* ---------- Download Band & OS Switcher ---------- */
+.download__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px 24px;
+  margin-bottom: 20px;
+}
+
+.download__sub {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.os-switch {
+  display: inline-flex;
+  padding: 4px;
+  border-radius: 11px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--line);
+  gap: 4px;
+}
+
+.os-switch__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 600;
+  transition: color 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+}
+
+.os-switch__btn svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+.os-switch__btn:hover {
+  color: var(--ink);
+}
+
+.os-switch__btn.is-active {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgba(15, 15, 25, 0.12), 0 0 0 1px var(--line);
+}
+
+.os-pill {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
 .download__band {
   display: flex;
   flex-wrap: wrap;
@@ -610,8 +683,40 @@ h2 {
   gap: 28px;
   padding: 32px;
   border-radius: var(--radius);
-  background: var(--bg-subtle);
+  background: var(--surface);
   border: 1px solid var(--line);
+  border-top: 2px solid var(--brand);
+  box-shadow: 0 12px 34px -22px rgba(15, 15, 25, 0.25);
+}
+
+.download__band[hidden] { display: none; }
+
+.download__band--soon {
+  border-top-color: var(--line-strong);
+  background: var(--bg-subtle);
+  box-shadow: none;
+}
+
+.download__title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.download__title-row h3 {
+  margin: 0;
+}
+
+.os-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: var(--brand-soft);
+  color: var(--brand);
 }
 
 .download__text {
@@ -619,10 +724,17 @@ h2 {
   min-width: 0;
 }
 
+.download__text h3 {
+  margin: 0 0 8px;
+  font-size: 1.2rem;
+  font-weight: 720;
+  letter-spacing: -0.02em;
+}
+
 .download__text > p {
   margin: 0 0 14px;
   color: var(--muted);
-  font-size: 0.96rem;
+  font-size: 0.95rem;
 }
 
 .download__steps {
@@ -634,17 +746,33 @@ h2 {
   color: var(--ink);
 }
 
+.download__hint {
+  margin: 12px 0 0 !important;
+  font-size: 0.82rem !important;
+  color: var(--muted);
+}
+
 .download__cta {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
+  gap: 10px;
   flex: none;
 }
 
 .download__note {
   font-size: 0.82rem;
   color: var(--muted);
+  max-width: 280px;
+}
+
+.download__note a {
+  color: var(--brand);
+  font-weight: 550;
+}
+
+.download__note a:hover {
+  text-decoration: underline;
 }
 
 .specs {
@@ -860,9 +988,13 @@ footer {
 
   .safety-panel { padding: 20px 18px; }
 
+  .download__head { align-items: stretch; }
+  .os-switch { width: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .os-switch__btn { justify-content: center; min-height: 42px; }
   .download__band { padding: 22px 18px; gap: 20px; }
   .download__cta { width: 100%; }
   .download__cta .btn { width: 100%; min-height: 46px; }
+  .download__note { max-width: none; }
   .download__steps { flex-direction: column; gap: 6px; }
 
   .lightbox { padding: 64px 12px calc(84px + env(safe-area-inset-bottom)); }
