@@ -12,6 +12,7 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -427,6 +428,40 @@ def _wait_window(profile: Path, appear_timeout: float = 20) -> bool:
     return True
 
 
+def _install_linux_launcher() -> None:
+    """AppImage Linux: scrive in ~/.local/share il file .desktop e l'icona, cosi' menu e barra
+    delle applicazioni mostrano PhotoScan (e non l'icona di Chromium). Si aggiorna a ogni avvio."""
+    appimage = os.environ.get("APPIMAGE")
+    appdir = os.environ.get("APPDIR")
+    if sys.platform == "win32" or not appimage or not appdir:
+        return
+    try:
+        data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+        icon_src = Path(appdir) / "PhotoScan.png"
+        icon_dst = data / "icons" / "photoscan.png"
+        if icon_src.exists():
+            icon_dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(icon_src, icon_dst)
+        lines = [
+            "[Desktop Entry]",
+            "Type=Application",
+            "Name=PhotoScan",
+            "Comment=Organizza l'archivio di foto e video, tutto sul tuo computer",
+            f'Exec="{appimage}"',
+            f"Icon={icon_dst}",
+            "Categories=Graphics;Photography;",
+            "Terminal=false",
+            "StartupWMClass=PhotoScan",
+        ]
+        text = "\n".join(lines) + "\n"
+        target = data / "applications" / "photoscan.desktop"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists() or target.read_text(encoding="utf-8") != text:
+            target.write_text(text, encoding="utf-8")
+    except OSError:
+        pass  # menu non aggiornabile: la finestra si apre comunque
+
+
 # ------------------------------------------------------------------ main
 def main() -> int:
     state = _read_state()
@@ -455,7 +490,10 @@ def main() -> int:
         browser = find_browser()
         if browser:
             PROFILE.mkdir(parents=True, exist_ok=True)
-            subprocess.Popen([browser, f"--app={url}", f"--user-data-dir={PROFILE}",
+            extra = [] if sys.platform == "win32" else ["--class=PhotoScan"]  # WM_CLASS = StartupWMClass del .desktop
+            if sys.platform != "win32":
+                _install_linux_launcher()
+            subprocess.Popen([browser, f"--app={url}", f"--user-data-dir={PROFILE}", *extra,
                               f"--window-size={WINDOW_SIZE}", "--no-first-run", "--no-default-browser-check",
                               "--disable-session-crashed-bubble"])
             if not _wait_window(PROFILE):
