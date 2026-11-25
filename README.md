@@ -16,6 +16,17 @@ Nessuna foto viene inviata online.
 | **Galleria** | **Duplicati** | **Tema scuro** |
 | ![Galleria](docs/screenshots/02-galleria.png) | ![Duplicati](docs/screenshots/09-duplicati.png) | ![Home scura](docs/screenshots/13-home-scuro.png) |
 
+## Sito online
+
+La presentazione di PhotoScan è pubblicata su GitHub Pages:
+
+| Lingua | Link |
+| --- | --- |
+| Italiano | [rederik21.github.io/PhotoScan](https://rederik21.github.io/PhotoScan/) |
+| English | [rederik21.github.io/PhotoScan/en](https://rederik21.github.io/PhotoScan/en/) |
+
+Il download è nella sezione **Scarica** del sito, con la scelta automatica del sistema operativo. Tutte le versioni sono nella pagina [Release](https://github.com/RedErik21/PhotoScan/releases).
+
 ## Installazione (Windows)
 
 1. Scarica **PhotoScan-Setup.exe** dall'[ultima Release](https://github.com/RedErik21/PhotoScan/releases/latest).
