@@ -1,5 +1,5 @@
-# Crea la Release GitHub quando si spinge un tag v<versione> (es. v0.1.3 o v0.2.0-beta.1).
-# PhotoScan controlla le Release per gli aggiornamenti (fotoscan/updater.py) e scarica lo zip del sorgente.
+# Crea la Release GitHub con tutti gli asset Windows (Setup, GPU, CPU) e Linux (AppImage)
+# quando si spinge un tag v<versione> (es. v0.1.5 o v0.2.0-beta.1).
 name: Release
 
 on:
@@ -10,23 +10,165 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  verify:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Verifica che il tag corrisponda a fotoscan/version.py
+        id: ver
         run: |
           VER=$(python3 -c "import re; print(re.search(r'^__version__\s*=\s*[\"\x27]([^\"\x27]+)', open('fotoscan/version.py', encoding='utf-8').read(), re.M).group(1))")
           if [ "${GITHUB_REF_NAME#v}" != "$VER" ]; then
             echo "::error::Il tag $GITHUB_REF_NAME non corrisponde a __version__ = $VER in fotoscan/version.py"
             exit 1
           fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
 
-      - name: Crea la Release
+  build-linux:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Costruisci AppImage Linux (via Dockerfile)
+        run: |
+          VER="${{ needs.verify.outputs.version }}"
+          mkdir -p dist-linux
+          docker build -t photoscan-linux-build -f packaging/linux/Dockerfile .
+          docker run --rm --entrypoint cat photoscan-linux-build \
+            "/out/PhotoScan-${VER}-x86_64.AppImage" > "dist-linux/PhotoScan-${VER}-x86_64.AppImage"
+          chmod +x "dist-linux/PhotoScan-${VER}-x86_64.AppImage"
+          ls -lh dist-linux
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: dist-linux/*.AppImage
+
+  build-windows:
+    needs: verify
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Compila PhotoScan-Setup.exe (launcher)
+        shell: pwsh
+        run: |
+          python -m venv .venv-launcher
+          .\.venv-launcher\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv-launcher\Scripts\python.exe -m pip install psutil pywebview pyinstaller
+          .\.venv-launcher\Scripts\python.exe -m PyInstaller --noconfirm --distpath release-win --workpath work-launcher launcher\PhotoScan-Setup.spec
+
+      - name: Compila pacchetto Windows CPU
+        shell: pwsh
+        env:
+          VER: ${{ needs.verify.outputs.version }}
+        run: |
+          python -m venv .venv-cpu
+          .\.venv-cpu\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv-cpu\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          .\.venv-cpu\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
+          .\.venv-cpu\Scripts\python.exe -m PyInstaller --noconfirm --distpath dist-cpu --workpath work-cpu photoscan.spec
+          .\.venv-cpu\Scripts\python.exe -c @'
+          import os, pathlib, zipfile
+          ver = os.environ["VER"]
+          out = pathlib.Path("release-win") / f"PhotoScan-{ver}-windows-cpu.zip"
+          src = pathlib.Path("dist-cpu/PhotoScan")
+          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+              for p in src.rglob("*"):
+                  if p.is_file():
+                      zf.write(p, pathlib.Path("PhotoScan") / p.relative_to(src))
+          chunk = 1900 * 1024 * 1024
+          with out.open("rb") as f:
+              idx = 1
+              while True:
+                  part = out.parent / f"{out.name}.{idx:03d}"
+                  written = 0
+                  with part.open("wb") as pf:
+                      while written < chunk:
+                          b = f.read(min(16 * 1024 * 1024, chunk - written))
+                          if not b:
+                              break
+                          pf.write(b)
+                          written += len(b)
+                  if written == 0:
+                      part.unlink()
+                      break
+                  idx += 1
+          out.unlink()
+          '@
+          Remove-Item -Recurse -Force .venv-cpu, dist-cpu, work-cpu
+
+      - name: Compila pacchetto Windows GPU (CUDA)
+        shell: pwsh
+        env:
+          VER: ${{ needs.verify.outputs.version }}
+        run: |
+          python -m venv .venv-gpu
+          .\.venv-gpu\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv-gpu\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+          .\.venv-gpu\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
+          .\.venv-gpu\Scripts\python.exe -m PyInstaller --noconfirm --distpath dist-gpu --workpath work-gpu photoscan.spec
+          .\.venv-gpu\Scripts\python.exe -c @'
+          import os, pathlib, zipfile
+          ver = os.environ["VER"]
+          out = pathlib.Path("release-win") / f"PhotoScan-{ver}-windows.zip"
+          src = pathlib.Path("dist-gpu/PhotoScan")
+          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+              for p in src.rglob("*"):
+                  if p.is_file():
+                      zf.write(p, pathlib.Path("PhotoScan") / p.relative_to(src))
+          chunk = 1900 * 1024 * 1024
+          with out.open("rb") as f:
+              idx = 1
+              while True:
+                  part = out.parent / f"{out.name}.{idx:03d}"
+                  written = 0
+                  with part.open("wb") as pf:
+                      while written < chunk:
+                          b = f.read(min(16 * 1024 * 1024, chunk - written))
+                          if not b:
+                              break
+                          pf.write(b)
+                          written += len(b)
+                  if written == 0:
+                      part.unlink()
+                      break
+                  idx += 1
+          out.unlink()
+          '@
+          ls release-win
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-packages
+          path: release-win/*
+
+  release:
+    needs: [verify, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Crea la Release con tutti gli asset
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           PRE=""
           case "$GITHUB_REF_NAME" in *-*) PRE="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" --title "PhotoScan ${GITHUB_REF_NAME#v}" --generate-notes $PRE
+          ls -lh release-assets
+          gh release create "$GITHUB_REF_NAME" release-assets/* \
+            --title "PhotoScan ${{ needs.verify.outputs.version }}" \
+            --generate-notes $PRE

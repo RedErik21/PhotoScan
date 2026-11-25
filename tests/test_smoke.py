@@ -525,8 +525,4 @@ def _run_all() -> int:
 
 
 if __name__ == "__main__":
-    try:
-        import pytest  # noqa: F401
-    except ImportError:
-        sys.exit(1 if _run_all() else 0)
-    sys.exit(pytest.main([__file__, "-q"]))
+    sys.exit(1 if _run_all() else 0)

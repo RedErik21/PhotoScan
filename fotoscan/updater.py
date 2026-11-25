@@ -172,22 +172,42 @@ def _pick_release(releases: list[dict], prerelease: bool) -> dict | None:
 
 
 _EXE_ASSET_RE = re.compile(r"^PhotoScan-(?P<v>\d[\w.\-]*?)-windows\.zip(?:\.(?P<n>\d{3}))?$")
+_EXE_CPU_ASSET_RE = re.compile(r"^PhotoScan-(?P<v>\d[\w.\-]*?)-windows-cpu\.zip(?:\.(?P<n>\d{3}))?$")
 # Linux: un unico AppImage, PhotoScan-<v>-x86_64.AppImage (si sostituisce il file in uso, vedi start_exe_update)
 _APPIMAGE_ASSET_RE = re.compile(r"^PhotoScan-(?P<v>\d[\w.\-]*?)-x86_64\.AppImage$")
 
 
-def _exe_assets(assets: list, version: str, platform: str | None = None) -> list[dict]:
-    """Asset dell'eseguibile della versione `version`: su Windows PhotoScan-<v>-windows.zip (o le parti .001, .002...),
+def _detect_windows_runtime() -> str:
+    """Determina se l'installazione Windows corrente usa il pacchetto 'cpu' o 'gpu'."""
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        inst = _read_json(Path(local) / "PhotoScan" / "install.json")
+        if inst and inst.get("runtime") in ("cpu", "gpu"):
+            return inst["runtime"]
+    torch_mod = sys.modules.get("torch")
+    if torch_mod is not None:
+        return "gpu" if getattr(getattr(torch_mod, "version", None), "cuda", None) else "cpu"
+    return "gpu"
+
+
+def _exe_assets(assets: list, version: str, platform: str | None = None, runtime: str | None = None) -> list[dict]:
+    """Asset dell'eseguibile della versione `version`: su Windows PhotoScan-<v>-windows[-cpu].zip (o le parti .001, .002...),
     su Linux PhotoScan-<v>-x86_64.AppImage. In ordine di parte."""
-    rx = _EXE_ASSET_RE if (platform or sys.platform) == "win32" else _APPIMAGE_ASSET_RE
+    plat = platform or sys.platform
+    if plat == "win32":
+        rt = runtime or _detect_windows_runtime()
+        rx = _EXE_CPU_ASSET_RE if rt == "cpu" else _EXE_ASSET_RE
+    else:
+        rx = _APPIMAGE_ASSET_RE
     found = []
     for a in assets or []:
         if not isinstance(a, dict):
             continue
         m = rx.match(a.get("name") or "")
         if m and m.group("v") == version and a.get("browser_download_url"):
-            found.append((int(m.group("n") or 0), {"name": a["name"], "url": a["browser_download_url"],
-                                                   "size": int(a.get("size") or 0)}))
+            part_num = int(m.group("n") or 0) if "n" in rx.groupindex else 0
+            found.append((part_num, {"name": a["name"], "url": a["browser_download_url"],
+                                     "size": int(a.get("size") or 0)}))
     return [p for _, p in sorted(found, key=lambda t: t[0])]
 
 

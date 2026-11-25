@@ -327,12 +327,18 @@ def test_exe_assets_selection():
         {"name": "PhotoScan-0.2.0-windows.zip.001", "browser_download_url": "u1", "size": 9},
         {"name": "PhotoScan-0.1.9-windows.zip", "browser_download_url": "old", "size": 1},
         {"name": "PhotoScan-0.2.0-windows.zip", "browser_download_url": "single", "size": 3},
+        {"name": "PhotoScan-0.2.0-windows-cpu.zip.001", "browser_download_url": "cpu1", "size": 4},
+        {"name": "PhotoScan-0.2.0-x86_64.AppImage", "browser_download_url": "appimg", "size": 7},
         {"name": "fotoscan-source.zip", "browser_download_url": "src", "size": 2},
     ]
-    got = updater._exe_assets(assets, "0.2.0", platform="win32")
+    got = updater._exe_assets(assets, "0.2.0", platform="win32", runtime="gpu")
     assert [a["url"] for a in got] == ["single", "u1", "u2"], [a["url"] for a in got]
-    assert updater._exe_assets(assets[2:3], "0.2.0", platform="win32") == [], "versione diversa non deve valere"
-    assert [a["url"] for a in updater._exe_assets(assets[:2], "0.2.0", platform="win32")] == ["u1", "u2"], "parti in ordine"
+    got_cpu = updater._exe_assets(assets, "0.2.0", platform="win32", runtime="cpu")
+    assert [a["url"] for a in got_cpu] == ["cpu1"], got_cpu
+    got_linux = updater._exe_assets(assets, "0.2.0", platform="linux")
+    assert [a["url"] for a in got_linux] == ["appimg"], got_linux
+    assert updater._exe_assets(assets[2:3], "0.2.0", platform="win32", runtime="gpu") == [], "versione diversa non deve valere"
+    assert [a["url"] for a in updater._exe_assets(assets[:2], "0.2.0", platform="win32", runtime="gpu")] == ["u1", "u2"], "parti in ordine"
     print("ok exe_assets_selection")
 
 

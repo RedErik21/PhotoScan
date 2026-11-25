@@ -24,16 +24,34 @@ os.environ["FOTOSCAN_DB"] = str(DB_COPY)
 os.environ["FOTOSCAN_CACHE"] = str(_TMP / "cache")
 
 
+N_IMAGES = 1250
+N_VIDEOS = 250
+N_TOTAL = N_IMAGES + N_VIDEOS
+
+
 def _copia_catalogo() -> None:
-    """Snapshot consistente del catalogo vero (sola lettura), poi schema completo e dati di prova nel piano."""
-    src = sqlite3.connect(f"file:{SEED}?mode=ro", uri=True)
-    out = sqlite3.connect(DB_COPY)
-    src.backup(out)
-    out.close()
-    src.close()
+    """Catalogo sintetico isolato (1500 file: foto, video, date nulle/incerte, duplicati, piano)."""
     from fotoscan import db as dbm
 
-    conn = dbm.connect(str(DB_COPY))  # crea le tabelle mancanti (plan, favorites, ...)
+    conn = dbm.connect(str(DB_COPY))
+    rows = []
+    for i in range(N_TOTAL):
+        kind = "video" if i < N_VIDEOS else "image"
+        ext = "mp4" if kind == "video" else "jpg"
+        year = 2019 + (i % 6)  # 2019..2024
+        month = 1 + ((i // 6) % 12)
+        day = 1 + ((i // 72) % 28)
+        date = f"{year:04d}-{month:02d}-{day:02d}T{(i % 24):02d}:{(i % 60):02d}:00"
+        incerta = 1 if (N_VIDEOS <= i < N_VIDEOS + 40) else 0
+        rows.append((
+            f"C:\\foto\\{year}\\f_{i:04d}.{ext}", f"f_{i:04d}.{ext}", kind,
+            1000 + i, 1700000000.0 + i, f"h_{i:04d}", date, "exif", incerta, "embedded",
+        ))
+    conn.executemany(
+        "INSERT INTO files(path,name,kind,size,mtime,hash,date_taken,date_source,data_incerta,status) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?)",
+        rows,
+    )
     # piano di prova: una cartella con caratteri speciali e alcuni duplicati
     ids = [r[0] for r in conn.execute("SELECT id FROM files ORDER BY id LIMIT 300")]
     speciale = "2020/06 - Evento 100% _ 'x' & \"y\""
@@ -45,7 +63,7 @@ def _copia_catalogo() -> None:
             "INSERT OR REPLACE INTO plan(file_id, folder, context, score, is_dup, dup_of) VALUES(?,?,?,?,?,?)",
             (fid, folder, None, 0.5, is_dup, dup_of),
         )
-    # date mancanti (per testare la coda "unknown") e un file con data incerta
+    # date mancanti (per testare la coda "unknown")
     conn.execute("UPDATE files SET date_taken=NULL WHERE id IN (SELECT id FROM files ORDER BY id DESC LIMIT 25)")
     conn.commit()
     conn.close()
@@ -91,10 +109,10 @@ def test_totali_coerenti_con_db_stats():
     stats = dbm2.stats(conn)
     conn.close()
     r = _get("/api/files?dup=all&limit=1")
-    assert r.json()["total"] == stats["indicizzati"] == 14245
+    assert r.json()["total"] == stats["indicizzati"] == N_TOTAL
     dup = _get("/api/files?dup=only&limit=1").json()["total"]
     hide = _get("/api/files?limit=1").json()["total"]
-    assert hide + dup == 14245
+    assert hide + dup == N_TOTAL
     assert _get("/api/files?uncertain=1&dup=all&limit=1").json()["total"] == stats["data_incerta"]
 
 
@@ -181,9 +199,9 @@ def test_anni():
 
 # ---------------------------------------------------------------- filtri
 def test_filtri_base():
-    assert _get("/api/files?kind=video&dup=all&limit=1").json()["total"] == 2032
+    assert _get("/api/files?kind=video&dup=all&limit=1").json()["total"] == N_VIDEOS
     t = _get("/api/files?kind=image&dup=all&limit=1").json()["total"]
-    assert t == 12213
+    assert t == N_IMAGES
     for x in _get("/api/files?year=2019&dup=all&limit=500").json()["items"]:
         assert x["date"].startswith("2019")
     for x in _get("/api/files?year=2019&month=3&dup=all&limit=500").json()["items"]:
@@ -211,7 +229,7 @@ def test_filtro_preferiti_e_uncertain_e_sort():
 
 def test_ids_stessi_filtri_di_files():
     r = _get("/api/files/ids?kind=video&dup=all&limit=5000").json()
-    assert r["total"] == 2032 and len(r["ids"]) == 2032
+    assert r["total"] == N_VIDEOS and len(r["ids"]) == N_VIDEOS
     primi = [x["id"] for x in _get("/api/files?kind=video&dup=all&limit=5").json()["items"]]
     assert _get("/api/files/ids?kind=video&dup=all&limit=5").json()["ids"] == primi
 
