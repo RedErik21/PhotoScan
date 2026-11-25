@@ -27,7 +27,10 @@ class PhoneError(RuntimeError):
 def _run(args: dict, timeout: float | None = None) -> Iterator[dict]:
     """Esegue lo script con `args` (JSON nella variabile d'ambiente) e restituisce i messaggi JSON uno per riga."""
     if sys.platform != "win32":
-        raise PhoneError("L'accesso al telefono funziona solo su Windows.")
+        # Linux: il telefono e' montato in gvfs (GNOME/KDE), nessuno script esterno (vedi phone_linux.py)
+        from . import phone_linux
+        yield from phone_linux.run(args)
+        return
     env = dict(os.environ, FOTOSCAN_PHONE_ARGS=json.dumps(args, ensure_ascii=False))
     proc = subprocess.Popen(
         ["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", str(SCRIPT)],

@@ -1,0 +1,10 @@
+# Il contesto di build invia al demone Docker solo quello che serve: niente archivi, dati e build precedenti.
+.git
+build_out
+cache
+video
+_privato
+catalogo.db
+config.json
+fotoscan_ui.log
+site

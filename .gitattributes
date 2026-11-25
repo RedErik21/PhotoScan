@@ -2,3 +2,5 @@
 docs/screenshots/ export-ignore
 tools/demo/ export-ignore
 .github/ export-ignore
+*.sh text eol=lf
+packaging/linux/Dockerfile text eol=lf

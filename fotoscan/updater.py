@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import urllib.request
 import zipfile
 from datetime import datetime
@@ -113,7 +114,7 @@ def read_state(cache_dir) -> dict:
 def read_pending(cache_dir) -> dict | None:
     """Aggiornamento scaricato e pronto: {version, dir, notes, approved, downloaded_at}."""
     p = _read_json(updates_dir(cache_dir) / "pending.json")
-    if p and p.get("dir") and Path(p["dir"]).is_dir():
+    if p and p.get("dir") and Path(p["dir"]).exists():   # cartella (exe Windows) o file (AppImage Linux)
         return p
     return None
 
@@ -171,16 +172,19 @@ def _pick_release(releases: list[dict], prerelease: bool) -> dict | None:
 
 
 _EXE_ASSET_RE = re.compile(r"^PhotoScan-(?P<v>\d[\w.\-]*?)-windows\.zip(?:\.(?P<n>\d{3}))?$")
+# Linux: un unico AppImage, PhotoScan-<v>-x86_64.AppImage (si sostituisce il file in uso, vedi start_exe_update)
+_APPIMAGE_ASSET_RE = re.compile(r"^PhotoScan-(?P<v>\d[\w.\-]*?)-x86_64\.AppImage$")
 
 
-def _exe_assets(assets: list, version: str) -> list[dict]:
-    """Asset dell'eseguibile per Windows della versione `version`: PhotoScan-<v>-windows.zip, oppure le parti
-    PhotoScan-<v>-windows.zip.001, .002, ... (GitHub accetta asset fino a 2 GB). In ordine di parte."""
+def _exe_assets(assets: list, version: str, platform: str | None = None) -> list[dict]:
+    """Asset dell'eseguibile della versione `version`: su Windows PhotoScan-<v>-windows.zip (o le parti .001, .002...),
+    su Linux PhotoScan-<v>-x86_64.AppImage. In ordine di parte."""
+    rx = _EXE_ASSET_RE if (platform or sys.platform) == "win32" else _APPIMAGE_ASSET_RE
     found = []
     for a in assets or []:
         if not isinstance(a, dict):
             continue
-        m = _EXE_ASSET_RE.match(a.get("name") or "")
+        m = rx.match(a.get("name") or "")
         if m and m.group("v") == version and a.get("browser_download_url"):
             found.append((int(m.group("n") or 0), {"name": a["name"], "url": a["browser_download_url"],
                                                    "size": int(a.get("size") or 0)}))
@@ -337,10 +341,27 @@ def download(cache_dir, info: dict, approved: bool = False,
 def _download_exe(cache_dir, info: dict, approved: bool, progress, cancelled) -> dict:
     parts = (info or {}).get("exe_assets") or []
     if not parts:
-        raise UpdateError("Questa versione non include l'eseguibile per Windows: scaricala dalla pagina Release.")
+        raise UpdateError("Questa versione non include l'eseguibile per questo sistema: scaricala dalla pagina Release.")
     d = updates_dir(cache_dir)
     (d / "download").mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^0-9A-Za-z._-]", "_", info["version"])
+    if sys.platform != "win32":
+        # Linux: l'AppImage scaricato e' gia' il programma completo: nessuna estrazione
+        app = d / "download" / f"PhotoScan-{safe}-x86_64.AppImage"
+        try:
+            fetch_parts(parts, app, progress, cancelled)
+            expected = sum(int(p.get("size") or 0) for p in parts)
+            if expected and app.stat().st_size != expected:
+                raise UpdateError("Il file scaricato è incompleto. Riprova.")
+            app.chmod(0o755)
+        except Exception:
+            app.unlink(missing_ok=True)
+            raise
+        pending = {"version": info["version"], "tag": info.get("tag"), "name": info.get("name"),
+                   "notes": info.get("notes", ""), "dir": str(app), "kind": "appimage", "approved": bool(approved),
+                   "downloaded_at": datetime.now().isoformat(timespec="seconds")}
+        _write_json(d / "pending.json", pending)
+        return pending
     zpath = d / "download" / f"photoscan-exe-{safe}.zip"
     staging = d / "staging" / f"exe-{safe}"
     try:
@@ -415,11 +436,37 @@ if (-not $NoLaunch) { Start-Process -FilePath (Join-Path $AppDir $ExeName) -Work
 """
 
 
+def _install_appimage(cache_dir, pending: dict) -> bool:
+    """Linux: sostituisce l'AppImage in uso con quello scaricato (rinomina atomica: sicura anche se in esecuzione).
+    La vecchia versione resta come copia di riserva. Nessun riavvio automatico: lo fa l'utente."""
+    target = os.environ.get("APPIMAGE")          # impostata dal runtime AppImage con il percorso del file
+    src = Path(pending["dir"])
+    d = updates_dir(cache_dir)
+    if not target or not src.is_file():
+        return False                              # non eseguito come AppImage: niente da sostituire
+    target_p = Path(target)
+    backup = d / "backup-appimage" / f"{__version__}.AppImage"
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(target_p, backup)
+    os.replace(src, target_p)
+    for old in (d / "backup-appimage").glob("*.AppImage"):   # tiene solo la copia di riserva piu' recente
+        if old != backup:
+            old.unlink(missing_ok=True)
+    _write_json(d / "installed.json", {"from": __version__, "to": pending["version"],
+                                       "at": datetime.now().isoformat(timespec="seconds"), "backup": str(backup)})
+    (d / "pending.json").unlink(missing_ok=True)
+    return True
+
+
 def start_exe_update(cache_dir, app_dir: Path, *, no_launch: bool = False, process_name: str = "PhotoScan") -> bool:
     """Se c'e' un eseguibile scaricato e approvato, lancia lo script che lo installa dopo la chiusura.
     True = installazione avviata (lo script riapre PhotoScan da solo)."""
     pending = read_pending(cache_dir)
-    if not pending or pending.get("kind") != "exe" or not pending.get("approved"):
+    if not pending or not pending.get("approved"):
+        return False
+    if pending.get("kind") == "appimage":
+        return _install_appimage(cache_dir, pending)
+    if sys.platform != "win32" or pending.get("kind") != "exe":
         return False
     d = updates_dir(cache_dir)
     (d / "backup-exe").mkdir(parents=True, exist_ok=True)

@@ -2,9 +2,18 @@
 # Build: .venv\Scripts\python.exe -m PyInstaller --noconfirm photoscan.spec
 # Risultato: dist\PhotoScan\PhotoScan.exe (cartella "onedir"). I modelli NON sono inclusi:
 # si scaricano al primo uso in %LOCALAPPDATA%\PhotoScan\cache\models.
+import os
+import sys
+
 from PyInstaller.utils.hooks import collect_submodules
 
+# Lo spec gira fuori dalla cartella del progetto: senza questo, "fotoscan" non si importa e
+# collect_submodules restituisce una lista vuota (il programma poi non trova server e database).
+sys.path.insert(0, os.path.abspath("."))
+
 hidden = collect_submodules("fotoscan", filter=lambda name: name != "fotoscan.app_streamlit")
+if not any(h.startswith("fotoscan.server") for h in hidden) or "fotoscan.db" not in hidden:
+    raise SystemExit("photoscan.spec: moduli fotoscan non raccolti (fotoscan.server / fotoscan.db mancanti)")
 
 a = Analysis(
     ["photoscan.py"],

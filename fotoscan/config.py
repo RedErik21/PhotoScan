@@ -14,7 +14,10 @@ from pathlib import Path
 FROZEN = bool(getattr(sys, "frozen", False))
 CODE_ROOT = Path(getattr(sys, "_MEIPASS", "")) if FROZEN else Path(__file__).resolve().parent.parent
 if FROZEN:
-    ROOT = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "PhotoScan"
+    if sys.platform == "win32":
+        ROOT = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "PhotoScan"
+    else:  # Linux (AppImage): dati in ~/.local/share/PhotoScan, come prevede lo standard XDG
+        ROOT = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "PhotoScan"
     ROOT.mkdir(parents=True, exist_ok=True)
 else:
     ROOT = CODE_ROOT
