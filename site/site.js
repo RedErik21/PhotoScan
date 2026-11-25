@@ -110,6 +110,29 @@
     sync();
   });
 
+  // OS download switcher (Windows / Linux) with automatic OS pre-selection
+  const osTabs = [...document.querySelectorAll('[data-os-tab]')];
+  const osPanels = [...document.querySelectorAll('[data-os-panel]')];
+  if (osTabs.length && osPanels.length) {
+    const selectOs = (os) => {
+      osTabs.forEach((btn) => {
+        const on = btn.dataset.osTab === os;
+        btn.classList.toggle('is-active', on);
+        btn.setAttribute('aria-selected', String(on));
+      });
+      osPanels.forEach((panel) => {
+        panel.hidden = panel.dataset.osPanel !== os;
+      });
+    };
+    osTabs.forEach((btn) => {
+      btn.addEventListener('click', () => selectOs(btn.dataset.osTab));
+    });
+    const ua = `${navigator.userAgent || ''} ${navigator.platform || ''}`.toLowerCase();
+    if (ua.includes('linux') && !ua.includes('android')) {
+      selectOs('linux');
+    }
+  }
+
   // Interactive screenshot showcase + lightbox
   const shots = [...document.querySelectorAll('.stage__data span')].map((el) => ({
     src: el.dataset.src,
