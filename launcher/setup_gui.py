@@ -1039,7 +1039,8 @@ class _SetupBridge:
             release = latest_release()
             version = release["tag_name"].lstrip("vV")
             app_dir = self.root_dir / "app"
-            same = self.state and self.state.get("version") == version and self.state.get("runtime") == runtime
+            same = (self.state and self.state.get("version") == version and self.state.get("runtime") == runtime
+                    and _resolve_exe(app_dir).exists())  # install.json da solo non basta: l'app deve esserci
             if not same:
                 parts = package_parts(release.get("assets", []), version, runtime)
                 if not parts:
@@ -1119,6 +1120,12 @@ def _run_tk_fallback(root_dir: Path) -> int:
 
     win = tk.Tk()
     win.title("PhotoScan — Installazione guidata")
+    ico = _find_asset("photoscan.ico", "fotoscan/photoscan.ico")
+    if ico:
+        try:
+            win.iconbitmap(str(ico))
+        except Exception:
+            pass
     win.geometry("560x500")
     win.resizable(False, False)
     frame = ttk.Frame(win, padding=20)
@@ -1158,7 +1165,7 @@ def _run_tk_fallback(root_dir: Path) -> int:
             rel = latest_release()
             ver = rel["tag_name"].lstrip("vV")
             app_dir = root_dir / "app"
-            if not (state and state.get("version") == ver and state.get("runtime") == rt):
+            if not (state and state.get("version") == ver and state.get("runtime") == rt and _resolve_exe(app_dir).exists()):
                 parts = package_parts(rel.get("assets", []), ver, rt)
                 if not parts:
                     raise RuntimeError(f"La Release {rel['tag_name']} non ha il pacchetto «{rt}».")
