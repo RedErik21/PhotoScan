@@ -5,6 +5,15 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Quale build eseguire (solo test, non crea Release)"
+        type: choice
+        default: "linux"
+        options:
+          - linux
+          - all
 
 permissions:
   contents: write
@@ -17,11 +26,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verifica che il tag corrisponda a fotoscan/version.py
+      - name: Leggi versione e verifica tag (solo su push tag)
         id: ver
         run: |
           VER=$(python3 -c "import re; print(re.search(r'^__version__\s*=\s*[\"\x27]([^\"\x27]+)', open('fotoscan/version.py', encoding='utf-8').read(), re.M).group(1))")
-          if [ "${GITHUB_REF_NAME#v}" != "$VER" ]; then
+          if [[ "$GITHUB_REF" == refs/tags/* ]] && [ "${GITHUB_REF_NAME#v}" != "$VER" ]; then
             echo "::error::Il tag $GITHUB_REF_NAME non corrisponde a __version__ = $VER in fotoscan/version.py"
             exit 1
           fi
@@ -50,6 +59,7 @@ jobs:
 
   build-windows:
     needs: verify
+    if: github.event_name == 'push' || inputs.target == 'all'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -153,6 +163,7 @@ jobs:
 
   release:
     needs: [verify, build-linux, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
