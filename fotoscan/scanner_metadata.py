@@ -16,6 +16,8 @@ from typing import Callable
 
 from PIL import Image
 
+from . import db as dbm
+from . import sourcefs
 from .config import IMAGE_EXT, VIDEO_EXT, Config
 
 log = logging.getLogger("fotoscan")
@@ -80,9 +82,11 @@ def list_media(source: str, cfg: Config, subdir: str | None = None) -> list[Path
         raise FileNotFoundError(f"Cartella sorgente non trovata: {root}")
     exts = set(IMAGE_EXT) | set(VIDEO_EXT)
     out: list[Path] = []
+    walk_errors: list[OSError] = []
+    network = sourcefs.is_network(str(root))
     # os.walk invece di rglob: una sola scandir per cartella, errori di permesso ignorati,
     # niente seguito dei symlink a cartelle (come rglob), percorsi lunghi tramite _fs.
-    for dirpath, dirs, files in os.walk(_fs(str(root))):
+    for dirpath, dirs, files in os.walk(_fs(str(root)), onerror=walk_errors.append):
         # cartella di appoggio dell'import dal telefono: i file vengono spostati altrove a fine copia,
         # indicizzarli lascerebbe voci orfane (miniature grigie) quando la cartella viene svuotata
         dirs[:] = [d for d in dirs if d != "_fotoscan_tmp_telefono"]
@@ -91,6 +95,10 @@ def list_media(source: str, cfg: Config, subdir: str | None = None) -> list[Path
                 continue
             if os.path.splitext(name)[1].lower() in exts:
                 out.append(Path(_unfs(os.path.join(dirpath, name))))
+    if network and (any(sourcefs.fatal_walk_error(e) for e in walk_errors) or not sourcefs.reachable(str(root))):
+        # su rete una lista incompleta sembra un archivio vuoto: meglio fermarsi che indicizzare a meta'
+        raise FileNotFoundError(f"Il disco di rete non risponde durante la scansione di {root}: "
+                                "il catalogo non e' stato modificato. Controlla il NAS e riprova.")
     out.sort(key=lambda x: str(x).lower())
     return out
 
@@ -101,6 +109,14 @@ def scan_into_db(conn: sqlite3.Connection, cfg: Config, limit: int | None = None
 
     Con limit: campione uniforme di N file. Ritorna il numero di file nuovi o modificati da elaborare.
     """
+    root = sourcefs.norm_root(cfg.source_dir)
+    # stessa cartella con un altro nome di accesso (lettera, UNC, mount): riallinea il catalogo
+    # prima di confrontare i file, cosi' non si reindicizza tutto
+    old_root = dbm.get_meta(conn, "catalog_root")
+    if old_root and old_root != root:
+        moved = sourcefs.rebase_catalog(conn, old_root, root)
+        if moved:
+            log.info("catalogo riallineato alla nuova cartella sorgente: %d percorsi", moved)
     paths = list_media(cfg.source_dir, cfg, subdir)
     if limit and len(paths) > limit:
         step = len(paths) / limit
@@ -132,6 +148,7 @@ def scan_into_db(conn: sqlite3.Connection, cfg: Config, limit: int | None = None
             if progress:
                 progress("scansione", i + 1, total)
     conn.commit()
+    dbm.set_meta(conn, "catalog_root", root)  # percorsi del catalogo registrati sotto questa radice
     if progress:
         progress("scansione", total, total)
     return new

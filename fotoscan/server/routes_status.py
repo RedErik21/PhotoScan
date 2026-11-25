@@ -16,6 +16,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from .. import db as dbm
+from .. import sourcefs
 from ..config import CONFIG_FILE, DEFAULT_LABELS, Config, all_models
 from ..version import __version__ as APP_VERSION
 from .deps import get_cfg, get_db, reload_cfg
@@ -331,6 +332,7 @@ def status(conn=Depends(get_db)):
         "version": APP_VERSION,
         "first_run": not source and st["totale"] == 0,
         "source_dir": source,
+        "source_network": bool(source) and sourcefs.is_network(source),
         "output_dir": cfg.output_dir,
         "db_path": cfg.db_path,
         "counts": {k: st[k] for k in (
@@ -520,9 +522,11 @@ def disk(path: str | None = Query(default=None), conn=Depends(get_db)):
     p = Path(os.path.abspath(target))
     probe = _nearest_existing(p)  # per lo spazio libero: la cartella stessa o il primo antenato esistente
     src_probe = _nearest_existing(Path(os.path.abspath(source))) if source else None
+    target_network = sourcefs.is_network(target)
+    source_network = bool(source) and sourcefs.is_network(source)
     if probe is None:
         return {"exists": False, "is_file": False, "free_bytes": None, "total_bytes": None, "drive": None,
-                "same_volume_as_source": False}
+                "same_volume_as_source": False, "network": target_network, "source_network": source_network}
     usage = shutil.disk_usage(probe)
     return {
         "exists": p.is_dir(),
@@ -531,4 +535,6 @@ def disk(path: str | None = Query(default=None), conn=Depends(get_db)):
         "total_bytes": usage.total,
         "drive": probe.anchor or str(probe),
         "same_volume_as_source": src_probe is not None and os.stat(probe).st_dev == os.stat(src_probe).st_dev,
+        "network": target_network,
+        "source_network": source_network,
     }

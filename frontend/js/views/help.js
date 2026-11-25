@@ -336,9 +336,9 @@ function renderInfo(st) {
       h('span', { class: 'help-path' }, path),
       h('span', { class: 'help-info__actions' }, copyPathButton(path))))
     : null;
-  const folderRow = (label, path) => path
+  const folderRow = (label, path, suffix = '') => path
     ? infoRow(label, h('span', { class: 'help-info__value' },
-      h('span', { class: 'help-path' }, path),
+      h('span', { class: 'help-path' }, `${path}${suffix}`),
       h('span', { class: 'help-info__actions' }, copyPathButton(path), openFolderButton(path))))
     : infoRow(label, 'Non impostata');
   return h('dl', { class: 'help-info' },
@@ -346,7 +346,7 @@ function renderInfo(st) {
     infoRow('Modello di riconoscimento', st.model || '—'),
     infoRow('Calcolo', `${st.device || '—'}${st.model_cached === false ? ' · modello non ancora scaricato' : ''}`),
     infoRow('Video (ffmpeg)', st.ffmpeg ? 'Disponibile' : 'Non trovato: alcuni video potrebbero non avere anteprima'),
-    folderRow('Cartella originali (sola lettura)', st.source_dir),
+    folderRow('Cartella originali (sola lettura)', st.source_dir, st.source_network ? ' (rete)' : ''),
     folderRow('Cartella destinazione', st.output_dir),
     pathRow('Catalogo', st.db_path),
     infoRow('Registro indicizzazione', 'cache/index.log nella cartella dell’app'),

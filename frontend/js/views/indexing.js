@@ -255,10 +255,16 @@ export async function mount(root, { navigate, signal }) {
       R.title.textContent = 'Analisi completata';
       R.sub.textContent = 'Tutte le foto sono pronte per essere organizzate.';
     } else if (paused) {
-      R.title.textContent = 'In pausa';
-      R.sub.textContent = s.exit_code
-        ? 'L’analisi si è interrotta. Nessun file originale è stato toccato: puoi riprendere quando vuoi.'
-        : 'Hai fermato l’analisi. Puoi riprendere in qualsiasi momento, il lavoro fatto non va perso.';
+      const netDown = !!s.exit_code && (s.log_tail || []).some((l) => /non risponde/i.test(l));
+      if (netDown) {
+        R.title.textContent = 'Disco di rete non raggiungibile';
+        R.sub.textContent = 'Controlla che il NAS sia acceso e connesso, poi riprova: nessun file originale è stato toccato e il lavoro fatto non va perso.';
+      } else {
+        R.title.textContent = 'In pausa';
+        R.sub.textContent = s.exit_code
+          ? 'L’analisi si è interrotta. Nessun file originale è stato toccato: puoi riprendere quando vuoi.'
+          : 'Hai fermato l’analisi. Puoi riprendere in qualsiasi momento, il lavoro fatto non va perso.';
+      }
     } else {
       R.title.textContent = 'Analisi non ancora avviata';
       R.sub.textContent = 'Serve a cercare le foto e a proporre le cartelle. Non modifica i tuoi file.';

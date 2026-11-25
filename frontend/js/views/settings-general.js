@@ -245,7 +245,12 @@ export function mountSection(container, { settings = {}, draft = null, onDirty =
 
   // ---- cartelle
   function supportText(key) {
-    if (key === 'source_dir') return 'Le foto originali non vengono mai modificate né cancellate.';
+    if (key === 'source_dir') {
+      if (disks.source_dir?.network) {
+        return 'Disco di rete: l’analisi è più lenta e il NAS deve restare acceso.';
+      }
+      return 'Le foto originali non vengono mai modificate né cancellate.';
+    }
     const d = disks[key];
     if (!d || d.free_bytes == null) return 'Qui vengono create le cartelle ordinate.';
     const free = `Spazio libero sul disco: ${formatBytes(d.free_bytes)}`;

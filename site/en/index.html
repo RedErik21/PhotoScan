@@ -88,18 +88,17 @@
             lets you search by words, and suggests folders by year, month and event. Zero cloud, originals untouched.
           </p>
           <div class="hero__actions">
-            <a class="btn btn--primary" href="https://github.com/RedErik21/PhotoScan/releases/latest" target="_blank"
-              rel="noopener">
+            <a class="btn btn--primary" href="#installation">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                 <polyline points="7 10 12 15 17 10" />
                 <line x1="12" y1="15" x2="12" y2="3" />
               </svg>
-              Download for Windows
+              Download PhotoScan
             </a>
             <a class="btn btn--ghost" href="#screenshots">Explore screenshots</a>
           </div>
-          <p class="hero__meta">Windows 10/11 · Free &amp; open source (MIT) · NVIDIA GPU or CPU</p>
+          <p class="hero__meta">Windows 10/11 · Linux (coming soon) · Free &amp; open source (MIT)</p>
         </div>
 
         <div class="hero__media">
@@ -253,19 +252,48 @@
 
     <section id="installation" class="download">
       <div class="wrap">
-        <div class="download__band">
+        <div class="download__head">
+          <div>
+            <h2>Download PhotoScan</h2>
+            <p class="download__sub">Pick your operating system. No account required, 100% local.</p>
+          </div>
+          <div class="os-switch" role="tablist" aria-label="Operating system">
+            <button type="button" class="os-switch__btn is-active" role="tab" aria-selected="true"
+              aria-controls="os-panel-win" data-os-tab="windows">
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M3 5.5 10.5 4.4v7.1H3V5.5zm8.6-1.3L21 2.8v8.7h-9.4V4.2zM3 12.5h7.5v7.1L3 18.5v-6zm8.6 0H21v8.7l-9.4-1.4v-7.3z" />
+              </svg>
+              Windows
+            </button>
+            <button type="button" class="os-switch__btn" role="tab" aria-selected="false"
+              aria-controls="os-panel-linux" data-os-tab="linux">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"
+                stroke-linejoin="round" aria-hidden="true">
+                <rect x="3" y="4" width="18" height="14" rx="2" />
+                <path d="M7 9l3 2.5L7 14m5 0h5M8 21h8" />
+              </svg>
+              Linux
+              <span class="os-pill">Soon</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="download__band" id="os-panel-win" role="tabpanel" data-os-panel="windows">
           <div class="download__text">
-            <h2>Install on Windows</h2>
+            <h3>PhotoScan for Windows</h3>
             <p>A single guided installer: checks your PC, picks the best configuration automatically (NVIDIA GPU or CPU), and creates a Desktop icon.</p>
             <p class="download__steps">
               <span><strong>1.</strong> Download <code>PhotoScan-Setup.exe</code></span>
               <span><strong>2.</strong> Follow the setup wizard</span>
               <span><strong>3.</strong> Launch from your Desktop</span>
             </p>
+            <p class="download__hint">
+              If Windows SmartScreen shows a prompt, click <em>More info → Run anyway</em>.
+            </p>
           </div>
           <div class="download__cta">
-            <a class="btn btn--primary" href="https://github.com/RedErik21/PhotoScan/releases/latest" target="_blank"
-              rel="noopener">
+            <a class="btn btn--primary btn--lg"
+              href="https://github.com/RedErik21/PhotoScan/releases/latest/download/PhotoScan-Setup.exe">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                 <polyline points="7 10 12 15 17 10" />
@@ -273,14 +301,38 @@
               </svg>
               Download PhotoScan-Setup.exe
             </a>
-            <span class="download__note">The AI model downloads once, on first launch.</span>
+            <span class="download__note">
+              The AI model downloads once on first launch ·
+              <a href="https://github.com/RedErik21/PhotoScan/releases/latest" target="_blank" rel="noopener">Release notes</a>
+            </span>
+          </div>
+        </div>
+
+        <div class="download__band download__band--soon" id="os-panel-linux" role="tabpanel" data-os-panel="linux" hidden>
+          <div class="download__text">
+            <div class="download__title-row">
+              <h3>PhotoScan for Linux</h3>
+              <span class="os-badge">Coming soon</span>
+            </div>
+            <p>We are finalizing the native Linux build with the same desktop interface, local AI search (NVIDIA GPU or CPU), and phone import.</p>
+            <p class="download__steps">
+              <span><strong>·</strong> Zero cloud, read-only originals</span>
+              <span><strong>·</strong> NVIDIA GPU &amp; CPU support</span>
+            </p>
+          </div>
+          <div class="download__cta">
+            <a class="btn btn--ghost" href="https://github.com/RedErik21/PhotoScan/releases" target="_blank"
+              rel="noopener">
+              Follow Releases on GitHub
+            </a>
+            <span class="download__note">Direct download will appear here as soon as it is published.</span>
           </div>
         </div>
 
         <dl class="specs">
           <div>
             <dt>System</dt>
-            <dd>Windows 10 or 11</dd>
+            <dd>Windows 10/11 · Linux coming soon</dd>
           </div>
           <div>
             <dt>Hardware</dt>
