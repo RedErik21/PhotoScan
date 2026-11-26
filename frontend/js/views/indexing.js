@@ -196,10 +196,10 @@ export async function mount(root, { navigate, signal }) {
       h('div', { class: 'progress-block' },
         h('div', { class: 'progress-block__head' }, R.phase, R.percent),
         R.bar, R.count),
-      R.meta.append(
+      (R.meta.replaceChildren(
         h('div', {}, h('dt', { class: 'idx-meta__label md-typescale-label-medium' }, 'Velocità (fase attuale)'), R.speed),
         h('div', {}, h('dt', { class: 'idx-meta__label md-typescale-label-medium' }, 'Tempo stimato per questa fase'), R.eta),
-        h('div', {}, h('dt', { class: 'idx-meta__label md-typescale-label-medium' }, 'Trascorso'), R.elapsed)),
+        h('div', {}, h('dt', { class: 'idx-meta__label md-typescale-label-medium' }, 'Trascorso'), R.elapsed)), R.meta),
       h('div', { class: 'idx-actions' }, R.start, R.startOut, R.stop),
       h('details', { class: 'idx-advanced' },
         h('summary', { class: 'md-typescale-label-large' }, 'Opzioni avanzate'),
@@ -639,17 +639,21 @@ export async function mount(root, { navigate, signal }) {
   }
 
   function setPolling(on) {
-    if (on && !pollTimer) pollTimer = setInterval(refresh, POLL_MS);
+    if (on && !pollTimer) pollTimer = setInterval(() => { if (!document.hidden) refresh(); }, POLL_MS);
     if (!on && pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   }
 
-  const ticker = setInterval(() => { if (alive && running) updateElapsed(); }, 1000);
+  const ticker = setInterval(() => { if (alive && running && !document.hidden) updateElapsed(); }, 1000);
+  // scheda nascosta: niente richieste; quando torna visibile si aggiorna subito
+  const onVisible = () => { if (alive && !document.hidden && pollTimer) refresh(); };
+  document.addEventListener('visibilitychange', onVisible);
 
   await boot();
 
   return () => {
     alive = false;
     clearInterval(ticker);
+    document.removeEventListener('visibilitychange', onVisible);
     setPolling(false);
     unsubs.forEach((off) => off());
     document.title = BASE_TITLE;

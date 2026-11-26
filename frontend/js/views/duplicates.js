@@ -13,9 +13,10 @@ const PAGE = 20;
 const TYPES = { exact: 'Identici', similar: 'Quasi uguali' };
 const DENSITY_KEY = 'fotoscan.dup.density';
 const DENSITIES = [
-  { id: 'compact', label: 'Compatta', icon: 'view_comfy' },
-  { id: 'medium', label: 'Normale', icon: 'grid_view' },
-  { id: 'large', label: 'Grande', icon: 'view_agenda' },
+  { id: 'focus',   label: '1 per volta', icon: 'view_carousel' },
+  { id: 'compact', label: 'Compatta',    icon: 'view_comfy' },
+  { id: 'medium',  label: 'Normale',     icon: 'grid_view' },
+  { id: 'large',   label: 'Grande',      icon: 'view_agenda' },
 ];
 const KIND = { exact: 1, similar: 2 }; // is_dup dei membri mostrati in ciascuna scheda
 const REASON = { hash: 'Stesso file', nome: 'Versione modificata', immagine: 'Immagini molto simili' };
@@ -111,16 +112,19 @@ function typeControl(opts, selected, onChange) {
 
 export async function mount(root, { query = {}, signal } = {}) {
   loadCss();
-  let savedDensity = 'medium';
-  try {
-    const d = localStorage.getItem(DENSITY_KEY);
-    if (DENSITIES.some((x) => x.id === d)) savedDensity = d;
-  } catch { /* ignora */ }
+  let savedDensity = query.view === 'focus' ? 'focus' : 'medium';
+  if (!query.view) {
+    try {
+      const d = localStorage.getItem(DENSITY_KEY);
+      if (DENSITIES.some((x) => x.id === d)) savedDensity = d;
+    } catch { /* ignora */ }
+  }
 
   const state = {
     alive: true,
     type: query.type === 'similar' ? 'similar' : 'exact',
     density: savedDensity,
+    focusIdx: 0,
     summary: null,
     canKeep: true,
     reviewed: false,
@@ -138,38 +142,20 @@ export async function mount(root, { query = {}, signal } = {}) {
   // Membri mostrati nella scheda corrente: quelli del tipo scelto (il conteggio coincide con il riepilogo).
   const shownMembers = (data) => data.members.filter((m) => m.is_dup === KIND[state.type]);
 
-  // ---------- struttura ----------
+  // ---------- struttura compatta (nessuna card statistica doppia, foto subito visibili) ----------
   const typeBar = h('div', { class: 'dup-typebar' });
-  const summaryBox = h('div', { class: 'dup-summary grid-auto', 'aria-live': 'polite' });
+  const summaryInline = h('span', { class: 'dup-summary-inline muted md-typescale-body-small', 'aria-live': 'polite' });
   const listEl = h('div', { class: 'dup-list' });
   const sentinel = h('div', { class: 'dup-sentinel', 'aria-hidden': 'true' });
   const endNote = h('p', { class: 'muted dup-end', hidden: true });
   const skipNote = h('p', { class: 'dup-skip-note', hidden: true },
     "Con l'opzione «salta i duplicati» l'originale non si può cambiare.");
 
-  const DUP_DISMISS_KEY = 'fotoscan.dismiss.dupNote';
-  const closeCalloutBtn = h('md-icon-button', {
-    class: 'callout__close', 'aria-label': 'Nascondi questo avviso', title: 'Nascondi questo avviso',
-    onclick: () => {
-      callout.hidden = true;
-      try { localStorage.setItem(DUP_DISMISS_KEY, '1'); } catch { /* ignora */ }
-    },
-  }, icon('close'));
-  const callout = h('div', { class: 'callout callout--info callout--dismissible', role: 'note' },
-    decorative(icon('verified_user'), 'callout__icon'),
-    h('div', {},
-      h('p', { class: 'callout__title' }, 'Controllo rapido e sicuro'),
-      h('p', {}, 'Spunta le singole foto da eliminare o conservare, usa «Conserva tutte» per tenere più scatti insieme, oppure elimina tutte le copie in un clic. Tutto va nel Cestino di Windows.'),
-      skipNote),
-    closeCalloutBtn);
-  try { if (localStorage.getItem(DUP_DISMISS_KEY) === '1') callout.hidden = true; } catch { /* ignora */ }
-
   const reviewBox = h('div', { class: 'dup-review', 'aria-live': 'polite' });
-  const bulkBtn = h('md-outlined-button', { class: 'dup-bulk', onclick: () => keepLargestAll() },
+  const bulkBtn = h('md-text-button', { class: 'dup-bulk', onclick: () => keepLargestAll() },
     icon('done_all', { slot: 'icon' }), 'Tieni la migliore in tutti');
   const bulkWrap = h('div', { class: 'dup-bulk-wrap' }, bulkBtn);
   bulkWrap.hidden = true;
-  const toolbar = h('div', { class: 'dup-toolbar' }, reviewBox, bulkWrap);
 
   // Barra azioni sticky: azioni rapide globali oppure azioni sulle foto selezionate
   const actionInfo = h('div', { class: 'dup-action-bar__info' });
@@ -178,16 +164,18 @@ export async function mount(root, { query = {}, signal } = {}) {
     actionInfo, actionButtons);
 
   const densityBar = h('div', { class: 'dup-density', role: 'group', 'aria-label': 'Dimensione gruppi' });
-  const header = h('header', { class: 'view-header view-header--sticky' },
+  const header = h('header', { class: 'view-header view-header--sticky dup-controls' },
     h('div', {}, h('h1', { class: 't-headline' }, 'Duplicati')),
-  h('div', { class: 'view-header-actions' }, typeBar, densityBar));
+    h('div', { class: 'view-header-actions dup-controls__row' },
+      h('div', { class: 'dup-controls__left' }, typeBar, summaryInline),
+      h('div', { class: 'dup-controls__right' }, bulkWrap, densityBar)));
 
+  const focusStage = h('section', { class: 'dup-focus-stage', hidden: true, 'aria-live': 'polite' });
   const viewEl = h('div', { class: 'view dup-view', 'data-density': state.density },
     header,
-    callout,
-    toolbar,
-    h('section', { class: 'section' }, summaryBox),
+    skipNote,
     actionBar,
+    focusStage,
     listEl,
     sentinel,
     endNote);
@@ -199,6 +187,121 @@ export async function mount(root, { query = {}, signal } = {}) {
     viewEl.dataset.density = d;
     try { localStorage.setItem(DENSITY_KEY, d); } catch { /* ignora */ }
     renderDensityBar();
+    renderFocusStage();
+  }
+
+  async function trashGroupCopies(entry) {
+    if (state.bulkBusy || !entry) return;
+    const copies = shownMembers(entry.data);
+    if (!copies.length) return;
+    const ids = copies.map((m) => m.id);
+    state.bulkBusy = true;
+    renderFocusStage();
+    try {
+      const r = await api.post('/cleanup/trash', { file_ids: ids, confirm: true });
+      if (!state.alive) return;
+      const failedIds = new Set((r.errors || []).map((e) => e.id));
+      const trashedSet = new Set(ids.filter((id) => !failedIds.has(id)));
+      pruneFilesInPlace(trashedSet, { promoteSurvivor: true });
+      if (r.trashed) {
+        showSnackbar(`${plural(r.trashed, 'copia spostata', 'copie spostate')} nel Cestino (${formatBytes(r.freed_bytes)}).`);
+        window.dispatchEvent(new CustomEvent('fotoscan:cleanup-changed'));
+      }
+      refreshSummary();
+    } catch (e) {
+      if (!isAbort(e) && state.alive) showSnackbar(errMsg(e), { error: true });
+    } finally {
+      state.bulkBusy = false;
+      if (state.alive) renderFocusStage();
+    }
+  }
+
+  function renderFocusStage() {
+    const isFocus = state.density === 'focus';
+    focusStage.hidden = !isFocus;
+    listEl.hidden = isFocus;
+    sentinel.hidden = isFocus;
+    endNote.hidden = isFocus || !(state.loaded && state.total > 0 && state.offset >= state.total);
+    if (!isFocus) return;
+
+    if (!state.loaded) {
+      focusStage.replaceChildren(skeletonCard());
+      return;
+    }
+    if (!state.groups.length) {
+      focusStage.replaceChildren(emptyState({
+        icon: 'check_circle',
+        title: state.type === 'exact' ? 'Nessun duplicato, ottimo!' : 'Nessuna foto quasi uguale, ottimo!',
+        message: 'Hai completato tutti i gruppi in questa categoria.',
+      }));
+      return;
+    }
+    if (state.focusIdx >= state.groups.length) state.focusIdx = Math.max(0, state.groups.length - 1);
+    if (state.focusIdx >= state.groups.length - 3 && hasMore() && !state.pending) loadPage();
+
+    const entry = state.groups[state.focusIdx];
+    const master = entry.data.master;
+    const copies = shownMembers(entry.data);
+    const allPhotos = [master, ...copies];
+    const copyBytes = copies.reduce((acc, m) => acc + Number(m.size || 0), 0);
+    const copyIds = copies.map((m) => m.id);
+
+    const cards = allPhotos.map((f) => {
+      const isMaster = f.id === master.id;
+      const img = h('img', {
+        class: 'dup-focus-card__img',
+        src: fileUrl.thumb(f.id, 512),
+        alt: f.name || '',
+        loading: 'eager',
+        decoding: 'async',
+      });
+      return h('div', {
+        class: `card dup-focus-card${isMaster ? ' is-master' : ''}`,
+        onclick: () => {
+          if (!isMaster && state.canKeep) commit(entry, f.id).then(() => renderFocusStage());
+        },
+        title: isMaster ? 'Foto originale che verrà tenuta' : 'Clicca per scegliere questa come originale da tenere',
+      },
+        h('div', { class: 'dup-focus-card__media' },
+          img,
+          h('span', { class: `dup-badge${isMaster ? '' : ' dup-badge--trash'}` },
+            icon(isMaster ? 'check_circle' : 'delete'),
+            isMaster ? 'Tieni (Originale)' : 'Copia da eliminare')),
+        h('div', { class: 'dup-focus-card__meta' },
+          h('strong', { class: 'md-typescale-title-small', title: f.name || '' }, middleEllipsis(f.name, 28)),
+          metaInline(f),
+          h('span', { class: 'muted md-typescale-body-small', title: f.path || '' }, abbrevPath(f.path))));
+    });
+
+    const head = h('div', { class: 'dup-focus-head' },
+      h('span', { class: 'md-typescale-title-small' },
+        `Gruppo ${formatNumber(state.focusIdx + 1)} di ${formatNumber(Math.max(state.total, state.groups.length))}`),
+      h('span', { class: 'muted md-typescale-body-small' },
+        'Clicca su una foto per sceglierla come originale, poi elimina le copie o tienile tutte.'));
+
+    const controls = h('div', { class: 'dup-focus-actions' },
+      h('md-outlined-button', {
+        disabled: state.focusIdx <= 0 || state.bulkBusy,
+        onclick: () => { state.focusIdx = Math.max(0, state.focusIdx - 1); renderFocusStage(); },
+      }, icon('arrow_back', { slot: 'icon' }), 'Precedente'),
+      h('md-outlined-button', {
+        disabled: state.bulkBusy,
+        onclick: async () => {
+          await keepMany(copyIds, 'Tutte le foto del gruppo conservate.');
+          renderFocusStage();
+        },
+      }, icon('check_circle', { slot: 'icon' }), 'Tieni tutte'),
+      h('md-filled-button', {
+        class: 'dup-btn-danger',
+        disabled: state.bulkBusy || !copyIds.length,
+        onclick: () => trashGroupCopies(entry),
+      }, icon('delete', { slot: 'icon' }), `Elimina ${plural(copyIds.length, 'copia', 'copie')} (${formatBytes(copyBytes)})`),
+      h('md-text-button', {
+        disabled: state.focusIdx >= Math.max(state.total, state.groups.length) - 1 || state.bulkBusy,
+        onclick: () => { state.focusIdx++; renderFocusStage(); },
+      }, 'Salta', icon('arrow_forward', { slot: 'icon' })));
+
+    focusStage.replaceChildren(head, h('div', { class: 'dup-focus-grid' }, ...cards), controls);
   }
 
   function renderDensityBar() {
@@ -222,14 +325,13 @@ export async function mount(root, { query = {}, signal } = {}) {
 
   function renderSummary() {
     if (!state.summary) {
-      summaryBox.replaceChildren(...[0, 1].map(() =>
-        h('div', { class: 'card dup-summary__skel skeleton', 'aria-hidden': 'true' })));
+      summaryInline.textContent = '';
       return;
     }
     const s = state.summary[state.type];
-    summaryBox.replaceChildren(
-      stat(formatNumber(s.files), 'file in più'),
-      stat(formatBytes(s.bytes), 'spazio occupato dalle copie'));
+    summaryInline.textContent = s.files
+      ? `${plural(s.files, 'copia', 'copie')} · ${formatBytes(s.bytes)}`
+      : 'Nessuna copia';
     renderActionBar();
   }
 
@@ -303,20 +405,11 @@ export async function mount(root, { query = {}, signal } = {}) {
             },
           }, icon('bookmark_added', { slot: 'icon' }), 'Imposta come originale')
           : null,
-        showKeepWholeGroups
-          ? h('md-outlined-button', {
-            disabled: state.bulkBusy,
-            title: 'Conserva tutte le foto dei gruppi coinvolti come foto separate',
-            onclick: () => keepMany(groupCopyIds, touchedEntries.size === 1
-              ? 'Tutte le foto del gruppo conservate.'
-              : `Tutte le foto di ${plural(touchedEntries.size, 'gruppo', 'gruppi')} conservate.`),
-          }, icon('library_add_check', { slot: 'icon' }), touchedEntries.size === 1 ? 'Conserva tutto il gruppo' : 'Conserva gruppi')
-          : null,
         h('md-outlined-button', {
           disabled: state.bulkBusy,
           title: 'Marca le foto selezionate come foto normali da conservare (escono dai duplicati)',
           onclick: () => keepMany(selIds),
-        }, icon('add_photo_alternate', { slot: 'icon' }), 'Conserva'),
+        }, icon('check_circle', { slot: 'icon' }), 'Non sono duplicati'),
         h('md-filled-button', {
           class: 'dup-btn-danger',
           disabled: state.bulkBusy,
@@ -331,20 +424,20 @@ export async function mount(root, { query = {}, signal } = {}) {
     const typeWord = state.type === 'exact' ? 'identiche' : 'quasi uguali';
 
     actionInfo.replaceChildren(
-      h('span', { class: 'muted' }, 'Spunta le singole foto da eliminare/conservare, oppure usa un’azione rapida:'));
+      h('span', { class: 'muted' }, 'Spunta le foto da spostare nel Cestino, oppure usa un’azione rapida:'));
     actionButtons.replaceChildren(
       visibleCopies.length
         ? h('md-text-button', {
           disabled: state.bulkBusy,
           onclick: () => selectVisibleCopies(),
-        }, icon('checklist', { slot: 'icon' }), `Seleziona ${formatNumber(visibleCopies.length)} copie visibili`)
+        }, icon('checklist', { slot: 'icon' }), `Seleziona copie visibili (${formatNumber(visibleCopies.length)})`)
         : null,
       totalFiles > 0
         ? h('md-filled-button', {
           class: 'dup-btn-danger',
           disabled: state.bulkBusy,
           onclick: () => trashAllCopies(),
-        }, icon('delete_sweep', { slot: 'icon' }), `Elimina tutte le copie ${typeWord} (${formatBytes(totalBytes)})`)
+        }, icon('delete_sweep', { slot: 'icon' }), `Sposta tutte nel Cestino (${formatBytes(totalBytes)})`)
         : null);
   }
 
@@ -645,8 +738,10 @@ export async function mount(root, { query = {}, signal } = {}) {
     state.loaded = false;
     state.failed = false;
     state.focus = -1;
+    state.focusIdx = 0;
     endNote.hidden = true;
     renderActionBar();
+    renderFocusStage();
     listEl.replaceChildren(...[0, 1, 2].map(() => {
       const sk = skeletonCard();
       sk.classList.add('dup-skel');
@@ -681,6 +776,7 @@ export async function mount(root, { query = {}, signal } = {}) {
         if (!state.total) showEmpty();
         updateEnd();
         renderActionBar();
+        renderFocusStage();
       } catch (e) {
         if (gen !== state.gen || !state.alive || isAbort(e)) return;
         listEl.querySelectorAll('.dup-skel').forEach((n) => n.remove());
@@ -825,7 +921,7 @@ export async function mount(root, { query = {}, signal } = {}) {
     }, h('img', { src: fileUrl.thumb(f.id, 512), alt: '', loading: 'lazy', decoding: 'async' }));
 
     return h('figure', {
-      class: `dup-item${isSel ? ' is-selected' : ''}`,
+      class: `dup-item${isMaster ? ' is-master' : ''}${isSel ? ' is-selected' : ''}`,
       'data-id': String(f.id),
       'data-master': isMaster ? '1' : '0',
     },
@@ -845,13 +941,39 @@ export async function mount(root, { query = {}, signal } = {}) {
     const data = entry.data;
     const gi = state.groups.indexOf(entry);
     const shown = shownMembers(data);
+    const copyIds = shown.map((m) => m.id);
     const copiesBytes = shown.reduce((s, m) => s + Number(m.size || 0), 0);
+
+    const compareBtn = h('md-text-button', {
+      onclick: () => openCompare(state.groups.indexOf(entry), 0),
+    }, icon('compare', { slot: 'icon' }), 'Confronta');
+
+    const selCopiesBtn = h('md-text-button', {
+      onclick: () => {
+        const allOn = copyIds.every((id) => state.selected.has(id));
+        for (const id of copyIds) {
+          if (allOn) state.selected.delete(id);
+          else state.selected.add(id);
+          syncItemSelectionDom(id);
+        }
+        renderActionBar();
+      },
+    }, icon('checklist', { slot: 'icon' }), 'Seleziona copie');
+
+    const trashGrpBtn = h('md-text-button', {
+      class: 'dup-group__trash',
+      title: `Sposta ${plural(copyIds.length, 'copia', 'copie')} nel Cestino tenendo l'originale`,
+      onclick: () => trashGroupCopies(entry),
+    }, icon('delete', { slot: 'icon' }), `Elimina copie (${formatBytes(copiesBytes)})`);
+
     const card = h('article', { class: 'card dup-group', tabindex: '-1', 'aria-label': `Gruppo ${gi + 1}` },
       h('header', { class: 'dup-group__head' },
-        h('h2', { class: 'dup-group__title t-title' }, `Gruppo ${gi + 1}`),
-        h('p', { class: 'dup-group__sub muted' },
-          `${REASON[data.reason] || 'Foto simili'} · ${plural(shown.length, 'copia', 'copie')} · ${formatBytes(copiesBytes)}`)),
-      h('div', { class: 'compare dup-compare' },
+        h('div', { class: 'dup-group__heading' },
+          h('h2', { class: 'dup-group__title t-title' }, `Gruppo ${gi + 1}`),
+          h('p', { class: 'dup-group__sub muted' },
+            `${REASON[data.reason] || 'Foto simili'} · ${plural(shown.length, 'copia', 'copie')} · ${formatBytes(copiesBytes)}`)),
+        h('div', { class: 'dup-group__actions' }, compareBtn, selCopiesBtn, trashGrpBtn)),
+      h('div', { class: 'dup-compare' },
         itemEl(entry, data.master, data, 0, true),
         ...shown.map((m, i) => itemEl(entry, m, data, i, false))));
     card.addEventListener('focusin', () => { state.focus = state.groups.indexOf(entry); });

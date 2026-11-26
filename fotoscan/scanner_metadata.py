@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import logging
 import os
@@ -110,6 +111,9 @@ def scan_into_db(conn: sqlite3.Connection, cfg: Config, limit: int | None = None
 
     Con limit: campione uniforme di N file. Ritorna il numero di file nuovi o modificati da elaborare.
     """
+    # Cache dei JSON per cartella: va svuotata a ogni scansione, altrimenti i sidecar aggiunti dopo
+    # il primo scan (nello stesso processo server) non vengono trovati.
+    _json_dir_cache.clear()
     root = sourcefs.norm_root(cfg.source_dir)
     # stessa cartella con un altro nome di accesso (lettera, UNC, mount): riallinea il catalogo
     # prima di confrontare i file, cosi' non si reindicizza tutto
@@ -226,9 +230,29 @@ def _gps_to_deg(vals, ref) -> float | None:
         return None
 
 
-def read_image_meta(path: str) -> Meta:
+ONE_READ_MAX = 64 * 1024 * 1024  # foto fino a 64 MB: lette dal disco una volta sola per hash ed EXIF
+
+
+def hash_and_bytes(path: str) -> tuple[str, bytes | None]:
+    """Hash del file e, per file piccoli, il contenuto gia' letto (per non riaprirlo per l'EXIF).
+    Stesso hash di file_hash."""
+    try:
+        size = os.stat(_fs(path)).st_size
+    except OSError:
+        size = None
+    if size is None or size > ONE_READ_MAX:
+        return file_hash(path), None
+    with open(_fs(path), "rb") as f:
+        data = f.read()
+    h = xxhash.xxh3_128() if xxhash else hashlib.sha256()
+    h.update(data)
+    return h.hexdigest(), data
+
+
+def read_image_meta(path: str, data: bytes | None = None) -> Meta:
     meta = Meta()
-    with Image.open(_fs(path)) as im:
+    src = io.BytesIO(data) if data is not None else _fs(path)
+    with Image.open(src) as im:
         meta.width, meta.height = im.size
         exif = im.getexif()
         if exif:
@@ -357,8 +381,9 @@ def read_sidecar(path: str) -> tuple[str | None, float | None, float | None]:
     return date, lat, lon
 
 
-def extract_metadata(path: str, kind: str, name: str, mtime: float, ffprobe: str | None) -> Meta:
-    meta = read_image_meta(path) if kind == "image" else probe_video(path, ffprobe)
+def extract_metadata(path: str, kind: str, name: str, mtime: float, ffprobe: str | None,
+                     data: bytes | None = None) -> Meta:
+    meta = read_image_meta(path, data) if kind == "image" else probe_video(path, ffprobe)
     if meta.date_source != "exif":
         try:
             sdate, slat, slon = read_sidecar(path)
@@ -391,11 +416,14 @@ def process_metadata(conn: sqlite3.Connection, cfg: Config,
 
     def work(r):
         try:
-            h = file_hash(r["path"])
+            if r["kind"] == "image":
+                h, data = hash_and_bytes(r["path"])  # una lettura sola per hash ed EXIF
+            else:
+                h, data = file_hash(r["path"]), None
         except Exception as e:  # file illeggibile
             return r["id"], None, None, f"hash: {e}"
         try:
-            m = extract_metadata(r["path"], r["kind"], r["name"], r["mtime"], ffprobe)
+            m = extract_metadata(r["path"], r["kind"], r["name"], r["mtime"], ffprobe, data)
         except Exception as e:  # EXIF corrotto / video non leggibile: data da nome/mtime, non e' fatale
             log.warning("metadati non leggibili %s: %s", r["path"], e)
             m = Meta()
@@ -432,13 +460,16 @@ def _ffmpeg_frames(ffmpeg: str, path: str, jobs: list[tuple[float, Path]], keyfr
     un JPEG troncato nella cache (che verrebbe riusato come valido). Ritorna quelli riusciti."""
     cmd = [ffmpeg, "-y", "-loglevel", "error"]
     tmps: list[tuple[Path, Path]] = []
-    for t, out in jobs:
+    for k, (t, out) in enumerate(jobs):
         tmp = out.with_name(out.stem + ".part.jpg")
         tmps.append((tmp, out))
         if keyframes_only:
             cmd += ["-skip_frame", "nokey"]  # solo keyframe: l'istante e' approssimato a pochi secondi
-        cmd += ["-ss", f"{t:.2f}", "-i", _fs(path), "-frames:v", "1", "-vf", "scale='min(512,iw)':-2",
-                "-q:v", "3", _fs(str(tmp))]
+        cmd += ["-ss", f"{t:.2f}", "-i", _fs(path)]
+    # ogni uscita dal SUO ingresso: senza -map ffmpeg sceglie per tutte lo stesso flusso (il primo input),
+    # e tutti i fotogrammi sarebbero uguali al primo
+    for k, (tmp, _out) in enumerate(tmps):
+        cmd += ["-map", f"{k}:v:0", "-frames:v", "1", "-vf", "scale='min(512,iw)':-2", "-q:v", "3", _fs(str(tmp))]
     try:
         subprocess.run(cmd, capture_output=True, timeout=120 * len(jobs), creationflags=_NO_WINDOW)
     except subprocess.TimeoutExpired:
@@ -465,9 +496,10 @@ def extract_frames(path: str, duration: float | None, out_dir: Path, file_id: in
     targets = [(max(0.0, (duration or 0.0) * frac), out_dir / f"{file_id}_{i}.jpg") for i, frac in enumerate(fractions)]
     missing = [(t, out) for t, out in targets if not out.exists() or out.stat().st_size == 0]
     if missing:
-        # video lunghi: prima dai keyframe in un solo processo; i fotogrammi mancanti, col seek esatto
-        if fast:
-            _ffmpeg_frames(ffmpeg, path, missing, keyframes_only=True)
+        # video lunghi: prima dai keyframe in un solo processo; video brevi: seek esatto, sempre in un solo
+        # processo (stessi fotogrammi, byte per byte, di un processo per fotogramma). Quelli ancora mancanti
+        # si riprovano uno alla volta col seek esatto.
+        _ffmpeg_frames(ffmpeg, path, missing, keyframes_only=fast)
         missing = [(t, out) for t, out in missing if not out.exists() or out.stat().st_size == 0]
         for t, out in missing:
             _ffmpeg_frames(ffmpeg, path, [(t, out)], keyframes_only=False)

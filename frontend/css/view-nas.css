@@ -1,0 +1,458 @@
+/* Vista NAS: stato disco di rete, invio verificato, ricezione, pulizia sicura nel Cestino e registro. */
+
+.nas-view {
+  max-width: 1080px;
+  width: 100%;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.nas-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-5);
+  border-radius: var(--shape-lg);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--fs-card);
+  box-shadow: var(--fs-card-shadow);
+  min-width: 0;
+}
+
+.nas-card--danger {
+  border-color: color-mix(in srgb, var(--md-sys-color-error) 28%, var(--md-sys-color-outline-variant));
+}
+
+.nas-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.nas-card__title-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.nas-card__title-wrap h2 {
+  margin: 0;
+}
+
+.nas-card__icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+  flex: none;
+}
+
+.nas-card__icon--warn {
+  background: var(--md-sys-color-tertiary-container);
+  color: var(--md-sys-color-on-tertiary-container);
+}
+
+.nas-card__icon--danger {
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+}
+
+.nas-desc {
+  margin: 0;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+/* Pill stato connessione */
+.nas-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font: 600 0.8125rem/1.125rem var(--md-ref-typeface-plain);
+  white-space: nowrap;
+}
+
+.nas-pill__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.nas-pill--ok {
+  background: var(--fs-success-container);
+  color: var(--fs-on-success-container);
+}
+
+.nas-pill--down {
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+}
+
+.nas-pill--neutral {
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+/* Riga campo percorso + pulsanti */
+.nas-path-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+
+.nas-path-row md-outlined-text-field {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.nas-path-row md-outlined-button,
+.nas-path-row md-filled-tonal-button {
+  margin-top: 6px;
+  flex: none;
+}
+
+/* Spazio disco NAS */
+.nas-space-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-surface-container-low);
+  border: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.nas-space-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.nas-bar {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--md-sys-color-surface-container-highest);
+  overflow: hidden;
+}
+
+.nas-bar__fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--md-sys-color-primary);
+  transition: width var(--dur-medium) var(--motion-standard);
+}
+
+.nas-bar__fill--warn {
+  background: var(--md-sys-color-tertiary);
+}
+
+.nas-bar__fill--danger {
+  background: var(--md-sys-color-error);
+}
+
+/* KPI contatori */
+.nas-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--sp-3);
+}
+
+.nas-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-surface-container-low);
+  border: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.nas-kpi__value {
+  font: 700 1.5rem/1.875rem var(--md-ref-typeface-brand);
+  font-variant-numeric: tabular-nums;
+  color: var(--md-sys-color-on-surface);
+}
+
+.nas-kpi__label {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.nas-kpi__sub {
+  color: var(--md-sys-color-on-surface-variant);
+  margin-top: 2px;
+}
+
+/* Griglia a 2 colonne per Invia e Ricevi su desktop */
+.nas-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-5);
+  align-items: start;
+}
+
+@media (max-width: 899px) {
+  .nas-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Scelta struttura (radio card) */
+.nas-layouts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--sp-2);
+}
+
+.nas-layout-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border-radius: var(--shape-md);
+  border: 1.5px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-low);
+  cursor: pointer;
+  transition: border-color var(--dur-short) var(--motion-standard), background var(--dur-short) var(--motion-standard);
+}
+
+.nas-layout-opt:hover {
+  background: var(--md-sys-color-surface-container);
+}
+
+.nas-layout-opt.is-selected {
+  border-color: var(--md-sys-color-primary);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, var(--fs-card));
+}
+
+.nas-layout-opt md-radio {
+  flex: none;
+  margin-top: 2px;
+}
+
+.nas-layout-opt__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* Selezione selettiva degli album in modalita' by_album */
+.nas-album-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-surface-container-low);
+  border: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.nas-album-picker__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.nas-album-picker__quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+.nas-album-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+/* Contatori del piano di invio */
+.nas-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-2);
+}
+
+.nas-plan-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--shape-sm);
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.nas-plan-stat__num {
+  font: 700 1.125rem/1.5rem var(--md-ref-typeface-brand);
+  font-variant-numeric: tabular-nums;
+}
+
+.nas-plan-stat--warn .nas-plan-stat__num {
+  color: var(--md-sys-color-tertiary);
+}
+
+.nas-plan-stat--ok .nas-plan-stat__num {
+  color: var(--fs-success);
+}
+
+/* Anteprima file del piano */
+.nas-details {
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+  padding-top: var(--sp-3);
+}
+
+.nas-details summary {
+  cursor: pointer;
+  color: var(--md-sys-color-primary);
+  font-weight: 500;
+}
+
+.nas-sample-list {
+  list-style: none;
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.nas-sample-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: 4px var(--sp-2);
+  border-radius: var(--shape-sm);
+  background: var(--md-sys-color-surface-container-low);
+  font-size: 0.8125rem;
+}
+
+.nas-sample-item__path {
+  font-family: ui-monospace, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Banner job attivo / completato */
+.nas-job-card {
+  border-color: color-mix(in srgb, var(--md-sys-color-primary) 35%, var(--md-sys-color-outline-variant));
+  background: color-mix(in srgb, var(--md-sys-color-primary) 6%, var(--fs-card));
+}
+
+.nas-job-card--error {
+  border-color: color-mix(in srgb, var(--md-sys-color-error) 45%, var(--md-sys-color-outline-variant));
+  background: color-mix(in srgb, var(--md-sys-color-error) 7%, var(--fs-card));
+}
+
+.nas-job-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.nas-job-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--md-sys-color-surface-container);
+  color: var(--md-sys-color-on-surface);
+  font: 500 0.8125rem/1.125rem var(--md-ref-typeface-plain);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Pulizia PC */
+.nas-cleanup-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  border-radius: var(--shape-md);
+  background: var(--md-sys-color-surface-container-low);
+  border: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.nas-cleanup-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+
+.nas-cleanup-confirm md-outlined-text-field {
+  flex: 0 1 240px;
+}
+
+.nas-cleanup-confirm md-filled-button {
+  margin-top: 6px;
+}
+
+md-filled-button.nas-btn-danger {
+  --md-filled-button-container-color: var(--md-sys-color-error);
+  --md-filled-button-label-text-color: var(--md-sys-color-on-error);
+  --md-filled-button-icon-color: var(--md-sys-color-on-error);
+}
+
+/* Registro NAS */
+.nas-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+  margin-top: var(--sp-3);
+}
+
+.nas-log-row {
+  display: grid;
+  grid-template-columns: 140px max-content minmax(0, 1fr);
+  gap: var(--sp-2) var(--sp-3);
+  align-items: baseline;
+  padding: 6px var(--sp-2);
+  border-radius: var(--shape-sm);
+  background: var(--md-sys-color-surface-container-low);
+  font-size: 0.8125rem;
+}
+
+.nas-log-row__ts {
+  color: var(--md-sys-color-on-surface-variant);
+  font-variant-numeric: tabular-nums;
+}
+
+.nas-log-row__detail {
+  font-family: ui-monospace, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.nas-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+@media (max-width: 640px) {
+  .nas-plan-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .nas-log-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+}

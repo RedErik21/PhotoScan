@@ -131,6 +131,12 @@ def cmd_ui_legacy(args, cfg):
 
 def cmd_serve(args, cfg):
     """Solo il server (sviluppo): stampa l'URL e resta in primo piano. Ctrl+C per fermarlo."""
+    from .server.__main__ import is_loopback
+
+    if not is_loopback(args.host):
+        print(f"Indirizzo {args.host!r} rifiutato: PhotoScan non ha password e accetta solo indirizzi locali "
+              "(127.0.0.1, ::1, localhost).", file=sys.stderr)
+        return 2
     url = f"http://{args.host}:{args.port}/"
     print(f"PhotoScan server: {url}   (documentazione API: {url}api/docs)  Ctrl+C per fermare", flush=True)
     subprocess.run([sys.executable, "-m", "fotoscan.server", "--host", args.host, "--port", str(args.port)], cwd=ROOT)

@@ -35,12 +35,11 @@
 .app-shell[data-nav="drawer"] { --nav-w: var(--drawer-width); }
 
 /* ---------- Barra del titolo (solo finestra desktop senza bordi) ---------- */
-:root { --titlebar-h: 32px; }
+:root { --titlebar-h: 30px; }
 .fs-titlebar {
   position: fixed; top: 0; left: 0; right: 0; z-index: var(--z-toast);
   display: none; align-items: stretch; height: var(--titlebar-h);
-  background: var(--fs-sidebar);
-  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
   color: var(--md-sys-color-on-surface-variant);
   user-select: none;
 }
@@ -54,9 +53,9 @@
 .fs-titlebar__title { font: 600 0.75rem/1 var(--md-ref-typeface-brand); letter-spacing: 0.01em; }
 .fs-titlebar__controls { display: flex; flex: none; }
 .fs-titlebar__btn {
-  display: grid; place-items: center; width: 46px; height: 100%; padding: 0;
+  display: grid; place-items: center; width: 44px; height: 100%; padding: 0;
   border: 0; background: none; color: inherit; cursor: pointer;
-  transition: background-color var(--dur-short) var(--motion-standard);
+  transition: background-color var(--dur-short) var(--motion-standard), color var(--dur-short) var(--motion-standard);
 }
 .fs-titlebar__btn svg { display: block; }
 .fs-titlebar__btn:hover { background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent); color: var(--md-sys-color-on-surface); }

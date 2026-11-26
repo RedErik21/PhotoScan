@@ -156,6 +156,9 @@ def _record(event: str, host: Any, port: Any, allowed: bool) -> None:
         if now - _last_logged.get(key, -99.0) < 5.0:
             return
         _last_logged[key] = now
+        if len(_last_logged) > 512:  # le chiavi scadute (oltre la finestra di 5 s) non servono piu'
+            for k in [k for k, t in _last_logged.items() if now - t >= 5.0]:
+                _last_logged.pop(k, None)
         row = {
             "ts": datetime.now().isoformat(timespec="seconds"),
             "outcome": "consentito" if allowed else "bloccato",

@@ -135,6 +135,22 @@
   justify-content: space-between;
 }
 
+/* Barra sospesa in basso quando una o piu' persone sono selezionate */
+.people-float-bar {
+  position: sticky;
+  bottom: var(--sp-4);
+  z-index: var(--z-raised, 20);
+  border: 1px solid color-mix(in srgb, var(--md-sys-color-primary) 30%, var(--md-sys-color-outline-variant));
+  background: color-mix(in srgb, var(--md-sys-color-surface-tint) 10%, var(--md-sys-color-surface-container-high));
+  color: var(--md-sys-color-on-surface);
+  box-shadow: var(--elev-3, 0 8px 28px -6px rgba(0, 0, 0, 0.35));
+  border-radius: var(--shape-lg);
+}
+
+.people-float-bar .people-merge-bar__actions {
+  flex-wrap: wrap;
+}
+
 .people-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
@@ -199,22 +215,66 @@
   border-color: var(--md-sys-color-primary);
 }
 
+.person-card__select-btn {
+  position: absolute;
+  top: var(--sp-2);
+  left: var(--sp-2);
+  z-index: 3;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 90%, transparent);
+  color: var(--md-sys-color-on-surface-variant);
+  border: 2px solid var(--md-sys-color-outline);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-short) var(--motion-standard), background var(--dur-short) var(--motion-standard), border-color var(--dur-short) var(--motion-standard);
+}
+
+.person-card__select-btn md-icon,
+.person-card__select-btn .material-symbols-outlined {
+  --md-icon-size: 16px;
+  font-size: 16px;
+}
+
+.person-card:hover .person-card__select-btn,
+.person-card:focus-within .person-card__select-btn,
+.people-grid.is-selecting .person-card__select-btn,
+.person-card__select-btn.is-checked {
+  opacity: 1;
+}
+
+.person-card__select-btn:hover {
+  border-color: var(--md-sys-color-primary);
+}
+
+.person-card__select-btn.is-checked {
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+  border-color: var(--md-sys-color-primary);
+}
+
+@media (hover: none) {
+  .person-card__select-btn {
+    opacity: 1;
+  }
+}
+
 .person-card__open-btn,
 .person-card__merge-btn {
   position: absolute;
   top: var(--sp-1);
+  right: var(--sp-1);
   z-index: 2;
   --md-icon-button-state-layer-width: 34px;
   --md-icon-button-state-layer-height: 34px;
   --md-icon-button-icon-size: 18px;
 }
 
-.person-card__open-btn {
-  left: var(--sp-1);
-}
-
 .person-card__merge-btn {
-  right: var(--sp-1);
   opacity: 0;
   transition: opacity var(--dur-short) var(--motion-standard);
 }

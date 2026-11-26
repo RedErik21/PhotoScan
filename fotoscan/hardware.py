@@ -276,9 +276,10 @@ def _recommend(hw: dict, rows: list[dict]) -> dict:
         else:
             pick = min(timed, key=lambda r: r["eta_total_s"])
             why = "È il più veloce: con gli altri l'analisi dell'archivio durerebbe troppo."
-    threads = (hw["cpu"]["threads"] or 4)
+    # core fisici, non thread logici: oltre i core la decodifica contende la CPU con il modello
+    cores = hw["cpu"].get("cores") or max(1, (hw["cpu"]["threads"] or 4) // 2)
     prep_bound = pick.get("bottleneck") == "foto"
-    workers = max(2, min(threads, 16 if prep_bound else 8))
+    workers = max(2, min(cores, 16 if prep_bound else 8))
     return {"model": pick["id"], "device": "auto", "batch_size": pick["batch_size"] or 8, "workers": workers,
             "reason": why}
 
@@ -330,14 +331,15 @@ def _bench_model(hw: dict, cfg, model: dict, db_path: str, workers: int) -> dict
     if batch == 0:
         return {"error": "Il modello non entra nella memoria di questo computer."}
     cpu = hw["device"] == "cpu"
-    cfg = replace(cfg, model_name=model["id"], batch_size=4 if cpu else batch, workers=workers)
+    # stessa dimensione di batch che verra' raccomandata e usata davvero (prima: 4 su CPU contro 16 consigliati)
+    cfg = replace(cfg, model_name=model["id"], batch_size=batch, workers=workers)
     t0 = time.time()
     emb = Embedder(cfg)
     load_s = time.time() - t0
     try:
         rng = np.random.default_rng(0)
         dummy = [rng.standard_normal((3, emb.size, emb.size)).astype(np.float32) for _ in range(cfg.batch_size)]
-        emb.encode_arrays(dummy)                       # riscaldamento (kernel, allocazioni)
+        emb.encode_arrays(dummy[:4] if cpu else dummy)  # riscaldamento (kernel, allocazioni)
         budget = 20.0 if cpu else 5.0
         n, t1 = 0, time.time()
         while True:

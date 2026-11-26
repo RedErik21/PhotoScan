@@ -144,7 +144,12 @@ def _run_rebuild(job):
             job.update(stage="modello", message="Carico il modello di testo (CPU)")
             embedder = Embedder(cfg, device="cpu")
         job.update(stage="piano", message="Calcolo dei gruppi")
-        return organizer.build_plan(conn, cfg, embedder)
+        try:
+            return organizer.build_plan(conn, cfg, embedder)
+        finally:
+            if embedder is not None:  # il server non tiene il modello di testo dopo il piano
+                from ..embedder import release
+                release(embedder)
     finally:
         conn.close()
 

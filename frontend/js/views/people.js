@@ -46,6 +46,23 @@ function faceAvatar(person, size = 256) {
   return img;
 }
 
+// La griglia delle persone si ricostruisce a ogni selezione o ricarica: le immagini gia' decodificate si
+// riusano (stesso nodo <img>) invece di ricrearle, cosi' non si riscaricano ne' si ridecodificano.
+const avatarCache = new Map(); // chiave persona+copertina+dimensione -> <img> caricata
+const AVATAR_CACHE_MAX = 1500;
+function cachedFaceAvatar(person, size = 256) {
+  const key = `${person.id}:${person.cover_face_id || ''}:${person.sample_file_id || ''}:${size}:${person.name || ''}`;
+  const old = avatarCache.get(key);
+  if (old && old.complete && old.naturalWidth > 0) return old;
+  const node = faceAvatar(person, size);
+  if (node.tagName === 'IMG') {
+    avatarCache.delete(key);
+    avatarCache.set(key, node);
+    while (avatarCache.size > AVATAR_CACHE_MAX) avatarCache.delete(avatarCache.keys().next().value);
+  }
+  return node;
+}
+
 /** Somma indicativa delle foto di un insieme di persone (per anteprima prima della conferma). */
 function sumPhotos(list) {
   return list.reduce((acc, p) => acc + Number(p?.count || 0), 0);
@@ -330,6 +347,31 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
     await performMerge(chosen, { clearMergeMode: true });
   }
 
+  /** Nasconde o mostra in blocco le persone selezionate (una PATCH per persona). */
+  async function setHiddenSelected(hidden) {
+    const chosen = people.filter((p) => selectedIds.has(p.id) && Boolean(p.hidden) !== hidden);
+    if (!chosen.length) return;
+    const results = await Promise.allSettled(chosen.map((p) => api.patch(`/people/${p.id}`, { hidden })));
+    if (disposed) return;
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    const done = chosen.length - failed;
+    if (hidden && !showHidden && activePersonId !== null && chosen.some((p) => p.id === activePersonId)) {
+      activePersonId = null;
+      detail?.ac.abort();
+      detail = null;
+    }
+    mergeMode = false;
+    selectedIds.clear();
+    if (failed) {
+      showSnackbar(`${formatNumber(done)} aggiornate, ${formatNumber(failed)} non riuscite.`, { error: true });
+    } else {
+      showSnackbar(hidden
+        ? (done === 1 ? 'Persona nascosta.' : `${formatNumber(done)} persone nascoste.`)
+        : (done === 1 ? 'Persona ripristinata.' : `${formatNumber(done)} persone ripristinate.`));
+    }
+    await reloadPeopleList();
+  }
+
   /** Segna tutte le coppie di un gruppo come «Diverse» sul backend (POST /people/not-same) con Annulla. */
   async function markGroupNotSame(members) {
     const pairs = [];
@@ -433,7 +475,8 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
     const main = members[0]; // gia' ordinato dal backend: nominata / piu' foto
     const others = members.slice(1);
     const ordered = [...others, main]; // prima quelle da verificare, in fondo la principale
-    const pct = Math.round((group.similarity || 0) * 100);
+    const hasSim = typeof group?.similarity === 'number';
+    const pct = hasSim ? Math.round(group.similarity * 100) : null;
     const checkedIds = new Set(members.map((m) => m.id));
 
     const cmpAc = new AbortController();
@@ -444,7 +487,7 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
 
     const headline = h('div', { slot: 'headline', class: 'compare-dialog__headline' },
       h('span', {}, members.length === 2 ? 'Confronta persone' : `Confronta ${members.length} persone`),
-      h('span', { class: 'compare-dialog__sim md-typescale-label-medium' }, `${pct}% simili`));
+      hasSim ? h('span', { class: 'compare-dialog__sim md-typescale-label-medium' }, `${pct}% simili`) : null);
 
     const mergeBtn = h('md-filled-button', {
       onclick: () => {
@@ -1090,15 +1133,13 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
     // Toolbar
     const actions = [];
     actions.push(h('md-filled-tonal-button', { onclick: startScanFaces }, icon('face_retouching_natural', { slot: 'icon' }), 'Analizza volti'));
-    if (people.length >= 2) {
-      actions.push(h('md-outlined-button', {
-        onclick: () => {
-          mergeMode = !mergeMode;
-          selectedIds.clear();
-          renderList();
-        },
-      }, icon(mergeMode ? 'close' : 'merge', { slot: 'icon' }), mergeMode ? 'Esci da unione' : 'Unisci'));
-    }
+    actions.push(h('md-outlined-button', {
+      onclick: () => {
+        mergeMode = !mergeMode;
+        selectedIds.clear();
+        renderList();
+      },
+    }, icon(mergeMode ? 'close' : 'checklist', { slot: 'icon' }), mergeMode ? 'Fine selezione' : 'Seleziona'));
     actions.push(h('md-text-button', {
       onclick: async () => {
         showHidden = !showHidden;
@@ -1126,11 +1167,12 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
 
     const suggestionsBox = buildSuggestionsBox();
 
-    // Barra di unione quando mergeMode e' attivo (con anteprima delle persone selezionate)
-    const selectedPeople = mergeMode ? people.filter((p) => selectedIds.has(p.id)) : [];
+    // Selezione attiva: tramite la spunta su qualsiasi card oppure dal pulsante «Seleziona» in toolbar.
+    const selecting = mergeMode || selectedIds.size > 0;
+    const selectedPeople = selecting ? people.filter((p) => selectedIds.has(p.id)) : [];
     const selectedTot = sumPhotos(selectedPeople);
     const mergePreview = selectedPeople.length
-      ? h('div', { class: 'people-merge-preview', 'aria-label': 'Persone selezionate per l’unione' },
+      ? h('div', { class: 'people-merge-preview', 'aria-label': 'Persone selezionate' },
         ...selectedPeople.map((p) => h('span', { class: 'people-merge-chip' },
           h('span', { class: 'people-merge-chip__avatar' }, faceAvatar(p, 96)),
           h('span', { class: 'people-merge-chip__text md-typescale-label-medium' },
@@ -1144,29 +1186,60 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
           }, icon('close')))))
       : null;
 
-    const mergeBar = mergeMode
-      ? h('div', { class: 'people-merge-bar', role: 'region', 'aria-label': 'Unisci persone' },
+    const selHidden = selectedPeople.filter((p) => p.hidden).length;
+    const selVisible = selectedPeople.length - selHidden;
+    const openCompareSelected = () => {
+      if (selectedPeople.length < 2) return;
+      const main = defaultMergeTarget(selectedPeople);
+      const ordered = [main, ...selectedPeople.filter((p) => p.id !== main.id)];
+      openCompareSuggestion({ members: ordered, similarity: null });
+    };
+
+    const floatBar = selecting
+      ? h('div', { class: 'people-merge-bar people-float-bar', role: 'region', 'aria-label': 'Azioni sulle persone selezionate' },
         h('div', { class: 'people-merge-bar__row' },
           h('span', { class: 'md-typescale-body-medium' },
             selectedPeople.length
               ? `${formatNumber(selectedPeople.length)} ${selectedPeople.length === 1 ? 'persona selezionata' : 'persone selezionate'} · fino a ${plural(selectedTot, 'foto', 'foto')}`
-              : 'Seleziona due o più persone da unire. Puoi comunque aprirne le foto con l’icona in alto a sinistra.'),
+              : 'Spunta le persone da selezionare: puoi unirle, analizzarle insieme o nasconderle.'),
           h('div', { class: 'people-merge-bar__actions' },
-            h('md-filled-button', { disabled: selectedPeople.length < 2, onclick: mergeSelected }, 'Unisci selezionate'),
+            h('md-filled-button', { disabled: selectedPeople.length < 2, onclick: mergeSelected },
+              icon('merge', { slot: 'icon' }), 'Unisci'),
+            h('md-filled-tonal-button', { disabled: selectedPeople.length < 2, onclick: openCompareSelected },
+              icon('compare', { slot: 'icon' }), 'Analizza insieme'),
+            h('md-outlined-button', { disabled: selVisible === 0, onclick: () => setHiddenSelected(true) },
+              icon('visibility_off', { slot: 'icon' }), 'Nascondi'),
+            selHidden > 0
+              ? h('md-outlined-button', { onclick: () => setHiddenSelected(false) },
+                icon('visibility', { slot: 'icon' }), 'Mostra')
+              : null,
             h('md-text-button', { onclick: () => { mergeMode = false; selectedIds.clear(); renderList(); } }, 'Annulla'))),
         mergePreview)
       : null;
 
-    const grid = h('div', { class: 'people-grid', role: 'list', 'aria-label': 'Persone' },
+    const grid = h('div', { class: `people-grid${selecting ? ' is-selecting' : ''}`, role: 'list', 'aria-label': 'Persone' },
       ...people.map((p) => {
-        const sel = mergeMode && selectedIds.has(p.id);
+        const sel = selectedIds.has(p.id);
         const toggleSelect = () => {
           if (selectedIds.has(p.id)) selectedIds.delete(p.id);
           else selectedIds.add(p.id);
           renderList();
         };
 
-        const openInMergeBtn = mergeMode
+        const selectCheckBtn = h('button', {
+          type: 'button',
+          class: `person-card__select-btn${sel ? ' is-checked' : ''}`,
+          role: 'checkbox',
+          'aria-checked': String(sel),
+          'aria-label': sel ? `Deseleziona ${p.name || 'Senza nome'}` : `Seleziona ${p.name || 'Senza nome'}`,
+          title: sel ? 'Deseleziona' : 'Seleziona persona',
+          onclick: (e) => {
+            e.stopPropagation();
+            toggleSelect();
+          },
+        }, sel ? icon('check') : null);
+
+        const openInSelectBtn = selecting
           ? h('md-icon-button', {
             class: 'person-card__open-btn',
             'aria-label': `Apri foto di ${p.name || 'Senza nome'}`,
@@ -1178,7 +1251,7 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
           }, icon('open_in_new'))
           : null;
 
-        const quickMergeBtn = !mergeMode && people.length >= 2
+        const quickMergeBtn = !selecting && people.length >= 2
           ? h('md-icon-button', {
             class: 'person-card__merge-btn',
             'aria-label': `Unisci ${p.name || 'Senza nome'} con un’altra persona`,
@@ -1194,33 +1267,33 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
           class: `person-card${sel ? ' is-selected' : ''}${p.hidden ? ' is-hidden-person' : ''}`,
           role: 'listitem',
           tabindex: '0',
-          draggable: !mergeMode,
-          'aria-pressed': mergeMode ? String(sel) : undefined,
-          'aria-label': mergeMode
+          draggable: !selecting,
+          'aria-pressed': selecting ? String(sel) : undefined,
+          'aria-label': selecting
             ? `${p.name || 'Senza nome'}, ${plural(p.count, 'foto', 'foto')}${sel ? ', selezionata' : ''}`
             : `${p.name || 'Senza nome'}, ${plural(p.count, 'foto', 'foto')}`,
-          onclick: () => (mergeMode ? toggleSelect() : openDetail(p)),
+          onclick: () => (selecting ? toggleSelect() : openDetail(p)),
           onkeydown: (e) => {
             if (e.target !== card) return;
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
-              if (mergeMode) toggleSelect();
+              if (selecting) toggleSelect();
               else openDetail(p);
             }
           },
         },
-          openInMergeBtn,
+          selectCheckBtn,
+          openInSelectBtn,
           quickMergeBtn,
-          mergeMode ? h('span', { class: 'person-card__check', 'aria-hidden': 'true' }, sel ? icon('check') : null) : null,
-          !mergeMode ? h('span', { class: 'person-card__drop-hint md-typescale-label-small', 'aria-hidden': 'true' }, 'Rilascia per unire') : null,
-          h('div', { class: 'person-card__media' }, faceAvatar(p, 256)),
+          !selecting ? h('span', { class: 'person-card__drop-hint md-typescale-label-small', 'aria-hidden': 'true' }, 'Rilascia per unire') : null,
+          h('div', { class: 'person-card__media' }, cachedFaceAvatar(p, 256)),
           h('div', { class: 'person-card__body' },
             h('p', { class: `person-card__name md-typescale-title-small${p.name ? '' : ' person-card__name--unnamed'}` },
               p.name || 'Senza nome'),
             h('p', { class: 'person-card__meta muted md-typescale-body-small' },
               `${plural(p.count, 'foto', 'foto')}${p.hidden ? ' · Nascosta' : ''}`)));
 
-        if (!mergeMode) {
+        if (!selecting) {
           card.addEventListener('dragstart', (e) => {
             draggedPersonId = p.id;
             card.classList.add('is-dragging');
@@ -1255,7 +1328,7 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
         return card;
       }));
 
-    contentSlot.replaceChildren(header, toolbar, suggestionsBox, mergeBar, grid);
+    contentSlot.replaceChildren(header, toolbar, suggestionsBox, grid, floatBar);
   }
 
   function renderCurrent() {

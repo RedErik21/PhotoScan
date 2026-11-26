@@ -14,6 +14,7 @@ export const routes = [
   { path: '/stats',            view: './views/stats.js',         title: 'Statistiche' },
   { path: '/index',            view: './views/organize.js',      title: 'Organizza' },
   { path: '/phone',            view: './views/phone.js',         title: 'Importa dal telefono' },
+  { path: '/nas',              view: './views/nas.js',           title: 'NAS' },
   { path: '/settings',         view: './views/settings.js',      title: 'Impostazioni' },   // ?tab=general|network|labels|suggested
   { path: '/onboarding',       view: './views/onboarding.js',    title: 'Benvenuto' },
   { path: '/help',             view: './views/help.js',          title: 'Aiuto' },

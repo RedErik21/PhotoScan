@@ -1,13 +1,13 @@
 """Ricerca semantica testo -> immagine (SigLIP2 su CPU) e prova delle etichette di contesto.
 
-Il modello si carica in background la prima volta (circa 20 s): nel frattempo le route rispondono 503
-con un messaggio in italiano e il frontend mostra un banner. La matrice degli embedding resta in memoria
-e si ricostruisce solo quando cambia il numero di embedding o il massimo file_id.
+Il modello si carica in background al primo uso (apertura della Ricerca, prima query, prova di un'etichetta):
+nel frattempo le route rispondono 503 con un messaggio in italiano e il frontend mostra un banner. Dopo
+IDLE_UNLOAD_S secondi senza uso il modello e la matrice degli embedding si scaricano, cosi' l'app ferma non
+tiene torch in RAM. La matrice si ricostruisce solo quando cambia il numero di embedding o il massimo file_id.
 """
 from __future__ import annotations
 
 import logging
-import os
 import sys
 import threading
 import time
@@ -23,16 +23,11 @@ from ..embedder import Embedder, label_vectors
 from . import deps
 
 
-def _warmup_on_start() -> None:
-    """Avvio dell'app: il modello si carica in background (priorita' bassa) se il catalogo ha gia' embedding."""
-    threading.Thread(target=_warmup_worker, daemon=True, name="search-warmup").start()
-
-
-router = APIRouter(prefix="/api", tags=["search"], on_startup=[_warmup_on_start])
+router = APIRouter(prefix="/api", tags=["search"])
 log = logging.getLogger("fotoscan")
 
 LOADING_MSG = "Sto preparando la ricerca..."
-WARMUP_DELAY_S = 3.0  # il server risponde subito; il caricamento parte dopo un breve ritardo
+IDLE_UNLOAD_S = 10 * 60  # modello e matrice si scaricano dopo 10 minuti senza ricerche
 # Soglie sul coseno (testo-immagine): valori di SigLIP 2 Base in config.BASE_SEARCH_THR (significato li').
 # Gli altri modelli hanno la scala dei coseni diversa: preset in config.AVAILABLE_MODELS["search_thr"], sostituibili
 # dall'utente in Impostazioni > Per esperti (config.model_profile).
@@ -61,6 +56,7 @@ _emb: Embedder | None = None
 _loading = False
 _error: str | None = None
 _load_seconds: float | None = None
+_last_used = 0.0  # time.monotonic() dell'ultimo uso del modello o della matrice
 
 _enc_lock = threading.Lock()  # un solo encoding di testo alla volta (torch su CPU)
 _qcache: OrderedDict[str, np.ndarray] = OrderedDict()  # vettori delle query recenti
@@ -81,32 +77,38 @@ def _lower_thread_priority() -> None:
         pass
 
 
-def _warmup_worker() -> None:
-    _lower_thread_priority()
-    time.sleep(WARMUP_DELAY_S)
-    cfg = deps.get_cfg()
-    if not os.path.exists(cfg.db_path):
-        return  # primo avvio: niente catalogo, il modello non serve ancora
-    try:
-        conn = dbm.connect(cfg.db_path)
-        try:
-            n = conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
-        finally:
-            conn.close()
-    except Exception:  # noqa: BLE001 - se il catalogo e' in scrittura riproveremo alla prima ricerca
-        return
-    if n:
-        start_warmup()
+def _touch() -> None:
+    global _last_used
+    _last_used = time.monotonic()
+
+
+def _idle_worker() -> None:
+    """Scarica modello e matrice dopo IDLE_UNLOAD_S senza uso; termina quando il modello non e' piu' in memoria."""
+    while True:
+        time.sleep(min(60.0, max(1.0, IDLE_UNLOAD_S / 4)))
+        with _lock:
+            if _emb is None:
+                return
+            idle = time.monotonic() - _last_used
+        if idle >= IDLE_UNLOAD_S:
+            log.info("modello di ricerca scaricato dopo %d s di inattivita'", int(idle))
+            reset_model()
+            import gc
+            gc.collect()
+            return
 
 
 def _load_worker(cfg) -> None:
     global _emb, _loading, _error, _load_seconds
+    _lower_thread_priority()
     t0 = time.perf_counter()
     try:
         emb = Embedder(cfg, device="cpu")  # CPU: non contende la GPU con l'indicizzazione
         with _lock:
             _emb = emb
             _load_seconds = round(time.perf_counter() - t0, 1)
+        _touch()
+        threading.Thread(target=_idle_worker, daemon=True, name="search-idle").start()
         log.info("modello di ricerca caricato in %.1f s", _load_seconds)
     except Exception as e:  # noqa: BLE001 - l'errore va mostrato, non propagato al thread
         log.exception("caricamento del modello di ricerca fallito")
@@ -132,6 +134,7 @@ def _require_embedder() -> Embedder:
     with _lock:
         emb, err = _emb, _error
     if emb is not None:
+        _touch()
         return emb
     start_warmup()  # dopo un errore riprova al contatto successivo
     if err:
@@ -172,6 +175,7 @@ def _text_vector(emb: Embedder, text: str) -> np.ndarray:
 def _embedding_matrix(conn) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(ids, matrice, is_video) dal catalogo; ricostruita solo se cambiano conteggio o max file_id."""
     global _mat_cache
+    _touch()
     cfg = deps.get_cfg()
     row = conn.execute("SELECT COUNT(*), MAX(file_id) FROM embeddings").fetchone()
     key = (cfg.db_path, row[0], row[1])

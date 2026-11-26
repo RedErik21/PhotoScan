@@ -136,7 +136,7 @@ function dismiss(key) {
 
 function startPolling() {
   if (pollTimer) return;
-  pollTimer = setInterval(refresh, POLL_MS);
+  pollTimer = setInterval(() => { if (!document.hidden) refresh(); }, POLL_MS);
 }
 function stopPolling() {
   if (pollTimer) clearInterval(pollTimer);

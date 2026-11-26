@@ -298,6 +298,15 @@ def is_reliable_face(det_score: float | None, bbox: list[float] | None, quality:
     return True
 
 
+def _physical_cores() -> int:
+    try:
+        from .hardware import _cores
+        phys, logical = _cores()
+        return max(1, phys or (logical or 2) // 2)
+    except Exception:  # noqa: BLE001
+        return max(1, (os.cpu_count() or 2) // 2)
+
+
 # ------------------------------------------------------------ motore ONNX (SCRFD + ArcFace)
 class OnnxFaceEngine:
     """Rilevatore SCRFD (det_10g) + riconoscitore ArcFace (w600k_r50) su ONNXRuntime puro."""
@@ -312,6 +321,9 @@ class OnnxFaceEngine:
         provs = ["CUDAExecutionProvider", "CPUExecutionProvider"] if active_provider() == "CUDAExecutionProvider" else ["CPUExecutionProvider"]
         opts = ort.SessionOptions()
         opts.log_severity_level = 3
+        # thread di calcolo limitati ai core fisici (la decodifica delle foto gira in parallelo nei worker)
+        opts.intra_op_num_threads = _physical_cores()
+        opts.inter_op_num_threads = 1
         self.det = ort.InferenceSession(str(det_path), sess_options=opts, providers=provs)
         self.rec = ort.InferenceSession(str(rec_path), sess_options=opts, providers=provs)
         self.provider = self.det.get_providers()[0]
@@ -532,7 +544,7 @@ def detect_faces(
 
     engine = detector or OnnxFaceEngine(c, det_size=int(getattr(c, "faces_det_size", 640)))
     supports_batch = callable(getattr(engine, "detect_boxes", None)) and callable(getattr(engine, "embed_crops", None))
-    workers = max(1, min(int(c.workers or 4), 8))
+    workers = max(1, min(int(c.workers or 4), 8, _physical_cores()))
     window = max(16, workers * 4)
     inserted = 0
     processed = 0
@@ -691,9 +703,12 @@ def recompute_person(conn: sqlite3.Connection, person_id: int) -> None:
     )
 
 
-def _blockwise_components(mat: np.ndarray, threshold: float, block: int = 2048) -> list[list[int]]:
+def _blockwise_components(mat: np.ndarray, threshold: float, block: int = 2048, topk: int = 0) -> list[list[int]]:
     """Componenti connesse sul grafo sim(i,j) >= threshold, calcolate a blocchi (mai matrice N x N).
-    100% indipendente dall'ordine delle righe."""
+    100% indipendente dall'ordine delle righe.
+    topk=0 (predefinito): esatto, tutte le coppie sopra soglia.
+    topk>0 (modalita' avanzata 'approx'): per ogni blocco tiene solo i topk vicini piu' simili di ogni volto.
+    Piu' veloce su archivi grandi, ma puo' non unire volti della stessa persona: opzione per esperti."""
     n = len(mat)
     if n == 0:
         return []
@@ -719,7 +734,16 @@ def _blockwise_components(mat: np.ndarray, threshold: float, block: int = 2048) 
             bj = mat[j:j + block]
             sims = bi @ bj.T
             if i == j:
-                r_idx, c_idx = np.where(np.triu(sims, k=1) >= threshold)
+                sims = np.triu(sims, k=1)
+            if topk > 0:
+                pairs_r, pairs_c = [], []
+                for r in range(sims.shape[0]):
+                    cols = np.nonzero(sims[r] >= threshold)[0]
+                    if len(cols) > topk:
+                        cols = cols[np.argsort(-sims[r, cols])[:topk]]
+                    pairs_r.extend([r] * len(cols))
+                    pairs_c.extend(cols.tolist())
+                r_idx, c_idx = np.asarray(pairs_r, dtype=np.int64), np.asarray(pairs_c, dtype=np.int64)
             else:
                 r_idx, c_idx = np.where(sims >= threshold)
             for r, c in zip(r_idx.tolist(), c_idx.tolist()):
@@ -805,7 +829,9 @@ def cluster_faces(
         # 4. Raggruppa i volti rimasti in modo indipendente dall'ordine
         if remaining:
             mat = np.stack([v for _, _, v in remaining])
-            comps = _blockwise_components(mat, threshold=thr)
+            # 'exact' (predefinito) o 'approx' (avanzata, vedi faces_topk): stesso grafo, meno archi per blocco
+            topk = int(getattr(c, "faces_topk", 50)) if getattr(c, "faces_cluster_mode", "exact") == "approx" else 0
+            comps = _blockwise_components(mat, threshold=thr, topk=max(0, topk))
             # Filtra membri ponte deboli nei componenti grandi e ordina deterministicamente
             valid_clusters: list[tuple[int, int, list[int]]] = []
             for comp in comps:

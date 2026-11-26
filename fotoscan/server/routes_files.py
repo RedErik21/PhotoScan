@@ -33,26 +33,7 @@ _ORDER = {
     "name": "f.name COLLATE NOCASE, f.id",
 }
 
-# Indice (status, date_taken): serve WHERE status='embedded' e ORDER BY data senza sort temporaneo (~4 ms su 14k).
-_INDEXES = [
-    "CREATE INDEX IF NOT EXISTS ix_files_status_date ON files(status, date_taken)",
-]
-
-
-def _ensure_indexes() -> None:
-    try:
-        conn = deps.open_db()
-        try:
-            for sql in _INDEXES:
-                conn.execute(sql)
-            conn.commit()
-        finally:
-            conn.close()
-    except Exception:  # l'app deve partire anche se l'indice non si crea
-        log.exception("indici di routes_files non creati")
-
-
-router.on_startup.append(_ensure_indexes)
+# Indice (status, date_taken) per WHERE status='embedded' ORDER BY data: in db.SCHEMA (ix_files_status_date).
 
 
 # ------------------------------------------------------------------ parametri
@@ -409,23 +390,48 @@ def broken_summary(conn: sqlite3.Connection = Depends(deps.get_db)):
     return _broken_summary(conn)
 
 
-@router.post("/library/broken/check")
-def broken_check(conn: sqlite3.Connection = Depends(deps.get_db)):
-    """Controlla che ogni file del catalogo esista ancora sul disco (solo lettura del disco).
+BROKEN_CHECK = "broken_check"
+
+
+def _broken_check_job(job) -> dict:
+    """Controlla che ogni file del catalogo esista ancora sul disco (solo lettura del disco), con progresso.
     Segna i mancanti; toglie il segno ai file 'mancanti' che sono ricomparsi."""
     import os
 
-    rows = conn.execute("SELECT id, path FROM files WHERE status='embedded'").fetchall()
-    gone = [r["id"] for r in rows if not os.path.isfile(r["path"])]
-    gone_set = set(gone)
-    back = [r["file_id"] for r in conn.execute("SELECT file_id FROM broken WHERE reason='mancante'")
-            if r["file_id"] not in gone_set]
-    conn.executemany("INSERT INTO broken(file_id, reason, checked) VALUES(?, 'mancante', ?) "
-                     "ON CONFLICT(file_id) DO UPDATE SET reason='mancante', checked=excluded.checked",
-                     [(i, _ora()) for i in gone])
-    conn.executemany("DELETE FROM broken WHERE file_id=?", [(i,) for i in back])
-    conn.commit()
-    return {**_broken_summary(conn), "checked": len(rows)}
+    conn = deps.open_db()
+    try:
+        rows = conn.execute("SELECT id, path FROM files WHERE status='embedded'").fetchall()
+        job.update(stage="controllo dei file", done=0, total=len(rows))
+        gone: list[int] = []
+        for n, r in enumerate(rows, 1):
+            if job.cancel_requested:
+                return {**_broken_summary(conn), "checked": n - 1, "cancelled": True}
+            if not os.path.isfile(r["path"]):
+                gone.append(r["id"])
+            if n % 500 == 0:
+                job.update(done=n)
+        gone_set = set(gone)
+        back = [r["file_id"] for r in conn.execute("SELECT file_id FROM broken WHERE reason='mancante'")
+                if r["file_id"] not in gone_set]
+        conn.executemany("INSERT INTO broken(file_id, reason, checked) VALUES(?, 'mancante', ?) "
+                         "ON CONFLICT(file_id) DO UPDATE SET reason='mancante', checked=excluded.checked",
+                         [(i, _ora()) for i in gone])
+        conn.executemany("DELETE FROM broken WHERE file_id=?", [(i,) for i in back])
+        conn.commit()
+        job.update(done=len(rows))
+        return {**_broken_summary(conn), "checked": len(rows)}
+    finally:
+        conn.close()
+
+
+@router.post("/library/broken/check")
+def broken_check():
+    """Avvia (o restituisce, se gia' in corso) il controllo dei file mancanti come job: con migliaia di file,
+    magari su un disco di rete, non sta dentro una richiesta HTTP. Esito in job.result."""
+    from . import jobs
+
+    running = jobs.running_job(BROKEN_CHECK)
+    return (running or jobs.start_job(BROKEN_CHECK, _broken_check_job)).public()
 
 
 @router.post("/library/broken/remove")

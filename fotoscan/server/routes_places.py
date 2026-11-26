@@ -85,10 +85,11 @@ def stats_overview(conn: sqlite3.Connection = Depends(deps.get_db)):
         )
     ]
 
-    per_kind = [
-        {"kind": r["kind"], "count": r["count"]}
-        for r in conn.execute("SELECT kind, COUNT(*) AS count FROM files GROUP BY kind ORDER BY count DESC")
-    ]
+    # conteggio e dimensione per tipo in una sola scansione
+    kind_rows = conn.execute(
+        "SELECT kind, COUNT(*) AS count, COALESCE(SUM(size), 0) AS bytes FROM files GROUP BY kind ORDER BY count DESC"
+    ).fetchall()
+    per_kind = [{"kind": r["kind"], "count": r["count"]} for r in kind_rows]
 
     date_sources = [
         {"source": r["source"], "count": r["count"]}
@@ -107,7 +108,7 @@ def stats_overview(conn: sqlite3.Connection = Depends(deps.get_db)):
     ]
 
     size_by_kind = {"image": 0, "video": 0}
-    for r in conn.execute("SELECT kind, COALESCE(SUM(size), 0) AS bytes FROM files GROUP BY kind"):
+    for r in kind_rows:
         size_by_kind[r["kind"]] = r["bytes"]
 
     return {

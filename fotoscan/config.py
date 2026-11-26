@@ -98,10 +98,18 @@ DEFAULT_LABELS: list[dict[str, str]] = [
 ]
 
 
+_DEVICE_CACHE: dict[str, str] = {}
+_FFMPEG_CACHE: dict[tuple, tuple] = {}
+FFMPEG_RETRY_S = 300.0
+
+
 @dataclass
 class Config:
     source_dir: str = ""
     output_dir: str = ""
+    nas_dir: str = ""  # cartella di backup sul NAS (percorso UNC o unita' mappata; vuota = NAS non configurato)
+    nas_receive_dir: str = ""  # cartella locale dove si ricevono file dal NAS (mai sovrascritti)
+    nas_layout: str = "as_is"  # as_is: stessa struttura degli originali | by_album: una cartella per album
     db_path: str = str(ROOT / "catalogo.db")
     cache_dir: str = str(ROOT / "cache")
     ffmpeg_path: str = ""  # vuoto = autodetect
@@ -155,6 +163,10 @@ class Config:
     update_auto_download: bool = False   # se c'e', la scarica subito (senza installarla)
     update_auto_install: bool = False    # installa da sola al prossimo avvio quella scaricata
     update_prerelease: bool = False      # considera anche le versioni di prova (pre-release)
+    # Impostazioni avanzate per esperti (scheda Avanzate). Predefiniti = comportamento sicuro, senza perdita di qualita'.
+    faces_cluster_mode: str = "exact"   # exact: tutte le coppie sopra soglia | approx: solo i topk vicini (puo' separare volti della stessa persona)
+    faces_topk: int = 50                # vicini considerati per volto in modalita' approx
+    apply_verify: str = "full"          # full: riapplicando si verifica l'hash dei file gia' presenti | fast: si confronta solo la dimensione
 
     # ---- utilita' ----
     def context_temperature(self) -> float:
@@ -164,19 +176,43 @@ class Config:
     def resolve_device(self) -> str:
         if self.device != "auto":
             return self.device
+        # memoizzato per processo: import torch e controllo CUDA costano, e il risultato non cambia
+        if "auto" in _DEVICE_CACHE:
+            return _DEVICE_CACHE["auto"]
+        dev = "cpu"
         try:
             import torch
 
             if torch.cuda.is_available():
-                return "cuda"
-            if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-                return "mps"
+                dev = "cuda"
+            elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+                dev = "mps"
         except Exception:
             pass
-        return "cpu"
+        _DEVICE_CACHE["auto"] = dev
+        return dev
 
     def find_ffmpeg(self) -> tuple[str | None, str | None]:
-        """Ritorna (ffmpeg, ffprobe) cercando anche nelle cartelle di winget."""
+        """Ritorna (ffmpeg, ffprobe) cercando anche nelle cartelle di winget.
+
+        Memoizzato: un risultato trovato vale finche' i file esistono; uno mancante si ricerca al massimo
+        ogni FFMPEG_RETRY_S secondi (i glob ricorsivi nelle cartelle di winget sono lenti)."""
+        import time as _time
+
+        key = (self.ffmpeg_path or "", os.environ.get("PATH", ""))
+        hit = _FFMPEG_CACHE.get(key)
+        if hit is not None:
+            res, at = hit
+            if res[0] is not None:
+                if all(p is None or os.path.exists(p) for p in res):
+                    return res
+            elif _time.monotonic() - at < FFMPEG_RETRY_S:
+                return res
+        res = self._find_ffmpeg_uncached()
+        _FFMPEG_CACHE[key] = (res, _time.monotonic())
+        return res
+
+    def _find_ffmpeg_uncached(self) -> tuple[str | None, str | None]:
         def look(name: str) -> str | None:
             if self.ffmpeg_path:
                 cand = Path(self.ffmpeg_path)

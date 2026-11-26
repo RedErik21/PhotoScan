@@ -204,6 +204,7 @@ export async function mount(root, ctx) {
     pollTimer = null;
     if (on) {
       pollTimer = setInterval(async () => {
+        if (document.hidden) return;   // scheda nascosta: riprova quando torna visibile
         try {
           const s = await api.get('/search/status', undefined, ac.signal);
           // Pronto, oppure caricamento fallito: il banner non deve restare su "sto preparando".

@@ -76,6 +76,9 @@ def _pid_alive(pid: int) -> bool:
             return True
         except OSError:
             return False
+    alive = _pid_alive_win(pid)
+    if alive is not None:
+        return alive
     try:
         out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"], capture_output=True,
                              text=True, creationflags=NO_WINDOW, timeout=10).stdout
@@ -83,6 +86,36 @@ def _pid_alive(pid: int) -> bool:
         return False
     # riga CSV: "python.exe","1234",...  -> evita di confondere un pid riciclato
     return f'"{pid}"' in out and "python" in out.lower()
+
+
+def _pid_alive_win(pid: int) -> bool | None:
+    """Stesso controllo di tasklist (vivo e eseguibile python/PhotoScan) via API, senza un processo per
+    chiamata: il monitor di un'indicizzazione orfana lo chiama ogni secondo. None se l'API non risponde."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = ctypes.windll.kernel32
+        k32.OpenProcess.restype = wintypes.HANDLE
+        h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        try:
+            code = wintypes.DWORD()
+            if not k32.GetExitCodeProcess(h, ctypes.byref(code)):
+                return None
+            if code.value != 259:  # STILL_ACTIVE
+                return False
+            buf = ctypes.create_unicode_buffer(32768)
+            size = wintypes.DWORD(len(buf))
+            if not k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+                return None
+            exe = os.path.basename(buf.value).lower()
+            return "python" in exe or "photoscan" in exe
+        finally:
+            k32.CloseHandle(h)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _pid_file(cache_dir: str) -> Path:
@@ -183,6 +216,55 @@ def _log_tail(cache_dir: str, n: int = LOG_TAIL_LINES) -> list[str]:
     return out[-n:]
 
 
+SLOW_TTL_S = 5.0  # conteggi e raggiungibilita' della sorgente: al massimo ogni 5 s durante l'indicizzazione
+_slow_lock = threading.Lock()
+_slow: dict = {}
+
+
+def _db_stamp(db_path: str) -> tuple:
+    out = []
+    for suf in ("", "-wal"):
+        try:
+            st = os.stat(db_path + suf)
+            out.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append(None)
+    return tuple(out)
+
+
+def _slow_stats(conn, db_path: str, running: bool) -> dict:
+    """db.stats con cache: durante l'indicizzazione al massimo ogni SLOW_TTL_S, a riposo finche' il
+    catalogo non cambia (stat del file e del WAL)."""
+    now = time.monotonic()
+    stamp = _db_stamp(db_path)
+    with _slow_lock:
+        c = _slow.get("stats")
+        if c and c[0] == db_path:
+            fresh = (now - c[1] < SLOW_TTL_S) if running else (c[2] == stamp)
+            if fresh:
+                return c[3]
+    stats = dbm.stats(conn)
+    with _slow_lock:
+        _slow["stats"] = (db_path, now, stamp, stats)
+    return stats
+
+
+def _source_state(source: str) -> tuple[bool, bool | None]:
+    """(di rete, raggiungibile) con cache SLOW_TTL_S: su un NAS ogni controllo e' un giro di rete."""
+    if not source:
+        return False, None
+    now = time.monotonic()
+    with _slow_lock:
+        c = _slow.get("source")
+        if c and c[0] == source and now - c[1] < SLOW_TTL_S:
+            return c[2], c[3]
+    net = sourcefs.is_network(source)
+    reach = sourcefs.reachable(source)
+    with _slow_lock:
+        _slow["source"] = (source, now, net, reach)
+    return net, reach
+
+
 def _snapshot(run: _Run | None, running: bool) -> dict:
     cfg = deps.get_cfg()
     stage, done, total, epoch = "", 0, 0, None
@@ -194,7 +276,7 @@ def _snapshot(run: _Run | None, running: bool) -> dict:
         conn = deps.open_db()
         try:
             stage, done, total, epoch = _read_progress(conn)
-            stats = dbm.stats(conn)
+            stats = _slow_stats(conn, cfg.db_path, running)
             if not source:
                 source = dbm.get_meta(conn, "source_dir", "") or ""
             raw_err = dbm.get_meta(conn, "last_index_error", "") or ""
@@ -221,8 +303,7 @@ def _snapshot(run: _Run | None, running: bool) -> dict:
     if stage == "completato":
         eta = 0.0
     percent = round(done * 100.0 / total, 1) if total else (100.0 if stage == "completato" else None)
-    src_net = bool(source) and sourcefs.is_network(source)
-    src_reach = sourcefs.reachable(source) if source else None
+    src_net, src_reach = _source_state(source)
     return {
         "running": running,
         "stage": stage,

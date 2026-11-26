@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+import zlib
 
 import numpy as np
 
@@ -64,6 +65,7 @@ CREATE TABLE IF NOT EXISTS album_items(
   added TEXT, PRIMARY KEY(album_id, file_id)
 );
 CREATE INDEX IF NOT EXISTS ix_files_date ON files(date_taken);
+CREATE INDEX IF NOT EXISTS ix_files_status_date ON files(status, date_taken);
 CREATE TABLE IF NOT EXISTS plan(
   file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
   folder TEXT,                     -- NULL = non copiare
@@ -71,6 +73,8 @@ CREATE TABLE IF NOT EXISTS plan(
   is_dup INTEGER DEFAULT 0, dup_of INTEGER
 );
 CREATE INDEX IF NOT EXISTS ix_plan_folder ON plan(folder);
+CREATE INDEX IF NOT EXISTS ix_plan_dup_of ON plan(dup_of);
+CREATE INDEX IF NOT EXISTS ix_album_items_file ON album_items(file_id);
 CREATE TABLE IF NOT EXISTS rename_map(old TEXT PRIMARY KEY, new TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS file_override(file_id INTEGER PRIMARY KEY, folder TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -94,6 +98,11 @@ CREATE TABLE IF NOT EXISTS persons_not_same(
   created TEXT,
   PRIMARY KEY(a, b), CHECK(a < b)
 );
+-- copie sul NAS verificate con hash: il file locale puo' essere spostato nel Cestino solo se la copia risulta valida
+CREATE TABLE IF NOT EXISTS nas_copies(
+  file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+  nas_path TEXT NOT NULL, local_size INTEGER, local_mtime REAL, hash TEXT NOT NULL, verified TEXT NOT NULL
+);
 -- file non utilizzabili scoperti durante l'uso: 'mancante' (non piu' sul disco) | 'illeggibile' (anteprima impossibile)
 CREATE TABLE IF NOT EXISTS broken(
   file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
@@ -102,14 +111,24 @@ CREATE TABLE IF NOT EXISTS broken(
 """
 
 
+MIGRATION_REV = 1  # da incrementare quando cambia _migrate
+# Versione dello schema scritta in PRAGMA user_version dopo SCHEMA + migrazioni: le connessioni successive
+# (una per richiesta HTTP) la leggono dall'intestazione del file e saltano executescript e migrazioni.
+# Un catalogo nuovo, sostituito o creato da una versione diversa ha un altro valore e viene aggiornato.
+SCHEMA_VERSION = (zlib.crc32(SCHEMA.encode("utf-8")) ^ MIGRATION_REV) & 0x7FFFFFFF or 1
+
+
 def connect(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path, timeout=60, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
-    conn.executescript(SCHEMA)
-    _migrate(conn)
+    if conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+        conn.execute("PRAGMA journal_mode=WAL")  # persistente nel file: basta impostarlo una volta
+        conn.executescript(SCHEMA)
+        _migrate(conn)
+        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        conn.commit()
     return conn
 
 
@@ -188,18 +207,19 @@ def load_embeddings(conn: sqlite3.Connection) -> tuple[np.ndarray, np.ndarray]:
 
 
 def stats(conn: sqlite3.Connection) -> dict[str, int]:
-    q = lambda sql: conn.execute(sql).fetchone()[0]  # noqa: E731
-    return {
-        "totale": q("SELECT COUNT(*) FROM files"),
-        "foto": q("SELECT COUNT(*) FROM files WHERE kind='image'"),
-        "video": q("SELECT COUNT(*) FROM files WHERE kind='video'"),
-        "nuovi": q("SELECT COUNT(*) FROM files WHERE status='new'"),
-        "con_metadati": q("SELECT COUNT(*) FROM files WHERE status IN ('meta','embedded')"),
-        "indicizzati": q("SELECT COUNT(*) FROM files WHERE status='embedded'"),
-        "errori": q("SELECT COUNT(*) FROM files WHERE status='error'"),
-        "senza_data_exif": q("SELECT COUNT(*) FROM files WHERE date_source IS NOT NULL AND date_source!='exif' AND kind='image'"),
-        "data_incerta": q("SELECT COUNT(*) FROM files WHERE data_incerta=1"),
-        "duplicati": q(
-            "SELECT COALESCE(SUM(c-1),0) FROM (SELECT COUNT(*) c FROM files WHERE hash IS NOT NULL GROUP BY hash HAVING c>1)"
-        ),
-    }
+    # una sola scansione di files per tutti i contatori (prima: 9 COUNT separati)
+    r = conn.execute(
+        "SELECT COUNT(*),"
+        " COALESCE(SUM(kind='image'),0), COALESCE(SUM(kind='video'),0),"
+        " COALESCE(SUM(status='new'),0), COALESCE(SUM(status IN ('meta','embedded')),0),"
+        " COALESCE(SUM(status='embedded'),0), COALESCE(SUM(status='error'),0),"
+        " COALESCE(SUM(date_source IS NOT NULL AND date_source!='exif' AND kind='image'),0),"
+        " COALESCE(SUM(data_incerta=1),0) FROM files"
+    ).fetchone()
+    dup = conn.execute(
+        "SELECT COALESCE(SUM(c-1),0) FROM (SELECT COUNT(*) c FROM files WHERE hash IS NOT NULL GROUP BY hash HAVING c>1)"
+    ).fetchone()[0]
+    keys = ("totale", "foto", "video", "nuovi", "con_metadati", "indicizzati", "errori", "senza_data_exif", "data_incerta")
+    out = {k: int(v) for k, v in zip(keys, r)}
+    out["duplicati"] = int(dup)
+    return out

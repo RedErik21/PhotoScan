@@ -3,7 +3,7 @@
 // Route: #/gallery?filter=all|photo|video|favorites|duplicates&year=YYYY&month=M (posizione aggiornata mentre si scorre).
 // Ingresso da Statistiche: #/gallery?day=AAAA-MM-GG (posiziona sul giorno, o sul primo giorno precedente con foto).
 import { h, icon } from '../ui/el.js';
-import { api } from '../api.js';
+import { api, waitJob } from '../api.js';
 import { showSnackbar } from '../ui/snackbar.js';
 import { albumPickerDialog, confirmDialog } from '../ui/dialog.js';
 import { skeletonGrid } from '../ui/skeleton.js';
@@ -398,7 +398,13 @@ export async function mount(root, ctx) {
   async function refreshBroken({ check = false } = {}) {
     try {
       const doCheck = check || !sessionStorage.getItem('fs.brokenChecked');
-      const r = doCheck ? await api.post('/library/broken/check') : await api.get('/library/broken');
+      let r;
+      if (doCheck) {
+        const job = await waitJob(await api.post('/library/broken/check'));
+        r = job?.state === 'done' && job.result ? job.result : await api.get('/library/broken');
+      } else {
+        r = await api.get('/library/broken');
+      }
       if (doCheck) sessionStorage.setItem('fs.brokenChecked', '1');
       if (destroyed) return;
       const before = brokenCount;

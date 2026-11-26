@@ -73,8 +73,7 @@ async function build() {
     },
   }, glyph('maximize'));
 
-  const drag = h('div', { class: 'fs-titlebar__drag pywebview-drag-region' },
-    h('span', { class: 'fs-titlebar__title' }, 'PhotoScan'));
+  const drag = h('div', { class: 'fs-titlebar__drag pywebview-drag-region' });
   // Doppio clic sulla barra = ingrandisci / ripristina, come le finestre Windows
   drag.addEventListener('dblclick', () => maxBtn.click());
 

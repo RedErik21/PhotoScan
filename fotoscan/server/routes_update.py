@@ -24,6 +24,7 @@ router = APIRouter(prefix="/api", tags=["update"])
 JOB = "update_download"
 SETTING_KEYS = ("update_check_on_start", "update_auto_download", "update_auto_install", "update_prerelease")
 STARTUP_DELAY = 4.0  # secondi: il controllo all'avvio non rallenta l'apertura della finestra
+STARTUP_MIN_INTERVAL_S = 6 * 3600  # all'avvio non si richiama GitHub (limite 60/h senza login) se ha risposto da poco
 _check_lock = threading.Lock()
 
 
@@ -112,12 +113,27 @@ def startup_check() -> None:
         time.sleep(STARTUP_DELAY)
         try:
             cfg = get_cfg()
-            if cfg.update_check_on_start and update_repo():
+            if cfg.update_check_on_start and update_repo() and not _recently_checked(cfg):
                 run_check(cfg, auto=True)
         except Exception as e:  # noqa: BLE001 - mai bloccare l'avvio per un aggiornamento
             log.warning("controllo aggiornamenti all'avvio non riuscito: %s", e)
 
     threading.Thread(target=run, daemon=True, name="update-check").start()
+
+
+def _recently_checked(cfg: Config) -> bool:
+    """L'ultimo controllo e' riuscito da meno di STARTUP_MIN_INTERVAL_S, con questa versione, e non ha
+    trovato nulla da scaricare: riavviare l'app non deve riinterrogare GitHub ogni volta."""
+    from datetime import datetime
+
+    state = updater.read_state(cfg.cache_dir)
+    try:
+        when = datetime.fromisoformat(state.get("checked_at") or "")
+    except ValueError:
+        return False
+    age = (datetime.now() - when).total_seconds()
+    return (0 <= age < STARTUP_MIN_INTERVAL_S and not state.get("error") and not state.get("available")
+            and state.get("current") == __version__)
 
 
 def _self_update_off() -> bool:

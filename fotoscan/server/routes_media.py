@@ -13,6 +13,7 @@ import os
 import re
 import stat as statmod
 import threading
+from collections import OrderedDict
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -34,8 +35,34 @@ router = APIRouter(prefix="/api", tags=["media"])
 _POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="media")
 _lock = threading.Lock()
 _inflight: dict[str, Future] = {}      # chiave cache -> generazione in corso (deduplica)
-_key_locks: dict[str, threading.Lock] = {}
-_bad: set[str] = set()                 # generazioni fallite per questa versione del file
+_KEY_LOCKS = [threading.Lock() for _ in range(64)]  # lock a strisce: memoria fissa, non uno per chiave
+
+
+class _BoundedSet:
+    """Insieme con al massimo `cap` elementi (i piu' vecchi escono): non cresce per tutta la sessione."""
+
+    def __init__(self, cap: int) -> None:
+        self._d: OrderedDict[str, None] = OrderedDict()
+        self._cap = cap
+        self._l = threading.Lock()
+
+    def __contains__(self, key: str) -> bool:
+        with self._l:
+            return key in self._d
+
+    def add(self, key: str) -> None:
+        with self._l:
+            self._d[key] = None
+            self._d.move_to_end(key)
+            while len(self._d) > self._cap:
+                self._d.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._l:
+            self._d.clear()
+
+
+_bad = _BoundedSet(5000)  # generazioni fallite per questa versione del file
 
 NEUTRAL = (226, 226, 230)
 IMMUTABLE = "public, max-age=31536000, immutable"
@@ -84,8 +111,7 @@ def _build_and_forget(key: str, build: Callable[[], Path]) -> Path:
 
 
 def _key_lock(key: str) -> threading.Lock:
-    with _lock:
-        return _key_locks.setdefault(key, threading.Lock())
+    return _KEY_LOCKS[hash(key) % len(_KEY_LOCKS)]
 
 
 def _clamp(v: int, lo: int, hi: int) -> int:

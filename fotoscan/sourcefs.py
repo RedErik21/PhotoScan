@@ -99,6 +99,10 @@ def rebase_catalog(conn: sqlite3.Connection, old_root: str, new_root: str) -> in
     if ok * 2 < len(sample):  # meno della meta' dei file campione trovati: non e' la stessa cartella
         return 0
     moves = [(new_n + r["path"][len(old_n):], r["id"]) for r in rows]
+    # ogni nuovo percorso deve restare dentro la nuova radice (niente "..", niente radici diverse)
+    new_prefix = os.path.normcase(os.path.normpath(new_n)).rstrip("\\/") + os.sep
+    if any(not os.path.normcase(os.path.normpath(p)).startswith(new_prefix) for p, _ in moves):
+        return 0
     try:
         conn.executemany("UPDATE files SET path=? WHERE id=?", moves)
         conn.commit()

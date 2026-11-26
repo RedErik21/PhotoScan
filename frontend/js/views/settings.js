@@ -22,6 +22,7 @@ const TABS = [
   { id: 'general', label: 'Generale', file: './settings-general.js' },
   { id: 'network', label: 'Rete', file: './settings-network.js' },
   { id: 'updates', label: 'Aggiornamenti', file: './settings-updates.js' },
+  { id: 'advanced', label: 'Avanzate', file: './settings-advanced.js' },
   { id: 'labels', label: 'Etichette', file: './settings-labels.js', wide: true },
   { id: 'suggested', label: 'Suggerite', file: './settings-suggested.js', wide: true },
 ];
@@ -99,7 +100,7 @@ export async function mount(root, { query = {}, navigate } = {}) {
   let drafts = {};            // id sezione -> ultimo stato inviato con onDirty
   let pendingErrors = {};     // errori di validazione dell'ultimo salvataggio fallito (campo -> messaggio)
   const isLabelsMode = query.tab === 'labels' || query.tab === 'suggested';
-  const activeTabs = isLabelsMode ? TABS.filter((t) => t.id !== 'general') : TABS.filter((t) => ['general', 'network', 'updates'].includes(t.id));
+  const activeTabs = isLabelsMode ? TABS.filter((t) => t.id !== 'general') : TABS.filter((t) => ['general', 'network', 'updates', 'advanced'].includes(t.id));
   let tabIndex = Math.max(0, activeTabs.findIndex((t) => t.id === query.tab));
   let selfHash = activeTabs[tabIndex].id !== 'general' ? `#/settings?tab=${activeTabs[tabIndex].id}` : '#/settings';
   let section = null;         // { id, api } della sezione montata

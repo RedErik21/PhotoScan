@@ -10,7 +10,8 @@ export const navItems = [
   { id: 'stats',      group: 'library',  label: 'Statistiche',   icon: 'insights',             path: '/stats' },
 
   { id: 'organize',   group: 'organize', label: 'Organizza',     icon: 'auto_awesome_motion',  path: '/organize' },
-  { id: 'phone',      group: 'organize', label: 'Telefono',      icon: 'smartphone',           path: '/phone' },
+  { id: 'phone',      group: 'import',   label: 'Telefono',      icon: 'smartphone',           path: '/phone' },
+  { id: 'nas',        group: 'import',   label: 'NAS',           icon: 'dns',                  path: '/nas' },
 
   { id: 'settings',   group: 'system',   label: 'Impostazioni',  icon: 'settings',             path: '/settings' },
   { id: 'help',       group: 'system',   label: 'Aiuto',         icon: 'help',                 path: '/help' },
@@ -19,6 +20,7 @@ export const navItems = [
 export const navGroups = [
   { id: 'library',  label: 'Libreria' },
   { id: 'organize', label: 'Strumenti' },
+  { id: 'import',   label: 'Import' },
   { id: 'system',   label: 'Sistema' },
 ];
 

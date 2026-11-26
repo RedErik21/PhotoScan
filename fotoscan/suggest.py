@@ -96,7 +96,22 @@ def discover(conn: sqlite3.Connection, cfg: Config, embedder: Embedder | None = 
     ids, mat = load_embeddings(conn)
     if len(ids) == 0:
         return []
-    _, best, score = score_contexts(conn, cfg, embedder)
+    from .embedder import LazyTextEmbedder
+
+    own = embedder is None
+    if own:  # un solo caricamento del modello di testo per contesti e vocabolario (e solo se serve)
+        embedder = LazyTextEmbedder(cfg)
+    try:
+        return _discover(conn, cfg, embedder, ids, mat, say)
+    finally:
+        if own:
+            embedder.release()
+
+
+def _discover(conn, cfg, embedder, ids, mat, say) -> list[dict]:
+    from .organizer import score_contexts
+
+    _, best, score = score_contexts(conn, cfg, embedder, emb_data=(ids, mat))
     good = (best >= 0) & (score >= cfg.score_threshold)
     rows = {r["id"]: r for r in conn.execute(
         "SELECT f.id, f.kind, f.date_taken, f.data_incerta, COALESCE(p.is_dup,0) AS is_dup "

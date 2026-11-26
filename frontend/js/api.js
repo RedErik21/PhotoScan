@@ -65,9 +65,23 @@ export const fileUrl = {
 };
 
 // --- Eventi SSE (/api/events) con riconnessione automatica ---
+// Attesa crescente fino a 30 s; con la finestra nascosta non si riprova: si riparte quando torna visibile.
 const handlers = new Map(); // type -> Set<fn>
 let es = null;
 let retry = 1000;
+let retryTimer = 0;
+const RETRY_MAX = 30000;
+
+function scheduleReconnect() {
+  if (retryTimer) return;
+  if (document.hidden) return;   // ci pensa visibilitychange
+  retryTimer = setTimeout(() => { retryTimer = 0; connect(); }, retry);
+  retry = Math.min(retry * 2, RETRY_MAX);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && !es && handlers.size) { retry = 1000; scheduleReconnect(); }
+});
 
 function connect() {
   if (es) return;
@@ -76,7 +90,7 @@ function connect() {
   es.onerror = () => {
     dispatch('connection', { online: false });
     es.close(); es = null;
-    setTimeout(connect, retry); retry = Math.min(retry * 2, 10000);
+    scheduleReconnect();
   };
   for (const type of ['job', 'index', 'hello', 'update']) {
     es.addEventListener(type, (ev) => { try { dispatch(type, JSON.parse(ev.data)); } catch { /* ignora */ } });
@@ -93,4 +107,21 @@ export function onEvent(type, fn) {
   handlers.get(type).add(fn);
   connect();
   return () => handlers.get(type)?.delete(fn);
+}
+
+/** Attende la fine di un job (evento SSE `job`, con controllo di riserva ogni 3 s). Ritorna il job concluso. */
+export function waitJob(job, { onProgress } = {}) {
+  if (!job || job.state !== 'running') return Promise.resolve(job);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (j) => { if (done) return; done = true; off(); clearInterval(timer); resolve(j); };
+    const off = onEvent('job', (j) => {
+      if (j.id !== job.id) return;
+      if (j.state === 'running') onProgress?.(j); else finish(j);
+    });
+    const timer = setInterval(async () => {
+      if (document.hidden) return;
+      try { const j = await api.get(`/jobs/${job.id}`); if (j.state !== 'running') finish(j); } catch { /* riprova */ }
+    }, 3000);
+  });
 }

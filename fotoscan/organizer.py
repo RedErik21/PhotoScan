@@ -54,17 +54,21 @@ def context_probs(mat: np.ndarray, tv: np.ndarray, nv: np.ndarray, scale: float,
     return p[:, :-1]
 
 
-def score_contexts(conn: sqlite3.Connection, cfg: Config, embedder: Embedder | None = None):
-    """Per ogni file indicizzato: (ids, indice etichetta migliore, probabilita' softmax)."""
-    ids, mat = load_embeddings(conn)
+def score_contexts(conn: sqlite3.Connection, cfg: Config, embedder: Embedder | None = None,
+                   emb_data: tuple[np.ndarray, np.ndarray] | None = None):
+    """Per ogni file indicizzato: (ids, indice etichetta migliore, probabilita' softmax).
+    emb_data: (ids, matrice) gia' letti da load_embeddings, per non rileggerli."""
+    ids, mat = emb_data if emb_data is not None else load_embeddings(conn)
     if len(ids) == 0 or not cfg.labels:
         return ids, np.full(len(ids), -1), np.zeros(len(ids), dtype=np.float32)
-    tv = label_vectors(conn, [l["prompt"] for l in cfg.labels], embedder, cfg)
+    # etichette e classi nulle in una sola chiamata: il modello di testo (se serve) si carica una volta
+    lab = [l["prompt"] for l in cfg.labels]
+    allv = label_vectors(conn, lab + list(cfg.null_prompts), embedder, cfg)
+    tv, nv = allv[:len(lab)], allv[len(lab):]
     scale = float(get_meta(conn, "logit_scale", "100") or 100)
     # Softmax con temperatura morbida + classi "nulle" generiche ("una foto"): il contesto vince solo se
     # batte sia le altre etichette sia lo sfondo generico. Cosi' la soglia ha un significato reale
     # (sigmoid assoluta: ~0 su foto vere; softmax puro: ~0.9 anche per immagini fuori contesto).
-    nv = label_vectors(conn, list(cfg.null_prompts), embedder, cfg)
     p = context_probs(mat, tv, nv, scale, cfg.context_temperature())
     best = p.argmax(axis=1)
     return ids, best, p[np.arange(len(ids)), best].astype(np.float32)
@@ -192,7 +196,8 @@ def _content_rejects(a: _Mini | None, b: _Mini | None, cfg: Config) -> bool:
 
 
 def _near_dups(conn: sqlite3.Connection, cfg: Config, files, dup_of: dict[int, int],
-               stats: dict[str, int] | None = None) -> dict[int, int]:
+               stats: dict[str, int] | None = None,
+               emb_data: tuple[np.ndarray, np.ndarray] | None = None) -> dict[int, int]:
     """Quasi-duplicati: ritorna {perdente: master} (su 'rappresentanti', cioe' i master degli esatti).
     Un perdente e' tale solo se e' collegato DIRETTAMENTE al master (niente catene transitive).
     stats['simili_scartati'] = file che sarebbero quasi-duplicati senza i controlli (regola nome con
@@ -204,7 +209,7 @@ def _near_dups(conn: sqlite3.Connection, cfg: Config, files, dup_of: dict[int, i
     raw: set[tuple[int, int]] = set()  # tutte le coppie candidate, prima dei controlli
     edges: set[tuple[int, int]] = set()  # quelle che superano i controlli di nome/embedding
 
-    emb_ids, mat = load_embeddings(conn)
+    emb_ids, mat = emb_data if emb_data is not None else load_embeddings(conn)
     pos: dict[int, int] = {}
     norm = np.zeros((0, 0), dtype=np.float32)
     if len(emb_ids):
@@ -360,11 +365,43 @@ def _load_cities() -> list[tuple[str, float, float]]:
     return _cities
 
 
+_city_grid: dict[tuple[int, int], list[int]] | None = None
+
+
+def _cities_near(lat: float, lon: float, max_km: float) -> list[tuple[str, float, float]]:
+    """Citta' nelle celle di 1 grado attorno al punto (abbastanza per max_km), nell'ordine dell'elenco:
+    stesso risultato della scansione completa, ma una manciata di confronti invece di migliaia per foto."""
+    import math
+
+    global _city_grid
+    cities = _load_cities()
+    if _city_grid is None:
+        grid: dict[tuple[int, int], list[int]] = defaultdict(list)
+        for i, (_n, a, b) in enumerate(cities):
+            grid[(math.floor(a), math.floor(b))].append(i)
+        _city_grid = dict(grid)
+    dlat = int(math.ceil(max_km / 110.5)) + 1
+    coslat = min(math.cos(math.radians(min(89.0, abs(lat) + dlat))), 1.0)
+    if coslat < 0.02:  # vicino ai poli: meglio la scansione completa
+        return cities
+    dlon = int(math.ceil(max_km / (111.3 * coslat))) + 1
+    if dlon >= 180:
+        return cities
+    fy, fx = math.floor(lat), math.floor(lon)
+    idx: list[int] = []
+    for y in range(fy - dlat, fy + dlat + 1):
+        for x in range(fx - dlon, fx + dlon + 1):
+            xx = ((x + 180) % 360) - 180  # attraversa l'antimeridiano
+            idx.extend(_city_grid.get((y, xx), ()))
+    idx.sort()
+    return [cities[i] for i in idx]
+
+
 def _nearest_city(lat: float, lon: float, max_km: float = 30.0) -> str | None:
     import math
 
     best, best_d = None, max_km
-    for name, a, b in _load_cities():
+    for name, a, b in _cities_near(lat, lon, max_km):
         dlat, dlon = math.radians(a - lat), math.radians(b - lon)
         h = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat)) * math.cos(math.radians(a)) * math.sin(dlon / 2) ** 2
         d = 12742 * math.asin(math.sqrt(h))
@@ -414,13 +451,14 @@ def _describe_event(ev, ctx_of: dict, pos_of: dict, home: str | None) -> str:
 def build_plan(conn: sqlite3.Connection, cfg: Config, embedder: Embedder | None = None,
                progress: Callable[[str, int, int], None] | None = None) -> dict[str, int]:
     """Calcola il piano e lo salva nella tabella plan (nessun file toccato)."""
-    ids, best, score = score_contexts(conn, cfg, embedder)
+    emb_data = load_embeddings(conn)  # una lettura sola per contesti, temi visivi e quasi-duplicati
+    ids, best, score = score_contexts(conn, cfg, embedder, emb_data=emb_data)
     ctx_of = {int(i): (cfg.labels[b]["name"] if b >= 0 else None, float(s)) for i, b, s in zip(ids, best, score)}
     # etichette da esempi (temi suggeriti e accettati): solo per le foto che nessuna etichetta di testo copre
     from .suggest import assign_visual
 
     if len(ids):
-        _, mat = load_embeddings(conn)
+        mat = emb_data[1]
         images = {r[0] for r in conn.execute("SELECT id FROM files WHERE kind='image'")}
         not_image = np.array([int(i) not in images for i in ids], dtype=bool)
         taken = ((best >= 0) & (score >= cfg.score_threshold)) | not_image  # solo foto: i video restano agli eventi
@@ -445,7 +483,7 @@ def build_plan(conn: sqlite3.Connection, cfg: Config, embedder: Embedder | None 
 
     # --- quasi-duplicati (versioni modificate, scatti quasi identici): {perdente: master}
     stats: dict[str, int] = {}
-    near_of = _near_dups(conn, cfg, files, dup_of, stats)
+    near_of = _near_dups(conn, cfg, files, dup_of, stats, emb_data=emb_data)
 
     rows: dict[int, dict] = {}
     pending_events: list[tuple[datetime, int, float]] = []
@@ -701,7 +739,10 @@ def apply_plan(conn: sqlite3.Connection, cfg: Config, apply: bool = False,
             dest = dest_dir / safe_name(r["name"])
             key = str(dest).lower()
             # anteprima: niente hash (su 60 GB sarebbe lentissimo); esecuzione: confronto di contenuto
-            already = dest.exists() and _is_same_content(Path(r["path"]), dest, r["size"], r["hash"], deep=apply)
+            # apply_verify="full" (predefinito): hash del file gia' presente. "fast" (avanzata): solo dimensione,
+            # niente rilettura dell'archivio, ma un file danneggiato di stessa dimensione non viene rilevato.
+            deep = apply and getattr(cfg, "apply_verify", "full") != "fast"
+            already = dest.exists() and _is_same_content(Path(r["path"]), dest, r["size"], r["hash"], deep=deep)
             if key in used or (dest.exists() and not already):
                 dest = dest_dir / safe_name(f"{Path(r['name']).stem}_{r['file_id']}{Path(r['name']).suffix}")
                 key = str(dest).lower()

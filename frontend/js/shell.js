@@ -336,12 +336,18 @@ function renderFlowBar() {
   if (flowBar) flowBar.hidden = true;
 }
 
-async function loadDupSummary() {
+async function loadDupSummaryNow() {
   try {
     dupSummary = await api.get('/duplicates/summary');
     refreshStepMarkers();
     renderFlowBar();
   } catch { /* facoltativo */ }
+}
+// Lo stato cambia spesso (indicizzazione, job): una sola richiesta per raffica di aggiornamenti.
+let dupTimer = 0;
+function loadDupSummary() {
+  clearTimeout(dupTimer);
+  dupTimer = setTimeout(() => { dupTimer = 0; loadDupSummaryNow(); }, 800);
 }
 // La pagina Duplicati segnala con questo evento che l'utente ha revisionato i gruppi.
 window.addEventListener('fotoscan:dup-reviewed', () => loadDupSummary());
@@ -511,7 +517,7 @@ export async function mountShell(appEl) {
   });
   store.subscribe('status', () => { renderSideStatus(); renderNasBanner(); refreshStepMarkers(); renderFlowBar(); loadDupSummary(); });
   renderNasBanner();
-  loadDupSummary();
+  loadDupSummaryNow();
 
   // Connessione: banner quando il server non risponde; al ritorno ricarica lo stato.
   onEvent('connection', ({ online }) => {

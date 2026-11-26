@@ -115,6 +115,62 @@ class Embedder:
         return (mean / norm).astype(np.float32) if norm > 0 else vecs[0]
 
 
+class LazyTextEmbedder:
+    """Embedder di testo creato al primo encode_texts e poi riusato: piu' chiamate a label_vectors nella stessa
+    operazione (etichette, classi nulle, vocabolario dei suggerimenti) caricano il modello una volta sola.
+    Se tutti i vettori sono gia' in cache il modello non si carica mai. release() lo libera subito."""
+
+    def __init__(self, cfg: Config, device: str = "cpu"):
+        self.cfg, self.device = cfg, device
+        self._emb: Embedder | None = None
+
+    def _get(self) -> Embedder:
+        if self._emb is None:
+            self._emb = Embedder(self.cfg, device=self.device)
+        return self._emb
+
+    @property
+    def loaded(self) -> bool:
+        return self._emb is not None
+
+    def encode_texts(self, texts: list[str]) -> np.ndarray:
+        return self._get().encode_texts(texts)
+
+    def __getattr__(self, name):  # logit_scale, encode_query, ... caricano il modello se servono
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._get(), name)
+
+    def release(self) -> None:
+        emb, self._emb = self._emb, None
+        if emb is not None:
+            release(emb)
+
+
+def release(emb) -> None:
+    """Libera subito la memoria di un modello non piu' usato (RAM e, se su GPU, VRAM)."""
+    if emb is None:
+        return
+    if isinstance(emb, LazyTextEmbedder):
+        emb.release()
+        return
+    torch = getattr(emb, "torch", None)
+    dev = getattr(emb, "device", "cpu")
+    for attr in ("model", "tokenizer"):
+        if hasattr(emb, attr):
+            try:
+                setattr(emb, attr, None)
+            except AttributeError:
+                pass
+    import gc
+    gc.collect()
+    if torch is not None and dev == "cuda":
+        try:
+            torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def label_vectors(conn: sqlite3.Connection, prompts: list[str], embedder: Embedder | None, cfg: Config) -> np.ndarray:
     """Embedding testuali delle etichette, con cache nel DB (il modello si carica solo se servono nuovi prompt)."""
     if get_meta(conn, "label_model") != cfg.model_name:
@@ -125,7 +181,10 @@ def label_vectors(conn: sqlite3.Connection, prompts: list[str], embedder: Embedd
     missing = [p for p in prompts if p not in cached]
     if missing:
         emb = embedder or Embedder(cfg, device="cpu")
-        for p, v in zip(missing, emb.encode_texts(missing)):
+        vecs = emb.encode_texts(missing)
+        if embedder is None:
+            release(emb)  # creato qui solo per questi prompt: non resta in memoria
+        for p, v in zip(missing, vecs):
             conn.execute("INSERT OR REPLACE INTO label_cache(prompt, vec) VALUES(?,?)", (p, to_blob(v)))
             cached[p] = v
         conn.commit()

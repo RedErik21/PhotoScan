@@ -100,6 +100,17 @@ export async function mountSection(container) {
   const logSlot = h('div', { class: 'net-group' });
   container.replaceChildren(skeletonList(4));
 
+  /** Con la finestra nascosta il registro non si rilegge: si riprende al ritorno in primo piano. */
+  function reloadWhenVisible() {
+    if (disposed) return;
+    if (!document.hidden) { load({ quiet: true }); return; }
+    document.addEventListener('visibilitychange', function again() {
+      if (document.hidden) return;
+      document.removeEventListener('visibilitychange', again);
+      if (!disposed) load({ quiet: true });
+    });
+  }
+
   async function load({ quiet = false } = {}) {
     try {
       const d = await api.get('/network', { limit: 300 });
@@ -110,7 +121,7 @@ export async function mountSection(container) {
       if (disposed || quiet) return;
       container.replaceChildren(hint(`Impossibile leggere lo stato della rete: ${e.message}`));
     } finally {
-      if (!disposed) { clearTimeout(timer); timer = setTimeout(() => load({ quiet: true }), REFRESH_MS); }
+      if (!disposed) { clearTimeout(timer); timer = setTimeout(reloadWhenVisible, REFRESH_MS); }
     }
   }
 

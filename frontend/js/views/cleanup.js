@@ -1,398 +1,399 @@
-// Libera spazio: mostra duplicati, video pesanti, screenshot, documenti/scontrini e foto pesanti,
-// indicando quanto spazio si può recuperare e permettendo di spostare i file scelti nel Cestino di Windows.
+// Libera spazio: pulizia guidata di video pesanti, screenshot, documenti e foto pesanti
+// con griglia raggruppata Per tempo (mese/anno), Per contesto (etichetta o cartella) o Più pesanti,
+// selezione per gruppo, tasto Cestino rapido su ogni card e barra sospesa in basso.
 import { h, icon } from '../ui/el.js';
 import { api } from '../api.js';
 import { showSnackbar } from '../ui/snackbar.js';
 import { confirmDialog } from '../ui/dialog.js';
 import { createTile, updateTile } from '../ui/photo-tile.js';
 import { createSelection, useRangeSelect } from '../ui/selection.js';
-import { skeletonCard, skeletonGrid } from '../ui/skeleton.js';
+import { skeletonGrid } from '../ui/skeleton.js';
 import { emptyState, errorState } from '../ui/empty-state.js';
-import { formatBytes, formatNumber, plural } from '../ui/format.js';
+import { formatBytes, formatMonth, formatNumber, plural } from '../ui/format.js';
 
 const CATEGORIES = [
-  { id: 'duplicates',   icon: 'filter_none',             title: 'Duplicati',             hint: 'Copie identiche o quasi uguali' },
   { id: 'large_videos', icon: 'videocam',                title: 'Video pesanti',         hint: 'Video da almeno 50 MB' },
   { id: 'screenshots',  icon: 'screenshot',              title: 'Screenshot',            hint: 'Schermate salvate nel tempo' },
   { id: 'documents',    icon: 'receipt_long',            title: 'Documenti e scontrini', hint: 'Ricevute, fogli e appunti' },
   { id: 'large_photos', icon: 'photo_size_select_large', title: 'Foto pesanti',          hint: 'Foto da almeno 8 MB' },
 ];
 
-const PAGE = 60;
+const GROUP_MODES = [
+  { id: 'time',    icon: 'calendar_month', label: 'Per tempo' },
+  { id: 'context', icon: 'folder_special', label: 'Per contesto' },
+  { id: 'size',    icon: 'weight',         label: 'Più pesanti' },
+];
+
+const PAGE = 120;
 const CSS_URL = new URL('../../css/view-cleanup.css', import.meta.url).href;
+const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : '');
 
 function loadCss() {
   if (document.querySelector('link[data-view-css="cleanup"]')) return;
   document.head.append(h('link', { rel: 'stylesheet', href: CSS_URL, dataset: { viewCss: 'cleanup' } }));
 }
 
+function parentFolderName(path) {
+  if (!path) return 'Altra cartella';
+  const parts = String(path).split(/[\\/]+/).filter(Boolean);
+  if (parts.length < 2) return 'Cartella principale';
+  return parts[parts.length - 2];
+}
+
+function timeGroupKey(file) {
+  const d = file?.date;
+  if (!d || d.length < 7 || !/^\d{4}-\d{2}/.test(d)) return { key: 'unknown', label: 'Senza data' };
+  const y = Number(d.slice(0, 4));
+  const m = Number(d.slice(5, 7));
+  return { key: `${y}-${String(m).padStart(2, '0')}`, label: cap(formatMonth(y, m)) };
+}
+
+function contextGroupKey(file, catId) {
+  const ctx = (file?.context || '').trim();
+  const isGenericCat = (catId === 'screenshots' && ctx === 'Screenshot')
+    || (catId === 'documents' && ctx === 'Documenti e scontrini');
+  if (ctx && !isGenericCat) return { key: `ctx:${ctx.toLowerCase()}`, label: ctx };
+  const folder = parentFolderName(file?.path);
+  return { key: `dir:${folder.toLowerCase()}`, label: folder };
+}
+
 export async function mount(root, ctx) {
   loadCss();
   let alive = true;
-  let summary = null;
-  let activeCat = CATEGORIES.some((c) => c.id === ctx.query?.cat) ? ctx.query.cat : 'duplicates';
-  let cleanupDup = null;
-  let dupAc = null;
-  let catSeq = 0;
+  const catId = CATEGORIES.some((c) => c.id === ctx.query?.cat) ? ctx.query.cat : 'large_videos';
+  const catInfo = CATEGORIES.find((c) => c.id === catId);
 
-  // Stato della categoria file (non duplicati)
+  let groupMode = 'time'; // 'time' | 'context' | 'size'
+  let timeAsc = false;    // false = piu' recenti prima, true = piu' vecchi prima
+  let loadSeq = 0;
+
   const selection = createSelection();
   let items = [];
   let total = 0;
+  let totalBytes = 0;
   let offset = 0;
   let loadingMore = false;
   let io = null;
-  const tileMap = new Map(); // id -> tileEl
+  const tileMap = new Map(); // file_id -> tileEl
+  let lastShift = false;
+  const rangeSelect = useRangeSelect(selection, () => items.map((f) => f.id));
 
-  const heroValue = h('p', { class: 'cln-hero__value' }, '—');
-  const heroSub = h('p', { class: 'cln-hero__sub' }, 'Analisi dello spazio occupato in corso…');
-  const dupSettingsBtn = h('md-outlined-button', { onclick: () => openDupSettingsDialog() },
-    icon('tune', { slot: 'icon' }), 'Impostazioni duplicati');
-  const hero = h('section', { class: 'card cln-hero' },
-    h('div', { class: 'cln-hero__copy' },
-      h('p', { class: 'cln-hero__eyebrow' }, 'Spazio recuperabile'),
-      heroValue,
-      heroSub),
-    dupSettingsBtn);
-
-  async function openDupSettingsDialog() {
-    let cur;
-    try { cur = await api.get('/settings'); } catch (e) { showSnackbar(e.message || 'Impossibile caricare le impostazioni.', { error: true }); return; }
-    if (!alive) return;
-    const swNear = document.createElement('md-switch');
-    swNear.selected = Number(cur.near_dup_threshold || 0) > 0;
-    const thrSlider = h('md-slider', {
-      min: 0.90, max: 0.999, step: 0.005,
-      value: swNear.selected ? Number(cur.near_dup_threshold) : 0.985,
-      disabled: !swNear.selected,
-    });
-    const thrOut = h('strong', { class: 'tabular' }, `${(Number(thrSlider.value) * 100).toFixed(1)}%`);
-    thrSlider.addEventListener('input', () => { thrOut.textContent = `${(Number(thrSlider.value) * 100).toFixed(1)}%`; });
-    swNear.addEventListener('change', () => { thrSlider.disabled = !swNear.selected; });
-
-    const secField = h('md-outlined-text-field', {
-      label: 'Finestra temporale (secondi)', type: 'number', min: 0, max: 86400,
-      value: String(cur.near_dup_seconds ?? 120),
-    });
-    const swName = document.createElement('md-switch');
-    swName.selected = !!cur.near_dup_name_rule;
-
-    const dlg = h('md-dialog', {},
-      h('div', { slot: 'headline' }, 'Impostazioni duplicati quasi uguali'),
-      h('div', { slot: 'content', style: 'display:flex;flex-direction:column;gap:16px;min-width:min(420px,80vw);' },
-        h('label', { style: 'display:flex;align-items:center;justify-content:space-between;gap:12px;' },
-          h('span', {}, 'Cerca anche foto quasi uguali'), swNear),
-        h('div', { style: 'display:flex;flex-direction:column;gap:4px;' },
-          h('span', { class: 'muted md-typescale-body-small' }, 'Somiglianza minima: ', thrOut),
-          thrSlider),
-        secField,
-        h('label', { style: 'display:flex;align-items:center;justify-content:space-between;gap:12px;' },
-          h('span', {}, 'Riconosci copie «-modificato» dal nome'), swName)),
-      h('div', { slot: 'actions' },
-        h('md-text-button', { onclick: () => dlg.close('cancel') }, 'Annulla'),
-        h('md-filled-button', {
-          onclick: async () => {
-            const sec = Number(secField.value);
-            if (!Number.isFinite(sec) || sec < 0 || sec > 86400) {
-              secField.error = true; secField.errorText = 'Valore tra 0 e 86400.'; return;
-            }
-            try {
-              await api.put('/settings', {
-                near_dup_threshold: swNear.selected ? Number(Number(thrSlider.value).toFixed(3)) : 0,
-                near_dup_seconds: sec,
-                near_dup_name_rule: !!swName.selected,
-              });
-              dlg.close('save');
-              showSnackbar('Impostazioni duplicati salvate.');
-            } catch (e) {
-              showSnackbar(e.message || 'Salvataggio non riuscito.', { error: true });
-            }
-          },
-        }, 'Salva')));
-    dlg.addEventListener('closed', () => dlg.remove(), { once: true });
-    document.body.append(dlg);
-    dlg.show();
-  }
-
-  const catRefs = new Map();
-  const catsGrid = h('div', { class: 'cln-cats fs-stagger', role: 'tablist', 'aria-label': 'Categorie di pulizia' },
-    CATEGORIES.map((c) => {
-      const sizeEl = h('span', { class: 'cln-cat__size' }, '—');
-      const metaEl = h('span', { class: 'cln-cat__meta' }, c.hint);
+  // ---------- Controlli superiori (compatti, 1 sola riga) ----------
+  const modeBtns = new Map();
+  const modeSwitcher = h('div', { class: 'cln-modes', role: 'tablist', 'aria-label': 'Raggruppamento' },
+    GROUP_MODES.map((m) => {
       const btn = h('button', {
-        type: 'button', role: 'tab', class: 'cln-cat', 'data-id': c.id,
-        onclick: () => selectCategory(c.id),
-      },
-      h('div', { class: 'cln-cat__top' },
-        h('span', { class: 'cln-cat__icon', 'aria-hidden': 'true' }, icon(c.icon)),
-        sizeEl),
-      h('span', { class: 'cln-cat__title' }, c.title),
-      metaEl);
-      catRefs.set(c.id, { btn, sizeEl, metaEl, cat: c });
+        type: 'button', role: 'tab', class: 'cln-mode-btn',
+        onclick: () => setGroupMode(m.id),
+      }, icon(m.icon), h('span', {}, m.label));
+      modeBtns.set(m.id, btn);
       return btn;
     }));
 
-  const panel = h('section', { class: 'cln-panel', role: 'tabpanel' });
-  const view = h('div', { class: 'view cln-view' },
-    h('header', { class: 'view-header' },
-      h('div', {},
-        h('h1', { class: 't-headline' }, 'Libera spazio'),
-        h('p', { class: 'muted t-body' }, 'Scopri duplicati, video pesanti, screenshot e documenti che occupano spazio. I file eliminati finiscono sempre nel Cestino di Windows.'))),
-    hero,
-    catsGrid,
-    panel);
+  const orderBtn = h('md-text-button', {
+    onclick: () => {
+      timeAsc = !timeAsc;
+      renderControls();
+      reloadItems();
+    },
+  }, icon('swap_vert', { slot: 'icon' }), 'Più recenti');
+
+  const countBadge = h('span', { class: 'muted md-typescale-body-small cln-count-badge' }, 'Caricamento…');
+
+  const selectAllBtn = h('md-text-button', {
+    onclick: () => {
+      if (selection.count >= items.length && items.length > 0) selection.clear();
+      else selection.selectAll(items.map((f) => f.id));
+    },
+  }, 'Seleziona visibili');
+
+  const controlsBar = h('div', { class: 'cln-controls' },
+    h('div', { class: 'cln-controls__left' }, modeSwitcher, orderBtn),
+    h('div', { class: 'cln-controls__right' }, countBadge, selectAllBtn));
+
+  // ---------- Area contenuto ----------
+  const contentHost = h('div', { class: 'cln-groups' });
+  contentHost.addEventListener('click', (e) => { lastShift = e.shiftKey; }, true);
+
+  const moreBtn = h('md-outlined-button', { hidden: true, onclick: () => loadMore(loadSeq) }, 'Carica altri');
+  const moreWrap = h('div', { class: 'cln-more' }, moreBtn);
+  const sentinel = h('div', { style: 'height:1px;' });
+
+  // ---------- Barra sospesa in basso (solo quando c'e' selezione) ----------
+  const floatInfo = h('strong', { class: 'md-typescale-body-medium' });
+  const floatTrashBtn = h('md-filled-button', {
+    class: 'cln-trash-btn',
+    onclick: () => trashIds([...selection.ids]),
+  }, icon('delete', { slot: 'icon' }), 'Sposta nel Cestino');
+  const floatBar = h('div', { class: 'cln-float-bar', role: 'region', 'aria-label': 'Azioni sui file selezionati', hidden: true },
+    floatInfo,
+    h('div', { class: 'cln-float-bar__actions' },
+      floatTrashBtn,
+      h('md-text-button', { onclick: () => selection.clear() }, 'Deseleziona')));
+
+  const view = h('div', { class: 'view cln-view' }, controlsBar, contentHost, moreWrap, sentinel, floatBar);
   root.replaceChildren(view);
 
-  function renderSummary() {
-    if (!summary) return;
-    heroValue.textContent = summary.total_bytes ? formatBytes(summary.total_bytes) : '0 B';
-    heroSub.textContent = summary.total_files
-      ? `${plural(summary.total_files, 'file candidato', 'file candidati')} · nessun file viene toccato senza la tua conferma.`
-      : 'Ottimo lavoro: non ci sono file pesanti o duplicati evidenti da pulire.';
-    for (const c of CATEGORIES) {
-      const ref = catRefs.get(c.id);
-      const st = summary[c.id] || { count: 0, bytes: 0 };
-      ref.sizeEl.textContent = formatBytes(st.bytes || 0);
-      ref.metaEl.textContent = c.id === 'duplicates' && st.groups
-        ? `${plural(st.count, 'copia', 'copie')} · ${plural(st.groups, 'gruppo', 'gruppi')}`
-        : `${plural(st.count, 'file', 'file')} · ${c.hint}`;
+  function apiSort() {
+    if (groupMode === 'size') return 'size';
+    if (groupMode === 'context') return 'context';
+    return timeAsc ? 'date_asc' : 'date_desc';
+  }
+
+  function renderControls() {
+    for (const m of GROUP_MODES) {
+      const btn = modeBtns.get(m.id);
+      const on = m.id === groupMode;
+      btn.classList.toggle('is-active', on);
+      btn.setAttribute('aria-selected', String(on));
+    }
+    orderBtn.hidden = groupMode !== 'time';
+    orderBtn.replaceChildren(
+      icon('swap_vert', { slot: 'icon' }),
+      timeAsc ? 'Più vecchi' : 'Più recenti',
+    );
+    countBadge.textContent = total
+      ? `${plural(total, 'file', 'file')} · ${formatBytes(totalBytes)}`
+      : 'Nessun file';
+    selectAllBtn.hidden = items.length === 0;
+    selectAllBtn.textContent = selection.count && selection.count >= items.length
+      ? 'Deseleziona tutti'
+      : 'Seleziona visibili';
+  }
+
+  function setGroupMode(mode) {
+    if (mode === groupMode) return;
+    groupMode = mode;
+    renderControls();
+    reloadItems();
+  }
+
+  async function openViewerAt(idx) {
+    try {
+      const { openViewer } = await import('./viewer.js');
+      openViewer({ items, index: idx });
+    } catch {
+      showSnackbar('Visualizzatore non disponibile.', { error: true });
     }
   }
 
-  function renderActiveTab() {
-    for (const c of CATEGORIES) {
-      const ref = catRefs.get(c.id);
-      const on = c.id === activeCat;
-      ref.btn.classList.toggle('is-active', on);
-      ref.btn.setAttribute('aria-selected', String(on));
-    }
-  }
-
-  function teardownPanel() {
-    if (io) { io.disconnect(); io = null; }
-    if (dupAc) { dupAc.abort(); dupAc = null; }
-    if (cleanupDup) { try { cleanupDup(); } catch (e) { console.error(e); } cleanupDup = null; }
-    selection.clear();
-    tileMap.clear();
-    items = [];
-    total = 0;
-    offset = 0;
-    loadingMore = false;
-  }
-
-  async function selectCategory(id) {
-    activeCat = id;
-    renderActiveTab();
-    const my = ++catSeq;
-    teardownPanel();
-
-    if (id === 'duplicates') {
-      panel.replaceChildren(skeletonCard());
-      dupAc = new AbortController();
-      try {
-        const mod = await import('./duplicates.js');
-        if (!alive || my !== catSeq) return;
-        panel.replaceChildren();
-        const res = await mod.mount(panel, { ...ctx, signal: dupAc.signal });
-        if (!alive || my !== catSeq) { if (typeof res === 'function') res(); return; }
-        if (typeof res === 'function') cleanupDup = res;
-      } catch (e) {
-        if (!alive || my !== catSeq) return;
-        panel.replaceChildren(errorState({ title: 'Duplicati non disponibili', message: e.message, onRetry: () => selectCategory('duplicates') }));
-      }
-      return;
-    }
-
-    // Categorie di file selezionabili per lo spostamento nel Cestino
-    const catInfo = CATEGORIES.find((c) => c.id === id);
-    const selInfo = h('span', { class: 'md-typescale-body-medium' }, 'Seleziona i file da spostare nel Cestino');
-    const selectAllBtn = h('md-text-button', {
-      onclick: () => {
-        if (selection.count === items.length && items.length > 0) selection.clear();
-        else selection.selectAll(items.map((f) => f.id));
-      },
-    }, 'Seleziona visibili');
-    const trashBtn = h('md-filled-button', {
-      class: 'cln-trash-btn', disabled: true,
-      onclick: () => trashSelected(),
-    }, icon('delete', { slot: 'icon' }), 'Sposta nel Cestino');
-
-    const bar = h('div', { class: 'cln-bar' },
-      h('div', { class: 'cln-bar__info' }, selInfo),
-      h('div', { class: 'cln-bar__actions' }, selectAllBtn, trashBtn));
-    const grid = h('div', { class: 'tile-grid cln-grid' });
-    const rangeSelect = useRangeSelect(selection, () => items.map((f) => f.id));
-    let lastShift = false;
-    grid.addEventListener('click', (e) => { lastShift = e.shiftKey; }, true);
-    const moreBtn = h('md-outlined-button', { hidden: true, onclick: () => loadMore(my) }, 'Carica altri');
-    const moreWrap = h('div', { class: 'cln-more' }, moreBtn);
-    const sentinel = h('div', { style: 'height:1px;' });
-
-    panel.replaceChildren(bar, skeletonGrid(12, { tile: 168 }));
-
-    function syncBar() {
-      const ids = [...selection.ids];
-      const byId = new Map(items.map((f) => [f.id, f]));
-      let bytes = 0;
-      for (const fid of ids) bytes += Number(byId.get(fid)?.size || 0);
-      if (ids.length) {
-        selInfo.textContent = `${plural(ids.length, 'file selezionato', 'file selezionati')} · ${formatBytes(bytes)}`;
-        trashBtn.disabled = false;
-        trashBtn.replaceChildren(icon('delete', { slot: 'icon' }), `Sposta nel Cestino (${formatBytes(bytes)})`);
-      } else {
-        selInfo.textContent = `${catInfo.title}: ${plural(total, 'file trovato', 'file trovati')} (ordinati dal più pesante)`;
-        trashBtn.disabled = true;
-        trashBtn.replaceChildren(icon('delete', { slot: 'icon' }), 'Sposta nel Cestino');
-      }
-      selectAllBtn.textContent = ids.length && ids.length >= items.length ? 'Deseleziona tutti' : 'Seleziona visibili';
-      for (const [fid, el] of tileMap) updateTile(el, { selected: selection.has(fid) });
-    }
-
-    const unsubSel = selection.subscribe(syncBar);
-    const prevTeardown = cleanupDup;
-    cleanupDup = () => { unsubSel(); prevTeardown?.(); };
-
-    async function openViewerAt(idx) {
-      try {
-        const { openViewer } = await import('./viewer.js');
-        openViewer({ items, index: idx });
-      } catch {
-        showSnackbar('Visualizzatore non disponibile.', { error: true });
-      }
-    }
-
-    async function trashSelected() {
-      const ids = [...selection.ids];
-      if (!ids.length) return;
-      const byId = new Map(items.map((f) => [f.id, f]));
-      let bytes = 0;
-      for (const fid of ids) bytes += Number(byId.get(fid)?.size || 0);
+  /** Sposta uno o piu' file nel Cestino di Windows. Per singolo file con quick=true salta la modale. */
+  async function trashIds(ids, { quick = false } = {}) {
+    if (!ids.length || !alive) return;
+    const byId = new Map(items.map((f) => [f.id, f]));
+    let bytes = 0;
+    for (const fid of ids) bytes += Number(byId.get(fid)?.size || 0);
+    if (!quick) {
       const ok = await confirmDialog({
         title: `Spostare ${plural(ids.length, 'file', 'file')} nel Cestino?`,
-        message: `Libererai circa ${formatBytes(bytes)}. I file verranno spostati nel Cestino di Windows (potrai recuperarli in qualsiasi momento) e rimossi dal catalogo.`,
+        message: `Libererai circa ${formatBytes(bytes)}. I file finiranno nel Cestino di Windows e potrai recuperarli finché non lo svuoti.`,
         confirmLabel: 'Sposta nel Cestino',
         danger: true,
       });
-      if (!ok || !alive || my !== catSeq) return;
-      trashBtn.disabled = true;
-      try {
-        const r = await api.post('/cleanup/trash', { file_ids: ids, confirm: true });
-        if (!alive || my !== catSeq) return;
-        const failedIds = new Set((r.errors || []).map((e) => e.id));
-        const removed = new Set(ids.filter((fid) => !failedIds.has(fid)));
-        items = items.filter((f) => !removed.has(f.id));
-        for (const fid of removed) {
-          tileMap.get(fid)?.remove();
-          tileMap.delete(fid);
-        }
-        total = Math.max(0, total - removed.size);
-        offset = Math.max(0, offset - removed.size);
-        selection.clear();
-        if (r.trashed) showSnackbar(`${plural(r.trashed, 'file spostato', 'file spostati')} nel Cestino (${formatBytes(r.freed_bytes)} liberati).`);
-        if (r.errors?.length) showSnackbar(`${plural(r.errors.length, 'file non spostato', 'file non spostati')}.`, { error: true });
-        if (!items.length) {
-          panel.replaceChildren(emptyState({ icon: 'check_circle', title: 'Categoria pulita!', message: 'Nessun altro file in questa categoria.' }));
-        }
-        loadSummary();
-      } catch (e) {
-        if (alive) showSnackbar(e.message || 'Operazione non riuscita.', { error: true });
-      } finally {
-        if (alive && my === catSeq) syncBar();
+      if (!ok || !alive) return;
+    }
+    floatTrashBtn.disabled = true;
+    try {
+      const r = await api.post('/cleanup/trash', { file_ids: ids, confirm: true });
+      if (!alive) return;
+      const failedIds = new Set((r.errors || []).map((e) => e.id));
+      const removed = new Set(ids.filter((fid) => !failedIds.has(fid)));
+      items = items.filter((f) => !removed.has(f.id));
+      for (const fid of removed) {
+        tileMap.delete(fid);
+        selection.toggle(fid, false);
       }
+      total = Math.max(0, total - removed.size);
+      totalBytes = Math.max(0, totalBytes - (r.freed_bytes || 0));
+      offset = Math.max(0, offset - removed.size);
+      if (r.trashed) {
+        showSnackbar(`${plural(r.trashed, 'file spostato', 'file spostati')} nel Cestino (${formatBytes(r.freed_bytes)} liberati).`);
+        window.dispatchEvent(new CustomEvent('fotoscan:cleanup-changed'));
+      }
+      if (r.errors?.length) showSnackbar(`${plural(r.errors.length, 'file non spostato', 'file non spostati')}.`, { error: true });
+      renderGroups();
+      syncSelectionUi();
+    } catch (e) {
+      if (alive) showSnackbar(e.message || 'Operazione non riuscita.', { error: true });
+    } finally {
+      floatTrashBtn.disabled = false;
+    }
+  }
+
+  function makeTileWrap(f, idx) {
+    const tile = createTile(f, {
+      size: 172,
+      showMeta: true,
+      selectable: true,
+      selected: selection.has(f.id),
+      onOpen: () => (selection.count > 0 || lastShift
+        ? rangeSelect(f.id, { shiftKey: lastShift })
+        : openViewerAt(idx)),
+      onSelectToggle: (file) => rangeSelect(file.id, { shiftKey: lastShift }),
+    });
+    const quickTrash = h('md-icon-button', {
+      class: 'cln-tile-trash',
+      'aria-label': `Sposta ${f.name || 'file'} nel Cestino`,
+      title: `Sposta nel Cestino (${formatBytes(f.size)})`,
+      onclick: (e) => {
+        e.stopPropagation();
+        trashIds([f.id], { quick: true });
+      },
+    }, icon('delete'));
+    const wrap = h('div', { class: 'cln-tile-wrap' }, tile, quickTrash);
+    tileMap.set(f.id, tile);
+    return wrap;
+  }
+
+  function renderGroups() {
+    tileMap.clear();
+    if (!items.length) {
+      contentHost.replaceChildren(emptyState({
+        icon: 'check_circle',
+        title: `Nessun elemento in «${catInfo.title}»`,
+        message: 'Categoria pulita: non ci sono altri file qui.',
+      }));
+      renderControls();
+      return;
     }
 
-    async function loadMore(seqId) {
-      if (!alive || seqId !== catSeq || loadingMore) return;
-      if (offset > 0 && items.length >= total) return;
-      loadingMore = true;
-      moreBtn.disabled = true;
-      try {
-        const data = await api.get('/cleanup/items', { category: id, limit: PAGE, offset }, ctx.signal);
-        if (!alive || seqId !== catSeq) return;
-        const batch = data.items || [];
-        const isFirst = offset === 0;
-        total = data.total || 0;
-        const start = items.length;
-        items.push(...batch);
-        offset += batch.length;
-
-        const nodes = batch.map((f, i) => {
-          const tile = createTile(f, {
-            size: 168,
-            showMeta: true,
-            selectable: true,
-            selected: selection.has(f.id),
-            onOpen: () => (selection.count > 0 || lastShift
-              ? rangeSelect(f.id, { shiftKey: lastShift })
-              : openViewerAt(start + i)),
-            onSelectToggle: (file) => rangeSelect(file.id, { shiftKey: lastShift }),
-          });
-          tileMap.set(f.id, tile);
-          return tile;
-        });
-
-        if (isFirst) {
-          if (!items.length) {
-            panel.replaceChildren(emptyState({
-              icon: 'check_circle',
-              title: `Nessun elemento in «${catInfo.title}»`,
-              message: 'Non ci sono file in questa categoria.',
-            }));
-            loadingMore = false;
-            return;
-          }
-          grid.replaceChildren(...nodes);
-          panel.replaceChildren(bar, grid, moreWrap, sentinel);
-          io = new IntersectionObserver((entries) => {
-            if (entries.some((e) => e.isIntersecting)) loadMore(seqId);
-          }, { rootMargin: '400px 0px' });
-          io.observe(sentinel);
-        } else {
-          grid.append(...nodes);
-        }
-        moreBtn.hidden = items.length >= total || batch.length === 0;
-        moreBtn.disabled = false;
-        loadingMore = false;
-        syncBar();
-      } catch (e) {
-        if (!alive || seqId !== catSeq || e?.name === 'AbortError') return;
-        loadingMore = false;
-        moreBtn.disabled = false;
-        if (offset === 0) {
-          panel.replaceChildren(errorState({ title: 'Impossibile caricare la categoria', message: e.message, onRetry: () => selectCategory(id) }));
-        } else {
-          showSnackbar(e.message || 'Errore di caricamento.', { error: true });
-        }
-      }
+    if (groupMode === 'size') {
+      const grid = h('div', { class: 'tile-grid cln-grid' },
+        ...items.map((f, idx) => makeTileWrap(f, idx)));
+      contentHost.replaceChildren(grid);
+      renderControls();
+      return;
     }
 
+    // Raggruppa gli elementi caricati per Tempo (mese/anno) o Contesto/Cartella
+    const groups = [];
+    const byKey = new Map();
+    items.forEach((f, idx) => {
+      const gInfo = groupMode === 'time' ? timeGroupKey(f) : contextGroupKey(f, catId);
+      let g = byKey.get(gInfo.key);
+      if (!g) {
+        g = { key: gInfo.key, label: gInfo.label, entries: [], bytes: 0 };
+        byKey.set(gInfo.key, g);
+        groups.push(g);
+      }
+      g.entries.push({ file: f, idx });
+      g.bytes += Number(f.size || 0);
+    });
+
+    const nodes = groups.map((g) => {
+      const gIds = g.entries.map((e) => e.file.id);
+      const allSel = gIds.every((id) => selection.has(id));
+      const grpBtn = h('md-text-button', {
+        class: 'cln-group__sel-btn',
+        'data-group-key': g.key,
+        onclick: () => {
+          const everyOn = gIds.every((id) => selection.has(id));
+          for (const id of gIds) selection.toggle(id, !everyOn);
+        },
+      }, icon(allSel ? 'deselect' : 'select_all', { slot: 'icon' }), allSel ? 'Deseleziona gruppo' : 'Seleziona gruppo');
+
+      return h('section', { class: 'cln-group', 'data-group-key': g.key },
+        h('div', { class: 'cln-group__head' },
+          h('div', { class: 'cln-group__title-wrap' },
+            h('h2', { class: 'cln-group__title md-typescale-title-medium' }, g.label),
+            h('span', { class: 'cln-group__meta md-typescale-label-medium' },
+              `${plural(g.entries.length, 'file', 'file')} · ${formatBytes(g.bytes)}`)),
+          grpBtn),
+        h('div', { class: 'tile-grid cln-grid' },
+          ...g.entries.map((e) => makeTileWrap(e.file, e.idx))));
+    });
+    contentHost.replaceChildren(...nodes);
+    renderControls();
+  }
+
+  function syncSelectionUi() {
+    const ids = [...selection.ids];
+    const byId = new Map(items.map((f) => [f.id, f]));
+    let bytes = 0;
+    for (const fid of ids) bytes += Number(byId.get(fid)?.size || 0);
+    floatBar.hidden = ids.length === 0;
+    if (ids.length) {
+      floatInfo.textContent = `${plural(ids.length, 'file selezionato', 'file selezionati')} · ${formatBytes(bytes)}`;
+      floatTrashBtn.replaceChildren(icon('delete', { slot: 'icon' }), `Sposta nel Cestino (${formatBytes(bytes)})`);
+    }
+    for (const [fid, el] of tileMap) updateTile(el, { selected: selection.has(fid) });
+    // Aggiorna etichetta "Seleziona gruppo" sulle intestazioni
+    contentHost.querySelectorAll('.cln-group').forEach((sec) => {
+      const btn = sec.querySelector('.cln-group__sel-btn');
+      if (!btn) return;
+      const tiles = [...sec.querySelectorAll('.photo-tile[data-id]')];
+      const allSel = tiles.length > 0 && tiles.every((t) => selection.has(Number(t.dataset.id)));
+      btn.replaceChildren(icon(allSel ? 'deselect' : 'select_all', { slot: 'icon' }), allSel ? 'Deseleziona gruppo' : 'Seleziona gruppo');
+    });
+    renderControls();
+  }
+
+  const unsubSel = selection.subscribe(syncSelectionUi);
+
+  function reloadItems() {
+    loadSeq++;
+    const my = loadSeq;
+    if (io) { io.disconnect(); io = null; }
+    items = [];
+    offset = 0;
+    total = 0;
+    totalBytes = 0;
+    loadingMore = false;
+    selection.clear();
+    contentHost.replaceChildren(skeletonGrid(12, { tile: 172 }));
+    moreBtn.hidden = true;
     loadMore(my);
   }
 
-  async function loadSummary() {
+  async function loadMore(seqId) {
+    if (!alive || seqId !== loadSeq || loadingMore) return;
+    if (offset > 0 && items.length >= total) return;
+    loadingMore = true;
+    moreBtn.disabled = true;
     try {
-      const s = await api.get('/cleanup/summary', undefined, ctx.signal);
-      if (!alive) return;
-      summary = s;
-      renderSummary();
+      const data = await api.get('/cleanup/items', {
+        category: catId,
+        sort: apiSort(),
+        limit: PAGE,
+        offset,
+      }, ctx.signal);
+      if (!alive || seqId !== loadSeq) return;
+      const batch = data.items || [];
+      total = data.total || 0;
+      totalBytes = data.total_bytes || 0;
+      const isFirst = offset === 0;
+      items.push(...batch);
+      offset += batch.length;
+      renderGroups();
+      if (isFirst && items.length < total) {
+        io = new IntersectionObserver((entries) => {
+          if (entries.some((e) => e.isIntersecting)) loadMore(seqId);
+        }, { rootMargin: '400px 0px' });
+        io.observe(sentinel);
+      }
+      moreBtn.hidden = items.length >= total || batch.length === 0;
+      moreBtn.disabled = false;
+      loadingMore = false;
+      syncSelectionUi();
     } catch (e) {
-      if (alive && e?.name !== 'AbortError') {
-        heroSub.textContent = 'Riavvia PhotoScan per attivare il calcolo dello spazio recuperabile.';
+      if (!alive || seqId !== loadSeq || e?.name === 'AbortError') return;
+      loadingMore = false;
+      moreBtn.disabled = false;
+      if (offset === 0) {
+        contentHost.replaceChildren(errorState({ title: 'Impossibile caricare la categoria', message: e.message, onRetry: () => reloadItems() }));
+      } else {
+        showSnackbar(e.message || 'Errore di caricamento.', { error: true });
       }
     }
   }
 
-  const onChanged = () => loadSummary();
-  window.addEventListener('fotoscan:cleanup-changed', onChanged);
-
-  renderActiveTab();
-  await loadSummary();
-  if (alive) selectCategory(activeCat);
+  renderControls();
+  reloadItems();
 
   return () => {
     alive = false;
-    catSeq++;
-    window.removeEventListener('fotoscan:cleanup-changed', onChanged);
-    teardownPanel();
+    loadSeq++;
+    if (io) io.disconnect();
+    unsubSel();
   };
 }

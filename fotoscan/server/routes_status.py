@@ -30,6 +30,7 @@ SETTING_KEYS = [
     "null_prompts", "video_fractions", "enable_faces", "faces_threshold", "faces_assign_threshold",
     "faces_min_photos", "faces_det_size",
     "update_check_on_start", "update_auto_download", "update_auto_install", "update_prerelease",
+    "faces_cluster_mode", "faces_topk", "apply_verify",
 ]
 _save_lock = threading.Lock()
 _dialog_lock = threading.Lock()
@@ -286,6 +287,9 @@ _CHECKS: dict[str, Callable[[Any], Any]] = {
     "faces_assign_threshold": _num("La soglia di assegnazione volti", 0.2, 0.9),
     "faces_min_photos": _num("Le foto minime per persona", 1, 50, integer=True),
     "faces_det_size": _int_choice("La dimensione di rilevamento volti", (480, 640, 800, 960)),
+    "faces_cluster_mode": _choice("La modalita' di raggruppamento volti", ("exact", "approx")),
+    "faces_topk": _num("I vicini per volto", 5, 500, integer=True),
+    "apply_verify": _choice("La verifica in riapplicazione", ("full", "fast")),
     "update_check_on_start": _flag("La ricerca degli aggiornamenti all'avvio"),
     "update_auto_download": _flag("Il download automatico degli aggiornamenti"),
     "update_auto_install": _flag("L'installazione automatica degli aggiornamenti"),
@@ -310,9 +314,61 @@ def _validate(body: dict) -> tuple[dict[str, Any], dict[str, str]]:
 
 
 # ---------------------------------------------------------------- /status
+STATUS_TTL_S = 3.0  # /api/status e' chiamato spesso da piu' viste: risposta riusata se nulla e' cambiato
+_status_cache: tuple | None = None  # (chiave, istante, risposta)
+_status_lock = threading.Lock()
+
+
+def _file_stamp(path: str) -> tuple:
+    try:
+        st = os.stat(path)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return (None, None)
+
+
+def _status_key(cfg: Config) -> tuple:
+    """Cambia quando cambia la configurazione o quando qualcuno scrive nel catalogo (file principale o WAL)."""
+    return (id(cfg), _file_stamp(cfg.db_path), _file_stamp(cfg.db_path + "-wal"))
+
+
+def _device_label(cfg: Config) -> str:
+    """Dispositivo da mostrare senza importare torch nel server (resterebbe in RAM): se torch e' gia'
+    caricato si chiede a lui, altrimenti basta il rilevamento leggero (nvidia-smi + pacchetto installato)."""
+    if cfg.device != "auto" or "torch" in sys.modules:
+        return cfg.resolve_device()
+    try:
+        from .. import hardware
+        return hardware.detect()["device"]
+    except Exception:  # noqa: BLE001
+        return "cpu"
+
+
+def invalidate_status() -> None:
+    global _status_cache
+    with _status_lock:
+        _status_cache = None
+
+
 @router.get("/status")
 def status(conn=Depends(get_db)):
+    import time as _time
+
+    global _status_cache
     cfg = get_cfg()
+    key = _status_key(cfg)
+    now = _time.monotonic()
+    with _status_lock:
+        hit = _status_cache
+    if hit is not None and hit[0] == key and now - hit[1] < STATUS_TTL_S:
+        return hit[2]
+    out = _status_uncached(cfg, conn)
+    with _status_lock:
+        _status_cache = (key, now, out)
+    return out
+
+
+def _status_uncached(cfg: Config, conn) -> dict:
     source = _effective_source(cfg, conn)
     st = dbm.stats(conn)
     plan_rows = conn.execute(
@@ -343,7 +399,7 @@ def status(conn=Depends(get_db)):
             "totale", "foto", "video", "indicizzati", "errori", "duplicati", "data_incerta", "senza_data_exif")},
         "plan": {"built": plan_rows["n"] > 0, "folders": plan_rows["folders"], "files": plan_rows["files"] or 0,
                  "missing": missing},
-        "device": cfg.resolve_device(),
+        "device": _device_label(cfg),
         "ffmpeg": cfg.find_ffmpeg()[0] is not None,
         "model": cfg.model_name,
         "model_cached": _model_cached(cfg.model_name),

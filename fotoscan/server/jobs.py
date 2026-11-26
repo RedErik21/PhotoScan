@@ -77,12 +77,20 @@ class EventBus:
 bus = EventBus()
 _jobs: dict[str, Job] = {}
 _jlock = threading.Lock()
+KEEP_FINISHED = 50  # job conclusi tenuti in memoria (per /api/jobs e per chi chiede l'esito); i piu' vecchi escono
+
+
+def _prune_locked() -> None:
+    done = sorted((j for j in _jobs.values() if j.state != "running"), key=lambda j: j.finished or j.started)
+    for j in done[:-KEEP_FINISHED] if len(done) > KEEP_FINISHED else []:
+        _jobs.pop(j.id, None)
 
 
 def start_job(name: str, fn: Callable[[Job], Any]) -> Job:
     """Esegue fn(job) in un thread. fn aggiorna job.update(...), controlla job.cancel_requested, ritorna il risultato."""
     job = Job(id=uuid.uuid4().hex[:12], name=name)
     with _jlock:
+        _prune_locked()
         _jobs[job.id] = job
 
     def run():
@@ -105,11 +113,15 @@ def get_job(job_id: str) -> Job | None:
 
 
 def list_jobs() -> list[Job]:
-    return sorted(_jobs.values(), key=lambda j: -j.started)[:50]
+    with _jlock:
+        items = list(_jobs.values())
+    return sorted(items, key=lambda j: -j.started)[:50]
 
 
 def running_job(name: str) -> Job | None:
-    for j in _jobs.values():
+    with _jlock:
+        items = list(_jobs.values())
+    for j in items:
         if j.name == name and j.state == "running":
             return j
     return None

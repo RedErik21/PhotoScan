@@ -85,10 +85,26 @@ def _cat_stats(conn: sqlite3.Connection, where: str, params: tuple) -> dict[str,
 @router.get("/cleanup/summary")
 def cleanup_summary(conn: sqlite3.Connection = Depends(deps.get_db)):
     dup_row = conn.execute(
-        "SELECT COUNT(*) AS c, COALESCE(SUM(f.size),0) AS b, COUNT(DISTINCT p.dup_of) AS g "
+        "SELECT COUNT(*) AS c, COALESCE(SUM(f.size),0) AS b, COUNT(DISTINCT p.dup_of) AS g, "
+        "SUM(CASE WHEN p.is_dup=1 THEN 1 ELSE 0 END) AS ec, "
+        "COALESCE(SUM(CASE WHEN p.is_dup=1 THEN f.size ELSE 0 END),0) AS eb, "
+        "COUNT(DISTINCT CASE WHEN p.is_dup=1 THEN p.dup_of END) AS eg, "
+        "SUM(CASE WHEN p.is_dup=2 THEN 1 ELSE 0 END) AS sc, "
+        "COALESCE(SUM(CASE WHEN p.is_dup=2 THEN f.size ELSE 0 END),0) AS sb, "
+        "COUNT(DISTINCT CASE WHEN p.is_dup=2 THEN p.dup_of END) AS sg "
         "FROM plan p JOIN files f ON f.id=p.file_id WHERE p.is_dup > 0"
     ).fetchone()
-    dups = {"count": int(dup_row["c"]), "bytes": int(dup_row["b"]), "groups": int(dup_row["g"])}
+    dups = {
+        "count": int(dup_row["c"]),
+        "bytes": int(dup_row["b"]),
+        "groups": int(dup_row["g"]),
+        "exact_count": int(dup_row["ec"] or 0),
+        "exact_bytes": int(dup_row["eb"] or 0),
+        "exact_groups": int(dup_row["eg"] or 0),
+        "similar_count": int(dup_row["sc"] or 0),
+        "similar_bytes": int(dup_row["sb"] or 0),
+        "similar_groups": int(dup_row["sg"] or 0),
+    }
 
     cats = {name: _cat_stats(conn, where, params) for name, (where, params) in CATEGORY_SQL.items()}
 
@@ -113,23 +129,36 @@ def cleanup_summary(conn: sqlite3.Connection = Depends(deps.get_db)):
     }
 
 
+_CLEANUP_ORDER: dict[str, str] = {
+    "size": "COALESCE(f.size,0) DESC, f.id DESC",
+    "date_desc": "(f.date_taken IS NULL), f.date_taken DESC, f.id DESC",
+    "date_asc": "(f.date_taken IS NULL), f.date_taken ASC, f.id ASC",
+    "context": "(p.context IS NULL OR TRIM(p.context)=''), p.context COLLATE NOCASE, COALESCE(f.size,0) DESC, f.id DESC",
+}
+
+
 @router.get("/cleanup/items")
 def cleanup_items(
     category: str = Query(...),
+    sort: str = Query("size"),
     limit: int = Query(60, ge=1, le=200),
     offset: int = Query(0, ge=0),
     conn: sqlite3.Connection = Depends(deps.get_db),
 ):
     if category not in CATEGORY_SQL:
         raise HTTPException(400, f"Categoria non valida: {category}")
+    order = _CLEANUP_ORDER.get(sort)
+    if order is None:
+        raise HTTPException(400, f"Ordinamento non valido: {sort}")
     where, params = CATEGORY_SQL[category]
     st = _cat_stats(conn, where, params)
     rows = conn.execute(
-        deps.SELECT_FILE + f"{where} ORDER BY COALESCE(f.size,0) DESC, f.id DESC LIMIT ? OFFSET ?",
+        deps.SELECT_FILE + f"{where} ORDER BY {order} LIMIT ? OFFSET ?",
         (*params, limit, offset),
     ).fetchall()
     return {
         "category": category,
+        "sort": sort,
         "total": st["count"],
         "total_bytes": st["bytes"],
         "items": [deps.file_to_dict(r) for r in rows],
