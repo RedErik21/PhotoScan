@@ -6,15 +6,6 @@ import os
 import sys
 
 from PyInstaller.utils.hooks import collect_submodules
-from PyInstaller.utils.win32.versioninfo import (
-    FixedFileInfo,
-    StringFileInfo,
-    StringStruct,
-    StringTable,
-    VarFileInfo,
-    VarStruct,
-    VSVersionInfo,
-)
 
 # Lo spec gira fuori dalla cartella del progetto: senza questo, "fotoscan" non si importa e
 # collect_submodules restituisce una lista vuota (il programma poi non trova server e database).
@@ -27,23 +18,35 @@ while len(_vparts) < 4:
     _vparts.append(0)
 _vtup = tuple(_vparts[:4])
 
-version_info = VSVersionInfo(
-    ffi=FixedFileInfo(filevers=_vtup, prodvers=_vtup, mask=0x3F, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0),
-    kids=[
-        StringFileInfo([
-            StringTable("041004B0", [
-                StringStruct("CompanyName", "PhotoScan"),
-                StringStruct("FileDescription", "PhotoScan"),
-                StringStruct("FileVersion", APP_VERSION),
-                StringStruct("InternalName", "PhotoScan"),
-                StringStruct("OriginalFilename", "PhotoScan.exe"),
-                StringStruct("ProductName", "PhotoScan"),
-                StringStruct("ProductVersion", APP_VERSION),
+version_info = None
+if sys.platform == "win32":  # risorsa di versione solo per PhotoScan.exe (su Linux il modulo richiede pefile)
+    from PyInstaller.utils.win32.versioninfo import (
+        FixedFileInfo,
+        StringFileInfo,
+        StringStruct,
+        StringTable,
+        VarFileInfo,
+        VarStruct,
+        VSVersionInfo,
+    )
+
+    version_info = VSVersionInfo(
+        ffi=FixedFileInfo(filevers=_vtup, prodvers=_vtup, mask=0x3F, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0),
+        kids=[
+            StringFileInfo([
+                StringTable("041004B0", [
+                    StringStruct("CompanyName", "PhotoScan"),
+                    StringStruct("FileDescription", "PhotoScan"),
+                    StringStruct("FileVersion", APP_VERSION),
+                    StringStruct("InternalName", "PhotoScan"),
+                    StringStruct("OriginalFilename", "PhotoScan.exe"),
+                    StringStruct("ProductName", "PhotoScan"),
+                    StringStruct("ProductVersion", APP_VERSION),
+                ]),
             ]),
-        ]),
-        VarFileInfo([VarStruct("Translation", [0x0410, 1200])]),
-    ],
-)
+            VarFileInfo([VarStruct("Translation", [0x0410, 1200])]),
+        ],
+    )
 
 hidden = collect_submodules("fotoscan", filter=lambda name: name != "fotoscan.app_streamlit")
 if not any(h.startswith("fotoscan.server") for h in hidden) or "fotoscan.db" not in hidden:
