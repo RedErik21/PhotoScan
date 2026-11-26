@@ -5,6 +5,7 @@ Un processo lasciato in vita da un riavvio del server viene riconosciuto dal pid
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -18,6 +19,7 @@ from typing import Optional
 from fastapi import APIRouter, Body, HTTPException
 
 from .. import db as dbm
+from .. import sourcefs
 from ..config import ROOT
 from . import deps, jobs
 
@@ -185,11 +187,25 @@ def _snapshot(run: _Run | None, running: bool) -> dict:
     cfg = deps.get_cfg()
     stage, done, total, epoch = "", 0, 0, None
     stats: dict = {}
+    error_code: str | None = None
+    last_rebase: dict | None = None
+    source = cfg.source_dir or ""
     try:
         conn = deps.open_db()
         try:
             stage, done, total, epoch = _read_progress(conn)
             stats = dbm.stats(conn)
+            if not source:
+                source = dbm.get_meta(conn, "source_dir", "") or ""
+            raw_err = dbm.get_meta(conn, "last_index_error", "") or ""
+            if raw_err and not running:
+                error_code = raw_err
+            raw_rebase = dbm.get_meta(conn, "last_rebase", "") or ""
+            if raw_rebase:
+                try:
+                    last_rebase = json.loads(raw_rebase)
+                except ValueError:
+                    last_rebase = None
         finally:
             conn.close()
     except Exception:  # noqa: BLE001 - catalogo bloccato o non ancora creato: stato parziale
@@ -205,6 +221,8 @@ def _snapshot(run: _Run | None, running: bool) -> dict:
     if stage == "completato":
         eta = 0.0
     percent = round(done * 100.0 / total, 1) if total else (100.0 if stage == "completato" else None)
+    src_net = bool(source) and sourcefs.is_network(source)
+    src_reach = sourcefs.reachable(source) if source else None
     return {
         "running": running,
         "stage": stage,
@@ -215,6 +233,10 @@ def _snapshot(run: _Run | None, running: bool) -> dict:
         "rate_per_sec": round(rate, 2) if rate is not None else None,
         "started": run.started if running and run is not None else None,
         "exit_code": run.exit_code if run is not None and not running else None,
+        "error_code": error_code,
+        "last_rebase": last_rebase,
+        "source_network": src_net,
+        "source_reachable": src_reach,
         "log_tail": _log_tail(cfg.cache_dir),
         "stats": stats,
     }
@@ -252,6 +274,8 @@ def _resolve_source(conn) -> str:
     if not source:
         raise HTTPException(400, "Nessuna cartella di foto impostata: scegli prima la cartella sorgente")
     if not Path(source).is_dir():
+        if sourcefs.is_network(source):
+            raise HTTPException(400, f"Il disco di rete non e' raggiungibile: {source}. Controlla che il NAS sia acceso e connesso.")
         raise HTTPException(400, f"La cartella sorgente non esiste: {source}")
     return source
 

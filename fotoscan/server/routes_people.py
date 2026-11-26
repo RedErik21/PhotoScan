@@ -63,15 +63,16 @@ def list_people(include_hidden: bool = Query(False), conn: sqlite3.Connection = 
     ]
 
 
-@router.get("/people/suggestions")
-def suggest_merges(
-    limit: int = Query(12, ge=1, le=50),
-    min_sim: float = Query(0.38, ge=0.2, le=0.95),
-    conn: sqlite3.Connection = Depends(deps.get_db),
-):
-    """Coppie di persone visibili con centroide simile che potrebbero essere la stessa persona."""
-    if not deps.get_cfg().enable_faces:
-        return []
+def _not_same_pairs(conn: sqlite3.Connection) -> set[tuple[int, int]]:
+    return {(int(r[0]), int(r[1])) for r in conn.execute("SELECT a, b FROM persons_not_same")}
+
+
+def _pair_key(x: int, y: int) -> tuple[int, int]:
+    return (x, y) if x < y else (y, x)
+
+
+def _visible_person_vectors(conn: sqlite3.Connection):
+    """Persone visibili con centroide: (items, matrice di vettori normalizzati, righe 1:1 con items)."""
     rows = conn.execute(
         """
         SELECT p.id, p.name, p.cover_face_id, p.centroid,
@@ -88,9 +89,6 @@ def suggest_merges(
         ORDER BY p.id ASC
         """
     ).fetchall()
-    if len(rows) < 2:
-        return []
-
     items = []
     vecs = []
     for r in rows:
@@ -106,15 +104,30 @@ def suggest_merges(
             "sample_file_id": int(r["sample_file_id"]) if r["sample_file_id"] is not None else None,
             "cover_face_id": int(r["cover_face_id"]) if r["cover_face_id"] is not None else None,
         })
+    mat = np.stack(vecs) if vecs else np.zeros((0, 0), dtype=np.float32)
+    return items, mat
+
+
+@router.get("/people/suggestions")
+def suggest_merges(
+    limit: int = Query(12, ge=1, le=50),
+    min_sim: float = Query(0.38, ge=0.2, le=0.95),
+    conn: sqlite3.Connection = Depends(deps.get_db),
+):
+    """Coppie di persone visibili con centroide simile che potrebbero essere la stessa persona (esclude le coppie «Diverse»)."""
+    if not deps.get_cfg().enable_faces:
+        return []
+    items, mat = _visible_person_vectors(conn)
     if len(items) < 2:
         return []
-
-    mat = np.stack(vecs)
+    not_same = _not_same_pairs(conn)
     sims = mat @ mat.T
     i_idx, j_idx = np.where(np.triu(sims, k=1) >= float(min_sim))
     pairs = []
     for i, j in zip(i_idx.tolist(), j_idx.tolist()):
         a, b = items[i], items[j]
+        if _pair_key(a["id"], b["id"]) in not_same:
+            continue
         # Ordina mettendo prima la persona con nome (o con piu' foto) come destinazione naturale
         a_key = (1 if a["name"] else 0, a["count"], -a["id"])
         b_key = (1 if b["name"] else 0, b["count"], -b["id"])
@@ -127,6 +140,109 @@ def suggest_merges(
         })
     pairs.sort(key=lambda x: x["similarity"], reverse=True)
     return pairs[:limit]
+
+
+@router.get("/people/suggestion-groups")
+def suggestion_groups(
+    limit: int = Query(12, ge=1, le=50),
+    min_sim: float = Query(0.38, ge=0.2, le=0.95),
+    conn: sqlite3.Connection = Depends(deps.get_db),
+):
+    """Gruppi di persone visibili probabilmente uguali: componenti connesse delle coppie sopra `min_sim`.
+
+    Ogni gruppo: `{members: [persona...], similarity}` con `similarity` = somiglianza massima interna.
+    Le coppie marcate «Diverse» non creano collegamenti. Gruppi da 2+ persone, ordinati per dimensione e somiglianza.
+    """
+    if not deps.get_cfg().enable_faces:
+        return []
+    items, mat = _visible_person_vectors(conn)
+    if len(items) < 2:
+        return []
+    not_same = _not_same_pairs(conn)
+    sims = mat @ mat.T
+    i_idx, j_idx = np.where(np.triu(sims, k=1) >= float(min_sim))
+
+    # Unione greedy dalle coppie piu' simili; due gruppi non si fondono se contengono una coppia «Diverse»
+    edges: list[tuple[int, int, float]] = []
+    for i, j in zip(i_idx.tolist(), j_idx.tolist()):
+        if _pair_key(items[i]["id"], items[j]["id"]) in not_same:
+            continue
+        edges.append((i, j, float(sims[i, j])))
+    edges.sort(key=lambda e: e[2], reverse=True)
+
+    group_of = list(range(len(items)))          # indice persona -> id gruppo
+    members: dict[int, set[int]] = {k: {k} for k in range(len(items))}
+    for i, j, _s in edges:
+        gi, gj = group_of[i], group_of[j]
+        if gi == gj:
+            continue
+        if any(_pair_key(items[x]["id"], items[y]["id"]) in not_same for x in members[gi] for y in members[gj]):
+            continue
+        if len(members[gi]) < len(members[gj]):
+            gi, gj = gj, gi
+        for x in members[gj]:
+            group_of[x] = gi
+        members[gi] |= members.pop(gj)
+
+    group_sim: dict[int, float] = {}
+    for i, j, s_ij in edges:
+        if group_of[i] == group_of[j]:
+            g = group_of[i]
+            group_sim[g] = max(group_sim.get(g, 0.0), s_ij)
+
+    groups = []
+    for g, idxs in members.items():
+        if len(idxs) < 2 or g not in group_sim:
+            continue
+        ordered = sorted(
+            idxs,
+            key=lambda k: ((1 if items[k]["name"] else 0), items[k]["count"], -items[k]["id"]),
+            reverse=True,
+        )
+        groups.append({
+            "members": [items[k] for k in ordered],
+            "similarity": round(group_sim[g], 4),
+        })
+    groups.sort(key=lambda g: (len(g["members"]), g["similarity"]), reverse=True)
+    return groups[:limit]
+
+
+@router.get("/people/not-same")
+def list_not_same(conn: sqlite3.Connection = Depends(deps.get_db)):
+    """Coppie di persone segnalate come «Diverse»."""
+    return [
+        {"a": int(r["a"]), "b": int(r["b"])}
+        for r in conn.execute("SELECT a, b FROM persons_not_same ORDER BY a, b")
+    ]
+
+
+@router.post("/people/not-same")
+def add_not_same(body: dict = Body(...), conn: sqlite3.Connection = Depends(deps.get_db)):
+    """Segna due persone come «Diverse»: non verranno piu' proposte come suggerimento."""
+    try:
+        a, b = int(body.get("a")), int(body.get("b"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "ID persona non validi.") from exc
+    if a == b:
+        raise HTTPException(400, "Servono due persone diverse.")
+    _person_row(conn, a)
+    _person_row(conn, b)
+    x, y = _pair_key(a, b)
+    with conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO persons_not_same(a, b, created) VALUES(?, ?, datetime('now'))",
+            (x, y),
+        )
+    return {"a": x, "b": y}
+
+
+@router.delete("/people/not-same/{a}/{b}")
+def remove_not_same(a: int, b: int, conn: sqlite3.Connection = Depends(deps.get_db)):
+    """Annulla la segnalazione «Diverse» per la coppia."""
+    x, y = _pair_key(int(a), int(b))
+    with conn:
+        conn.execute("DELETE FROM persons_not_same WHERE a=? AND b=?", (x, y))
+    return {"a": x, "b": y}
 
 
 @router.get("/people/{person_id}/files")
@@ -248,8 +364,50 @@ def merge_people(body: dict = Body(...), conn: sqlite3.Connection = Depends(deps
         id_list = [int(x) for x in ids]
     except (TypeError, ValueError) as exc:
         raise HTTPException(400, "ID persona non validi.") from exc
+    unique = list(dict.fromkeys(id_list))
+    if len([x for x in unique if x != into_id]) < 1:
+        raise HTTPException(400, "Servono almeno due persone distinte da unire.")
     _person_row(conn, into_id)
-    return faces_mod.merge_persons(conn, id_list, into_id)
+    for pid in unique:
+        _person_row(conn, pid)
+    try:
+        return faces_mod.merge_persons(conn, unique, into_id)
+    except KeyError as exc:
+        raise HTTPException(404, "Persona non trovata.") from exc
+
+
+@router.post("/people/merge/{log_id}/undo")
+def undo_merge_route(log_id: int, conn: sqlite3.Connection = Depends(deps.get_db)):
+    """Annulla l'ultima unione di persone (solo la piu' recente non ancora annullata)."""
+    try:
+        return faces_mod.undo_merge(conn, log_id)
+    except KeyError as exc:
+        raise HTTPException(409, "Solo l'ultima unione puo' essere annullata.") from exc
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/people/split")
+def split_people(body: dict = Body(...), conn: sqlite3.Connection = Depends(deps.get_db)):
+    """Sposta i volti selezionati da una persona in una nuova persona."""
+    try:
+        person_id = int(body.get("person_id"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "ID persona non valido.") from exc
+    face_ids = body.get("face_ids")
+    if not isinstance(face_ids, list) or not face_ids:
+        raise HTTPException(400, "Seleziona almeno un volto.")
+    try:
+        fids = [int(x) for x in face_ids]
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "ID volto non validi.") from exc
+    _person_row(conn, person_id)
+    try:
+        return faces_mod.split_person(conn, person_id, fids)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(404, "Persona non trovata.") from exc
 
 
 @router.post("/faces/assign")

@@ -5,6 +5,7 @@ NumPy e Pillow. I pesi buffalo_l vengono scaricati una sola volta in cache/model
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -840,20 +841,140 @@ def cluster_faces(
 
 
 # ------------------------------------------------------------ operazioni utente (persistenti)
+MERGE_LOG_KEEP = 20  # quante unioni annullabili conservare
+_PERSON_COLS = "id, name, created, centroid, n, cover_face_id, cover_locked, hidden"
+
+
+def _person_snapshot(conn: sqlite3.Connection, pids: list[int]) -> list[dict]:
+    """Copia serializzabile (JSON) delle righe `persons` indicate, per poterle ripristinare con l'undo."""
+    if not pids:
+        return []
+    marks = ",".join("?" * len(pids))
+    out: list[dict] = []
+    for r in conn.execute(f"SELECT {_PERSON_COLS} FROM persons WHERE id IN ({marks}) ORDER BY id", pids):
+        d = dict(r)
+        d["centroid"] = base64.b64encode(bytes(d["centroid"])).decode("ascii") if d["centroid"] is not None else None
+        out.append(d)
+    return out
+
+
 def merge_persons(conn: sqlite3.Connection, ids: list[int], into_id: int) -> dict:
-    """Unisce `ids` dentro `into_id`, spostando i volti (locked=1), ricalcolando il centroide ed eliminando i gruppi assorbiti."""
-    others = [int(x) for x in dict.fromkeys(ids) if int(x) != int(into_id)]
+    """Unisce `ids` dentro `into_id`: sposta i volti (locked=1), ricalcola il centroide, elimina i gruppi assorbiti.
+
+    Regola `hidden`: la destinazione resta nascosta solo se TUTTE le persone unite erano nascoste.
+    Registra l'unione in `merge_log` per poterla annullare con `undo_merge`.
+    Solleva KeyError se una persona non esiste.
+    """
+    into_id = int(into_id)
+    others = [int(x) for x in dict.fromkeys(ids) if int(x) != into_id]
     if not others:
-        return {"merged": 0, "into": int(into_id)}
+        return {"merged": 0, "into": into_id, "log_id": None}
+    marks = ",".join("?" * len(others))
+    existing = {int(r[0]) for r in conn.execute(f"SELECT id FROM persons WHERE id IN ({marks})", others)}
+    missing = [x for x in others if x not in existing]
+    if missing or conn.execute("SELECT 1 FROM persons WHERE id=?", (into_id,)).fetchone() is None:
+        raise KeyError(missing or into_id)
+
+    into_before = _person_snapshot(conn, [into_id])
+    deleted = _person_snapshot(conn, others)
+    faces_prev = [
+        [int(r["id"]), int(r["person_id"]), r["cluster"], int(r["locked"] or 0)]
+        for r in conn.execute(f"SELECT id, person_id, cluster, locked FROM faces WHERE person_id IN ({marks})", others)
+    ]
+    all_hidden = all(int(p["hidden"] or 0) for p in into_before + deleted)
+    now = datetime.now().isoformat(timespec="seconds")
+    payload = json.dumps({"into": into_id, "into_before": into_before, "deleted": deleted, "faces": faces_prev})
+
     with conn:
-        marks = ",".join("?" * len(others))
         conn.execute(
             f"UPDATE faces SET person_id=?, cluster=?, locked=1 WHERE person_id IN ({marks})",
-            [int(into_id), int(into_id), *others],
+            [into_id, into_id, *others],
         )
         conn.execute(f"DELETE FROM persons WHERE id IN ({marks})", others)
-        recompute_person(conn, int(into_id))
-    return {"merged": len(others), "into": int(into_id)}
+        conn.execute("UPDATE persons SET hidden=? WHERE id=?", (1 if all_hidden else 0, into_id))
+        recompute_person(conn, into_id)
+        cur = conn.execute("INSERT INTO merge_log(created, payload, undone) VALUES(?, ?, 0)", (now, payload))
+        log_id = int(cur.lastrowid)
+        conn.execute(
+            "DELETE FROM merge_log WHERE id NOT IN (SELECT id FROM merge_log ORDER BY id DESC LIMIT ?)",
+            (MERGE_LOG_KEEP,),
+        )
+    return {"merged": len(others), "into": into_id, "log_id": log_id}
+
+
+def undo_merge(conn: sqlite3.Connection, log_id: int) -> dict:
+    """Annulla un'unione. Solo l'ultima unione non ancora annullata puo' essere annullata (pila).
+
+    Ripristina persone assorbite, stato della destinazione e volti ancora assegnati alla destinazione.
+    Solleva KeyError se l'unione non e' annullabile, RuntimeError se gli id delle persone da ripristinare sono occupati.
+    """
+    last = conn.execute("SELECT id, payload FROM merge_log WHERE undone=0 ORDER BY id DESC LIMIT 1").fetchone()
+    if last is None or int(last["id"]) != int(log_id):
+        raise KeyError(log_id)
+    data = json.loads(last["payload"])
+    into_id = int(data["into"])
+    deleted = data["deleted"]
+    back_ids = [int(p["id"]) for p in deleted]
+    if back_ids:
+        marks = ",".join("?" * len(back_ids))
+        if conn.execute(f"SELECT 1 FROM persons WHERE id IN ({marks}) LIMIT 1", back_ids).fetchone() is not None:
+            raise RuntimeError("Impossibile annullare: alcune persone da ripristinare sono gia' state ricreate.")
+
+    restored_faces = 0
+    with conn:
+        for p in deleted:
+            cent = base64.b64decode(p["centroid"]) if p["centroid"] is not None else None
+            conn.execute(
+                f"INSERT INTO persons({_PERSON_COLS}) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+                (p["id"], p["name"], p["created"], cent, p["n"], p["cover_face_id"], p["cover_locked"], p["hidden"]),
+            )
+        for p in data["into_before"]:
+            cent = base64.b64decode(p["centroid"]) if p["centroid"] is not None else None
+            conn.execute(
+                "UPDATE persons SET name=?, created=?, centroid=?, n=?, cover_face_id=?, cover_locked=?, hidden=? WHERE id=?",
+                (p["name"], p["created"], cent, p["n"], p["cover_face_id"], p["cover_locked"], p["hidden"], into_id),
+            )
+        for fid, prev_pid, cluster, locked in data["faces"]:
+            cur = conn.execute(
+                "UPDATE faces SET person_id=?, cluster=?, locked=? WHERE id=? AND person_id=?",
+                (prev_pid, cluster, locked, fid, into_id),
+            )
+            restored_faces += int(cur.rowcount or 0)
+        conn.execute("UPDATE merge_log SET undone=1 WHERE id=?", (int(last["id"]),))
+        for pid in [into_id, *back_ids]:
+            recompute_person(conn, pid)
+    return {"restored_faces": restored_faces, "persons": [into_id, *back_ids], "log_id": int(last["id"])}
+
+
+def split_person(conn: sqlite3.Connection, person_id: int, face_ids: list[int]) -> dict:
+    """Sposta i volti selezionati da `person_id` in una nuova persona (senza nome, locked=1).
+
+    Solleva KeyError se la persona non esiste, ValueError se i volti non appartengono a `person_id` o sono esclusi.
+    """
+    person_id = int(person_id)
+    fids = list(dict.fromkeys(int(x) for x in face_ids))
+    if conn.execute("SELECT 1 FROM persons WHERE id=?", (person_id,)).fetchone() is None:
+        raise KeyError(person_id)
+    if not fids:
+        raise ValueError("Seleziona almeno un volto.")
+    marks = ",".join("?" * len(fids))
+    found = conn.execute(
+        f"SELECT COUNT(*) FROM faces WHERE id IN ({marks}) AND person_id=? AND COALESCE(excluded,0)=0",
+        [*fids, person_id],
+    ).fetchone()[0]
+    if int(found) != len(fids):
+        raise ValueError("I volti selezionati non appartengono a questa persona.")
+    now = datetime.now().isoformat(timespec="seconds")
+    with conn:
+        cur = conn.execute("INSERT INTO persons(name, created, n, hidden) VALUES(NULL, ?, 0, 0)", (now,))
+        new_pid = int(cur.lastrowid)
+        conn.execute(
+            f"UPDATE faces SET person_id=?, cluster=?, locked=1 WHERE id IN ({marks})",
+            [new_pid, new_pid, *fids],
+        )
+        recompute_person(conn, person_id)
+        recompute_person(conn, new_pid)
+    return {"person_id": new_pid, "from": person_id, "moved": len(fids)}
 
 
 def assign_faces(conn: sqlite3.Connection, face_ids: list[int], target: int | str | None) -> dict:

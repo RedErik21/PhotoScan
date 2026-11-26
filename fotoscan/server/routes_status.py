@@ -328,11 +328,15 @@ def status(conn=Depends(get_db)):
         ).fetchone()[0]
     from .. import faces as faces_mod
     faces_info = faces_mod.status_info(cfg)
+    src_net = bool(source) and sourcefs.is_network(source)
+    src_reach = sourcefs.reachable(source) if source else None
     return {
         "version": APP_VERSION,
         "first_run": not source and st["totale"] == 0,
         "source_dir": source,
-        "source_network": bool(source) and sourcefs.is_network(source),
+        "source_network": src_net,
+        "source_reachable": src_reach,
+        "catalog_root": dbm.get_meta(conn, "catalog_root") or "",
         "output_dir": cfg.output_dir,
         "db_path": cfg.db_path,
         "counts": {k: st[k] for k in (
@@ -525,16 +529,27 @@ def disk(path: str | None = Query(default=None), conn=Depends(get_db)):
     target_network = sourcefs.is_network(target)
     source_network = bool(source) and sourcefs.is_network(source)
     if probe is None:
-        return {"exists": False, "is_file": False, "free_bytes": None, "total_bytes": None, "drive": None,
-                "same_volume_as_source": False, "network": target_network, "source_network": source_network}
-    usage = shutil.disk_usage(probe)
+        return {"exists": False, "is_file": False, "reachable": False, "free_bytes": None, "total_bytes": None,
+                "drive": None, "same_volume_as_source": False, "network": target_network,
+                "source_network": source_network}
+    try:
+        usage = shutil.disk_usage(probe)
+        is_dir = p.is_dir()
+        is_file = p.is_file()
+        is_reach = sourcefs.reachable(str(p)) if is_dir else False
+        same_vol = src_probe is not None and os.stat(probe).st_dev == os.stat(src_probe).st_dev
+    except OSError:
+        return {"exists": False, "is_file": False, "reachable": False, "free_bytes": None, "total_bytes": None,
+                "drive": None, "same_volume_as_source": False, "network": target_network,
+                "source_network": source_network}
     return {
-        "exists": p.is_dir(),
-        "is_file": p.is_file(),  # un file al posto della cartella: messaggio diverso dal "non esiste"
+        "exists": is_dir,
+        "is_file": is_file,  # un file al posto della cartella: messaggio diverso dal "non esiste"
+        "reachable": is_reach,
         "free_bytes": usage.free,
         "total_bytes": usage.total,
         "drive": probe.anchor or str(probe),
-        "same_volume_as_source": src_probe is not None and os.stat(probe).st_dev == os.stat(src_probe).st_dev,
+        "same_volume_as_source": same_vol,
         "network": target_network,
         "source_network": source_network,
     }

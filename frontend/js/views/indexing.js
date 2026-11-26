@@ -155,6 +155,9 @@ export async function mount(root, { navigate, signal }) {
           h('md-filled-tonal-button', { onclick: () => navigate('/cleanup') }, 'Libera spazio'),
           h('md-text-button', { onclick: () => navigate('/gallery') }, 'Apri la galleria'))));
 
+    R.nasBox = h('section', { class: 'section', hidden: true });
+    R.rebaseBox = h('section', { class: 'section', hidden: true });
+
     R.statVals = {};
     R.statsNote = null;
     const statCards = STATS.map((s) => {
@@ -226,6 +229,8 @@ export async function mount(root, { navigate, signal }) {
           h('h1', { class: 'md-typescale-headline-medium idx-page-title' }, 'Analisi delle foto'),
           h('p', { class: 'muted md-typescale-body-medium' },
             'Legge le tue foto e le prepara per cercarle e organizzarle. Le foto originali non vengono mai modificate.'))),
+      R.nasBox,
+      R.rebaseBox,
       h('section', { class: 'section' }, main),
       h('section', { class: 'section', hidden: true }, R.done),
       statsSection,
@@ -247,6 +252,9 @@ export async function mount(root, { navigate, signal }) {
     const completed = !running && stage === 'completato';
     const paused = !running && cur >= 0 && !completed;
 
+    const netDown = s.error_code === 'network_unreachable'
+      || (!!s.exit_code && (s.log_tail || []).some((l) => /non risponde/i.test(l)));
+
     // Titolo e messaggio
     if (running) {
       R.title.textContent = 'Analisi in corso';
@@ -254,8 +262,7 @@ export async function mount(root, { navigate, signal }) {
     } else if (completed) {
       R.title.textContent = 'Analisi completata';
       R.sub.textContent = 'Tutte le foto sono pronte per essere organizzate.';
-    } else if (paused) {
-      const netDown = !!s.exit_code && (s.log_tail || []).some((l) => /non risponde/i.test(l));
+    } else if (paused || netDown) {
       if (netDown) {
         R.title.textContent = 'Disco di rete non raggiungibile';
         R.sub.textContent = 'Controlla che il NAS sia acceso e connesso, poi riprova: nessun file originale è stato toccato e il lavoro fatto non va perso.';
@@ -269,6 +276,11 @@ export async function mount(root, { navigate, signal }) {
       R.title.textContent = 'Analisi non ancora avviata';
       R.sub.textContent = 'Serve a cercare le foto e a proporre le cartelle. Non modifica i tuoi file.';
     }
+
+    // Stato NAS preventivo (se sorgente su rete)
+    renderNasNotice(s);
+    // Avviso riallineamento percorso catalogo (se presente)
+    renderRebaseNotice(s.last_rebase);
 
     // Stepper
     R.steps.forEach((li, i) => {
@@ -357,6 +369,94 @@ export async function mount(root, { navigate, signal }) {
       ? (pct !== null ? `${Math.floor(pct)}% · ${BASE_TITLE}` : `Analisi in corso · PhotoScan`)
       : BASE_TITLE;
     updateButtons();
+  }
+
+  let lastNasSig = '';
+  function renderNasNotice(s) {
+    if (!R.nasBox) return;
+    if (!s.source_network) {
+      lastNasSig = '';
+      R.nasBox.hidden = true;
+      return;
+    }
+    const down = s.source_reachable === false;
+    const sig = `${down ? 'down' : 'up'}|${s.running ? '1' : '0'}`;
+    if (sig === lastNasSig) return;
+    lastNasSig = sig;
+    if (down) {
+      const checkBtn = h('md-outlined-button', {
+        onclick: async () => {
+          checkBtn.disabled = true;
+          try {
+            const [freshIdx, freshSt] = await Promise.all([api.get('/index/status'), api.get('/status')]);
+            if (!alive) return;
+            store.set('status', freshSt);
+            render(freshIdx);
+            const ok = freshIdx.source_reachable !== false;
+            showSnackbar(ok ? 'Disco di rete di nuovo raggiungibile.' : 'Il disco di rete non risponde ancora.', { error: !ok });
+          } catch (e) {
+            note(e);
+          } finally {
+            checkBtn.disabled = false;
+          }
+        },
+      }, icon('network_check', { slot: 'icon' }), 'Verifica');
+      R.nasBox.replaceChildren(
+        h('div', { class: 'callout callout--warning', role: 'alert' },
+          icon('dns'),
+          h('div', { class: 'idx-done__body' },
+            h('p', { class: 'callout__title' }, 'Disco di rete (NAS) non raggiungibile'),
+            h('p', {}, 'Accendi o riconnetti il NAS prima di avviare l’analisi. Il catalogo esistente resta intatto.'),
+            h('div', { class: 'idx-done__actions' }, checkBtn))));
+      R.nasBox.hidden = false;
+    } else if (!s.running) {
+      R.nasBox.replaceChildren(
+        h('div', { class: 'callout callout--info', role: 'status' },
+          icon('lan'),
+          h('div', {},
+            h('p', { class: 'callout__title' }, 'Sorgente su disco di rete (NAS)'),
+            h('p', {}, 'Il NAS è raggiungibile. Tienilo acceso durante l’analisi: in caso di disconnessione il catalogo non viene toccato.'))));
+      R.nasBox.hidden = false;
+    } else {
+      R.nasBox.hidden = true;
+    }
+  }
+
+  let lastRebaseSig = '';
+  function renderRebaseNotice(rb) {
+    if (!R.rebaseBox) return;
+    if (!rb || !rb.at) {
+      lastRebaseSig = '';
+      R.rebaseBox.hidden = true;
+      return;
+    }
+    const dismissKey = `fotoscan.rebase.dismissed.${rb.at}`;
+    try {
+      if (sessionStorage.getItem(dismissKey) === '1') {
+        R.rebaseBox.hidden = true;
+        return;
+      }
+    } catch { /* ignora */ }
+    const sig = `${rb.at}|${rb.moved}`;
+    if (sig === lastRebaseSig) return;
+    lastRebaseSig = sig;
+    const ok = (rb.moved || 0) > 0;
+    const closeBtn = h('md-text-button', {
+      onclick: () => {
+        try { sessionStorage.setItem(dismissKey, '1'); } catch { /* ignora */ }
+        R.rebaseBox.hidden = true;
+      },
+    }, 'Nascondi');
+    R.rebaseBox.replaceChildren(
+      h('div', { class: `callout ${ok ? 'callout--info' : 'callout--warning'}`, role: 'status' },
+        icon(ok ? 'drive_file_move' : 'warning'),
+        h('div', { class: 'idx-done__body' },
+          h('p', { class: 'callout__title' }, ok ? 'Catalogo riallineato alla nuova cartella' : 'Percorso sorgente cambiato'),
+          h('p', {}, ok
+            ? `Aggiornati ${formatNumber(rb.moved)} percorsi da «${rb.from}» a «${rb.to}» senza reindicizzare.`
+            : `La cartella «${rb.to}» non corrisponde a quella precedente («${rb.from}»): il catalogo non è stato riallineato e i nuovi file vengono indicizzati da zero.`),
+          h('div', { class: 'idx-done__actions' }, closeBtn))));
+    R.rebaseBox.hidden = false;
   }
 
   function updateElapsed() {

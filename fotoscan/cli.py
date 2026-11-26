@@ -25,6 +25,7 @@ def _progress_factory(conn):
 
 
 def cmd_index(args, cfg):
+    from . import sourcefs
     from .embedder import Embedder, embed_pending
     from .scanner_metadata import process_metadata, scan_into_db
 
@@ -35,6 +36,7 @@ def cmd_index(args, cfg):
     if not cfg.source_dir:
         sys.exit("Imposta la cartella sorgente (--source oppure dalla UI).")
     dbm.set_meta(conn, "source_dir", cfg.source_dir)  # serve a plan/apply in un comando successivo
+    dbm.set_meta(conn, "last_index_error", "")
     prog = _progress_factory(conn)
     ffmpeg, ffprobe = cfg.find_ffmpeg()
     if args.workers:
@@ -44,6 +46,8 @@ def cmd_index(args, cfg):
     try:
         n = scan_into_db(conn, cfg, limit=args.limit, subdir=args.subdir, progress=prog)
     except FileNotFoundError as e:
+        err_code = "network_unreachable" if ("non risponde" in str(e).lower() or sourcefs.is_network(cfg.source_dir)) else "source_missing"
+        dbm.set_meta(conn, "last_index_error", err_code)
         sys.exit(f"Errore: {e}")
     print(f"file nuovi o modificati da elaborare: {n}")
     try:

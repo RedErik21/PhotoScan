@@ -125,10 +125,14 @@ Per i job: `from . import jobs; job = jobs.start_job("nome", fn)`; `fn(job)` chi
 
 ### routes_people.py
 - `GET /people?include_hidden=0` → `[]` se volti disattivati, altrimenti `[{id,name,count,cover_face_id,sample_file_id,hidden}]`.
-- `GET /people/suggestions?limit=12&min_sim=0.38` → coppie di persone visibili con centroide simile `[{a, b, similarity}]` ordinate per somiglianza decrescente.
+- `GET /people/suggestions?limit=12&min_sim=0.38` → coppie di persone visibili con centroide simile `[{a, b, similarity}]` ordinate per somiglianza decrescente (esclude le coppie «Diverse»).
 - `GET /people/{id}/files?offset=0&limit=120` → `{total, person:{...}, items:[File + {face_id}]}`.
 - `PATCH /people/{id}` `{name?, hidden?, cover_face_id?}` → rinomina, nasconde/mostra o imposta la foto profilo personalizzata (`cover_locked=1`, sopravvive ai ricalcoli; `cover_face_id:null` ripristina scelta automatica).
-- `POST /people/merge` `{ids:[...], into:id}` → unisce più persone in `into` (`locked=1`, ricalcola centroide).
+- `POST /people/merge` `{ids:[...], into:id}` → unisce più persone in `into` (`locked=1`, ricalcola centroide). 400 se meno di due persone distinte, 404 se un id non esiste. Risposta `{merged, into, log_id}`. `hidden` della destinazione: resta nascosta solo se tutte le persone unite erano nascoste.
+- `POST /people/merge/{log_id}/undo` → annulla l'unione (solo la più recente non annullata; altrimenti 409). Ripristina persone, volti e stato della destinazione.
+- `POST /people/split` `{person_id, face_ids:[...]}` → sposta i volti selezionati in una nuova persona (`locked=1`). Risposta `{person_id, from, moved}`. 400 se i volti non appartengono alla persona.
+- `GET /people/suggestion-groups?limit=12&min_sim=0.38` → gruppi `[{members:[persona...], similarity}]` (componenti connesse di persone simili; mai fusi due membri segnalati «Diverse»).
+- `GET /people/not-same` → `[{a, b}]`. `POST /people/not-same` `{a, b}` → segna «Diverse». `DELETE /people/not-same/{a}/{b}` → annulla.
 - `POST /faces/assign` `{face_ids:[...], person_id:id|null|"new"}` → riassegna o sgancia volti (`locked=1`).
 - `POST /faces/{id}/exclude` / `POST /faces/{id}/restore` → esclude un falso volto o lo ripristina.
 - `GET /faces/{id}/crop?size=256` → ritaglio JPEG quadrato del volto (cache `cache/faces/`).

@@ -8,6 +8,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -115,6 +116,9 @@ def scan_into_db(conn: sqlite3.Connection, cfg: Config, limit: int | None = None
     old_root = dbm.get_meta(conn, "catalog_root")
     if old_root and old_root != root:
         moved = sourcefs.rebase_catalog(conn, old_root, root)
+        dbm.set_meta(conn, "last_rebase", json.dumps({
+            "moved": moved, "from": old_root, "to": root, "at": int(time.time()),
+        }))
         if moved:
             log.info("catalogo riallineato alla nuova cartella sorgente: %d percorsi", moved)
     paths = list_media(cfg.source_dir, cfg, subdir)

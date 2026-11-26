@@ -83,6 +83,17 @@ CREATE TABLE IF NOT EXISTS label_suggestions(
   months INTEGER, sample TEXT, created TEXT
 );
 CREATE TABLE IF NOT EXISTS label_dismissed(id INTEGER PRIMARY KEY, vec BLOB NOT NULL);
+-- unioni di persone annullabili: payload = stato precedente (persone assorbite, destinazione, volti spostati)
+CREATE TABLE IF NOT EXISTS merge_log(
+  id INTEGER PRIMARY KEY, created TEXT, payload TEXT NOT NULL, undone INTEGER DEFAULT 0
+);
+-- coppie di persone segnalate come «Diverse» (a < b): non riproposte come suggerimento
+CREATE TABLE IF NOT EXISTS persons_not_same(
+  a INTEGER REFERENCES persons(id) ON DELETE CASCADE,
+  b INTEGER REFERENCES persons(id) ON DELETE CASCADE,
+  created TEXT,
+  PRIMARY KEY(a, b), CHECK(a < b)
+);
 -- file non utilizzabili scoperti durante l'uso: 'mancante' (non piu' sul disco) | 'illeggibile' (anteprima impossibile)
 CREATE TABLE IF NOT EXISTS broken(
   file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,

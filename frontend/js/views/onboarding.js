@@ -171,6 +171,8 @@ export async function mount(root, { navigate, signal }) {
   unsubs.push(store.subscribe('theme', paintThemeBtn));
 
   // ---------------------------------------------------------- verifica cartella
+  const normPath = (p) => String(p || '').trim().replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
+
   function paintSource() {
     if (!wiz.srcField) return;
     const s = wiz.src;
@@ -185,6 +187,7 @@ export async function mount(root, { navigate, signal }) {
           : 'Cartella valida e accessibile in lettura.',
       }),
       is_file: () => ({ error: true, errorText: 'Questo è un file, non una cartella. Scegli la cartella che contiene le foto.' }),
+      net_down: () => ({ error: true, errorText: 'Disco di rete non raggiungibile. Controlla che il NAS sia acceso, connesso e che il percorso sia corretto.' }),
       missing: () => ({ error: true, errorText: 'Questa cartella non esiste. Controlla il percorso e riprova.' }),
       error: () => ({ error: true, errorText: s.msg || 'Impossibile verificare questa cartella.' }),
     }[s.state]();
@@ -196,11 +199,12 @@ export async function mount(root, { navigate, signal }) {
     if (wiz.folderBadge) {
       if (s.state === 'ok' && s.disk) {
         const parts = [`Cartella trovata`];
+        if (s.disk.network) parts.push('Disco di rete');
         if (s.disk.drive) parts.push(`unità ${s.disk.drive}`);
         if (s.disk.free_bytes != null) parts.push(`${formatBytes(s.disk.free_bytes)} liberi`);
         wiz.folderBadge.hidden = false;
         wiz.folderBadge.replaceChildren(
-          icon('check_circle'),
+          icon(s.disk.network ? 'lan' : 'check_circle'),
           h('span', {}, parts.join(' · ')));
       } else {
         wiz.folderBadge.hidden = true;
@@ -211,9 +215,13 @@ export async function mount(root, { navigate, signal }) {
 
   function paintHint() {
     if (!wiz.hint || !nextBtn) return;
-    wiz.hint.textContent = nextBtn.disabled
-      ? 'Indica una cartella esistente per salvare la modifica.'
-      : '';
+    if (nextBtn.disabled) {
+      wiz.hint.textContent = 'Indica una cartella esistente per salvare la modifica.';
+    } else if (wiz.status?.catalog_root && normPath(wiz.source) !== normPath(wiz.status.catalog_root)) {
+      wiz.hint.textContent = 'Se si tratta della stessa cartella (es. nuova lettera di unità o percorso UNC), PhotoScan riallineerà il catalogo alla prossima analisi senza reindicizzare.';
+    } else {
+      wiz.hint.textContent = '';
+    }
   }
 
   function scheduleSource() {
@@ -233,7 +241,8 @@ export async function mount(root, { navigate, signal }) {
         const d = await api.get('/system/disk', { path: v });
         if (!alive || my !== srcSeq) return;
         if (d.is_file) wiz.src = { state: 'is_file', disk: d, msg: '' };
-        else if (d.exists) wiz.src = { state: 'ok', disk: d, msg: '' };
+        else if (d.exists && d.reachable !== false) wiz.src = { state: 'ok', disk: d, msg: '' };
+        else if (d.network) wiz.src = { state: 'net_down', disk: d, msg: '' };
         else wiz.src = { state: 'missing', disk: d, msg: '' };
       } catch (e) {
         if (!alive || my !== srcSeq) return;
@@ -514,6 +523,13 @@ export async function mount(root, { navigate, signal }) {
             desc: 'Al primo avvio verrà scaricato una sola volta (~1,5 GB): serve una connessione internet.',
           },
     ];
+    if (wiz.src.disk?.network || st.source_network) {
+      rows.push({
+        kind: 'info',
+        title: 'Sorgente su disco di rete (NAS)',
+        desc: 'L’analisi è più lenta rispetto a un disco locale e il NAS deve restare acceso. Se si scollega, il catalogo resta intatto.',
+      });
+    }
 
     host.replaceChildren(...rows.map((r) => {
       const icName = r.kind === 'ok' ? 'check_circle' : r.kind === 'warning' ? 'warning' : 'info';

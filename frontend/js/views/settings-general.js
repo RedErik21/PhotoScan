@@ -42,6 +42,22 @@ const CSS = `
 .settings-path { overflow-wrap: anywhere; }
 .settings-info details summary { cursor: pointer; }
 .callout[hidden] { display: none; }
+.nas-box {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: var(--sp-3); padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--shape-md);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-low);
+}
+.nas-box__info { display: flex; flex-direction: column; gap: var(--sp-1); flex: 1 1 240px; min-width: 0; }
+.nas-box__head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.nas-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px var(--sp-2); border-radius: var(--shape-full);
+  font: 600 0.75rem/1rem var(--md-ref-typeface-plain); white-space: nowrap;
+}
+.nas-pill--ok { background: var(--fs-success-container, var(--md-sys-color-primary-container)); color: var(--fs-on-success-container, var(--md-sys-color-on-primary-container)); }
+.nas-pill--down { background: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); }
 @media (max-width: 599px) {
   .settings-folder { flex-direction: column; align-items: stretch; }
   .settings-folder .settings-field { flex: none; }
@@ -181,6 +197,7 @@ export function mountSection(container, { settings = {}, draft = null, onDirty =
   const folderFields = {};
   const numberFields = {};
   const enableSwitch = document.createElement('md-switch');
+  let lastStatus = null;
   let disposed = false;
   let st = { patch: {}, errors: {}, dirty: false, invalid: false };
 
@@ -241,6 +258,8 @@ export function mountSection(container, { settings = {}, draft = null, onDirty =
       tf.supportingText = msg ? '' : help;
     }
     if (enableSwitch.selected !== !!values.enable_faces) enableSwitch.selected = !!values.enable_faces;
+    renderNasStatus();
+    renderRebaseHint();
   }
 
   // ---- cartelle
@@ -269,7 +288,11 @@ export function mountSection(container, { settings = {}, draft = null, onDirty =
         const d = await api.get('/system/disk', { path: val });
         if (disposed || my !== seqs[key]) return;
         if (d.is_file) folderErr[key] = 'Questo è un file, non una cartella.';
-        else if (!d.exists && key === 'source_dir') folderErr[key] = 'Questa cartella non esiste.';
+        else if ((!d.exists || d.reachable === false) && key === 'source_dir') {
+          folderErr[key] = d.network
+            ? 'Disco di rete non raggiungibile. Controlla che il NAS sia acceso e connesso.'
+            : 'Questa cartella non esiste.';
+        }
         disks[key] = d;
       } catch (e) {
         if (disposed || my !== seqs[key]) return;
@@ -347,6 +370,65 @@ export function mountSection(container, { settings = {}, draft = null, onDirty =
     return tf;
   }
 
+  // ---- stato NAS e avviso riallineamento percorso
+  const nasSlot = h('div', { class: 'settings-stack' });
+  const rebaseNote = h('div', { class: 'callout callout--info', role: 'status', hidden: true },
+    h('span', { class: 'callout__icon material-symbols-outlined', 'aria-hidden': 'true' }, 'drive_file_move'),
+    h('div', {},
+      h('p', { class: 'callout__title' }, 'Cambio percorso sorgente'),
+      h('p', {}, 'Se si tratta della stessa cartella con un altro percorso (es. nuova lettera di unità o percorso UNC), PhotoScan riallineerà automaticamente il catalogo alla prossima analisi senza reindicizzare.')));
+
+  function renderRebaseHint() {
+    const cur = values.source_dir.trim();
+    const catRoot = lastStatus?.catalog_root || '';
+    rebaseNote.hidden = !(cur && catRoot && norm(cur) !== norm(catRoot) && !folderErr.source_dir);
+  }
+
+  function renderNasStatus() {
+    const d = disks.source_dir;
+    const isNet = !!(d?.network || (!d && lastStatus?.source_network));
+    if (!isNet) {
+      nasSlot.replaceChildren();
+      return;
+    }
+    const online = d ? (d.exists && d.reachable !== false) : (lastStatus?.source_reachable !== false);
+    const checkBtn = h('md-outlined-button', {
+      onclick: async () => {
+        checkBtn.disabled = true;
+        try {
+          await checkFolder('source_dir');
+          const freshSt = await api.get('/status');
+          if (disposed) return;
+          statusCache = { at: Date.now(), value: freshSt };
+          store.set('status', freshSt);
+          renderStatus(freshSt);
+          const ok = disks.source_dir
+            ? (disks.source_dir.exists && disks.source_dir.reachable !== false)
+            : (freshSt.source_reachable !== false);
+          showSnackbar(ok ? 'Disco di rete raggiungibile.' : 'Disco di rete non raggiungibile.', { error: !ok });
+        } catch (e) {
+          if (!disposed) showSnackbar(e.message || 'Verifica connessione non riuscita.', { error: true });
+        } finally {
+          checkBtn.disabled = false;
+        }
+      },
+    }, icon('network_check', { slot: 'icon' }), 'Verifica connessione');
+
+    nasSlot.replaceChildren(
+      h('div', { class: 'nas-box' },
+        h('div', { class: 'nas-box__info' },
+          h('div', { class: 'nas-box__head' },
+            icon('dns'),
+            h('span', { class: 'md-typescale-title-small' }, 'Disco di rete (NAS)'),
+            h('span', { class: `nas-pill ${online ? 'nas-pill--ok' : 'nas-pill--down'}` },
+              online ? 'Online' : 'Non raggiungibile')),
+          h('p', { class: 'settings-hint md-typescale-body-small' },
+            online
+              ? 'La cartella di rete risponde correttamente. Tieni il NAS acceso durante l’analisi.'
+              : 'Il NAS non risponde al momento. Controlla che sia acceso e connesso alla rete locale.')),
+        checkBtn));
+  }
+
   // ---- blocchi che dipendono da GET /status (modello, ffmpeg, dispositivo, contatori)
   const labelId = (name) => `${uidPrefix}-${name}`;
   const modelSlot = h('div', { class: 'settings-stack' });
@@ -399,6 +481,9 @@ export function mountSection(container, { settings = {}, draft = null, onDirty =
   }
 
   function renderStatus(status) {
+    lastStatus = status;
+    renderNasStatus();
+    renderRebaseHint();
     if (Array.isArray(status.available_models) && status.available_models.length) {
       renderModelPicker(status.available_models);
     }
@@ -453,6 +538,10 @@ export function mountSection(container, { settings = {}, draft = null, onDirty =
     infoSlot.replaceChildren(
       h('dl', { class: 'settings-info md-typescale-body-medium' },
         h('dt', {}, 'Versione'), h('dd', {}, status.version || '—'),
+        h('dt', {}, 'Tipo sorgente'),
+        h('dd', {}, status.source_network
+          ? (status.source_reachable === false ? 'Disco di rete (non raggiungibile)' : 'Disco di rete (online)')
+          : 'Disco locale'),
         h('dt', {}, 'Archivio foto'),
         h('dd', {}, h('details', {}, h('summary', {}, 'Mostra il percorso'), h('span', { class: 'settings-path' }, status.db_path || '—'))),
         h('dt', {}, 'Dimensione archivio'),
@@ -489,7 +578,9 @@ export function mountSection(container, { settings = {}, draft = null, onDirty =
     h('p', { class: 'settings-hint md-typescale-body-medium' },
       'La cartella che contiene il tuo archivio fotografico. PhotoScan la legge senza mai modificarla automaticamente.'),
     h('div', { class: 'settings-stack' },
-      folderRow('source_dir', 'Cartella delle foto')),
+      folderRow('source_dir', 'Cartella delle foto'),
+      nasSlot,
+      rebaseNote),
   ]);
 
   // Aspetto: il tema si applica subito (non e' salvato sul server)

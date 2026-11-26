@@ -8,6 +8,7 @@ import { h, icon } from './ui/el.js';
 import { createWordmark } from './ui/brand.js';
 import { formatNumber } from './ui/format.js';
 import { openSupportDialog } from './ui/support.js';
+import { showSnackbar } from './ui/snackbar.js';
 
 const MQ_MEDIUM = matchMedia('(min-width: 600px)');
 const MQ_EXPANDED = matchMedia('(min-width: 1024px)');
@@ -23,7 +24,7 @@ const navOpen = { medium: false, expanded: true };
 try { if (localStorage.getItem('fotoscan.nav') === 'rail') navOpen.expanded = false; } catch { /* ignora */ }
 
 let size = 'compact';
-let shell, outlet, toggle, titleEl, eyebrowEl, searchField, chip, chipProgress, chipText, banner, themeBtn, themeBtnCompact;
+let shell, outlet, toggle, titleEl, eyebrowEl, searchField, chip, chipProgress, chipText, banner, nasBanner, themeBtn, themeBtnCompact;
 let flowBar, flowSteps$ = [], flowNext, sideStatus, sideRefs = null;
 let indexState = null;
 let facesJob = null;
@@ -111,7 +112,9 @@ function buildSideStatus() {
 function renderSideStatus() {
   if (!sideStatus) return;
   const r = sideRefs;
-  const c = store.get('status', null)?.counts;
+  const st = store.get('status', null);
+  const c = st?.counts;
+  const nasDown = !!(st?.source_dir && st?.source_network && st?.source_reachable === false);
   const ix = indexState;
   const fj = facesJob?.state === 'running' ? facesJob : null;
   let title, sub, frac, tone = '', href = '#/organize?tab=index', ariaTarget = 'Apri la pagina Analisi';
@@ -129,6 +132,13 @@ function renderSideStatus() {
     tone = 'is-running';
     href = '#/people';
     ariaTarget = 'Apri la pagina Persone';
+  } else if (nasDown) {
+    title = c?.totale ? `${formatNumber(c.totale)} elementi` : 'Disco di rete';
+    sub = 'NAS non raggiungibile';
+    frac = c?.totale ? (c.indicizzati + (c.errori || 0)) / c.totale : 0;
+    tone = 'is-warn';
+    href = '#/settings';
+    ariaTarget = 'Apri Impostazioni per verificare il NAS';
   } else if (c) {
     const errors = c.errori || 0;
     const done = c.totale > 0 && c.indicizzati + errors >= c.totale;
@@ -145,12 +155,12 @@ function renderSideStatus() {
   sideStatus.setAttribute('href', href);
   sideStatus.className = `side-status ${tone}`;
   sideStatus.setAttribute('aria-label', `${title}. ${sub}. ${ariaTarget}`);
-  const key = (ix?.running || fj) ? 'spin' : tone === 'is-done' ? 'done' : 'lib';
+  const key = (ix?.running || fj) ? 'spin' : tone === 'is-warn' ? 'warn' : tone === 'is-done' ? 'done' : 'lib';
   if (r.iconKey !== key) {
     r.iconKey = key;
     r.iconSlot.replaceChildren(key === 'spin'
       ? h('span', { class: 'side-status__ring', 'aria-hidden': 'true' })
-      : icon(key === 'done' ? 'cloud_done' : 'photo_library'));
+      : icon(key === 'warn' ? 'cloud_off' : key === 'done' ? 'cloud_done' : 'photo_library'));
   }
   r.title.textContent = title;
   r.sub.textContent = sub;
@@ -340,7 +350,42 @@ window.addEventListener('fotoscan:dup-reviewed', () => loadDupSummary());
 function buildBanner() {
   return h('div', { class: 'app-banner', role: 'alert', hidden: true },
     icon('cloud_off'),
-    h('span', {}, 'Connessione al server persa. Riprovo automaticamente…'));
+    h('span', { class: 'app-banner__text' }, 'Connessione al server persa. Riprovo automaticamente…'));
+}
+
+function buildNasBanner() {
+  const retryBtn = h('md-text-button', {
+    onclick: async () => {
+      retryBtn.disabled = true;
+      try {
+        const st = await api.get('/status');
+        store.set('status', st);
+        if (st.source_reachable !== false) {
+          showSnackbar('Disco di rete di nuovo raggiungibile.');
+        } else {
+          showSnackbar('Il disco di rete non risponde ancora.', { error: true });
+        }
+      } catch (e) {
+        showSnackbar(e.message || 'Impossibile verificare il disco di rete.', { error: true });
+      } finally {
+        retryBtn.disabled = false;
+      }
+    },
+  }, 'Riprova');
+  const settingsBtn = h('md-text-button', { onclick: () => navigate('/settings') }, 'Impostazioni');
+  return h('div', { class: 'app-banner app-banner--warn', role: 'status', hidden: true },
+    icon('dns'),
+    h('span', { class: 'app-banner__text' },
+      'Disco di rete (NAS) non raggiungibile: originali e analisi non sono disponibili finché non torna connesso.'),
+    h('span', { class: 'app-banner__actions' }, retryBtn, settingsBtn));
+}
+
+function renderNasBanner() {
+  if (!nasBanner) return;
+  const st = store.get('status', null);
+  const serverDown = banner && !banner.hidden;
+  const nasDown = !!(st?.source_dir && st?.source_network && st?.source_reachable === false);
+  nasBanner.hidden = serverDown || !nasDown;
 }
 
 function applyLayout() {
@@ -430,6 +475,7 @@ export async function mountShell(appEl) {
     onclick: (e) => { e.preventDefault(); outlet.focus(); },
   }, 'Vai al contenuto');
   banner = buildBanner();
+  nasBanner = buildNasBanner();
   const sideNav = buildSideNav();
   const bottomItems = [...navItems.filter((i) => i.primary).slice(0, 4), organizeEntry];
   const bottomNav = h('nav', { class: 'app-bottombar', 'aria-label': 'Navigazione principale' },
@@ -438,7 +484,7 @@ export async function mountShell(appEl) {
   shell = h('div', { class: 'app-shell', 'data-size': 'compact', 'data-nav': 'bottom' },
     skip,
     sideNav,
-    h('div', { class: 'app-main' }, buildTopbar(), banner, buildFlowBar(), outlet),
+    h('div', { class: 'app-main' }, buildTopbar(), banner, nasBanner, buildFlowBar(), outlet),
     bottomNav);
   appEl.replaceChildren(shell);
 
@@ -463,13 +509,16 @@ export async function mountShell(appEl) {
       api.get('/status').then((st) => store.set('status', st)).catch(() => {});
     }
   });
-  store.subscribe('status', () => { renderSideStatus(); refreshStepMarkers(); renderFlowBar(); loadDupSummary(); });
+  store.subscribe('status', () => { renderSideStatus(); renderNasBanner(); refreshStepMarkers(); renderFlowBar(); loadDupSummary(); });
+  renderNasBanner();
   loadDupSummary();
 
   // Connessione: banner quando il server non risponde; al ritorno ricarica lo stato.
   onEvent('connection', ({ online }) => {
     banner.hidden = !!online;
+    renderNasBanner();
     if (online) {
+      api.get('/status').then((st) => store.set('status', st)).catch(() => {});
       api.get('/index/status').then(renderIndex).catch(() => {});
       api.get('/people/job').then((r) => renderFacesJob(r?.job || null)).catch(() => {});
     }

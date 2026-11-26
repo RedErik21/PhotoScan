@@ -375,6 +375,125 @@ def test_people_merge_suggestions():
             srv.stop()
 
 
+def test_merge_validation_undo_and_hidden_rule():
+    """Merge valida gli id, registra l'unione, l'undo ripristina lo stato e la regola hidden e' applicata."""
+    with _Tmp() as tmp:
+        cfg = _setup_catalog(tmp, enable_faces=True)
+        srv = _Server(_make_app(cfg))
+        try:
+            _, ppl = srv.get("/api/people")
+            p1, p2 = ppl[0]["id"], ppl[1]["id"]
+            count_p1 = ppl[0]["count"]
+            count_p2 = ppl[1]["count"]
+
+            # Validazione: duplicati su into, id inesistenti
+            assert srv.post("/api/people/merge", {"ids": [p1, p1], "into": p1})[0] == 400
+            assert srv.post("/api/people/merge", {"ids": [p1, 99999], "into": p1})[0] == 404
+
+            # Unione con log; l'undo ripristina p2 e i volti
+            st, merged = srv.post("/api/people/merge", {"ids": [p1, p2], "into": p1})
+            assert st == 200 and merged["merged"] == 1 and merged["log_id"] is not None
+            log_id = merged["log_id"]
+            _, after = srv.get("/api/people")
+            assert len(after) == 1 and after[0]["count"] == count_p1 + count_p2
+
+            st, undo = srv.post(f"/api/people/merge/{log_id}/undo")
+            assert st == 200 and undo["restored_faces"] >= 1
+            _, back = srv.get("/api/people")
+            ids_back = {x["id"] for x in back}
+            assert ids_back == {p1, p2}
+            counts_back = {x["id"]: x["count"] for x in back}
+            assert counts_back[p1] == count_p1 and counts_back[p2] == count_p2
+
+            # Stesso log non annullabile due volte
+            assert srv.post(f"/api/people/merge/{log_id}/undo")[0] == 409
+
+            # Regola hidden: unendo una persona visibile con una nascosta il risultato resta visibile
+            assert srv.patch(f"/api/people/{p2}", {"hidden": True})[0] == 200
+            st, merged = srv.post("/api/people/merge", {"ids": [p1, p2], "into": p1})
+            assert st == 200
+            _, after = srv.get("/api/people?include_hidden=true")
+            assert len(after) == 1 and after[0]["hidden"] is False
+
+            # Annullare un'unione che non e' la piu' recente da' 409
+            assert srv.post(f"/api/people/merge/{log_id}/undo")[0] == 409
+        finally:
+            srv.stop()
+
+
+def test_split_and_not_same_and_suggestion_groups():
+    """Split sposta i volti in una nuova persona; «Diverse» esclude la coppia dai suggerimenti; i gruppi uniscono le coppie."""
+    with _Tmp() as tmp:
+        cfg = _setup_catalog(tmp, enable_faces=True)
+        conn = dbm.connect(cfg.db_path)
+        try:
+            p1_row = conn.execute("SELECT id, centroid FROM persons ORDER BY id LIMIT 1").fetchone()
+            p1 = int(p1_row["id"])
+            v1 = dbm.from_blob(p1_row["centroid"])
+            v1 = v1 / np.linalg.norm(v1)
+            orth = _unit_vec(777)
+            orth = orth - float(orth @ v1) * v1
+            orth = orth / np.linalg.norm(orth)
+            v3 = (0.60 * v1 + 0.80 * orth).astype(np.float32)
+            v3 = v3 / np.linalg.norm(v3)
+            with conn:
+                cur = conn.execute("INSERT INTO persons(name, created, centroid, n, hidden) VALUES(NULL, '2026-01-01', ?, 1, 0)", (v3.tobytes(),))
+                p3 = int(cur.lastrowid)
+                img7 = tmp / "img_7.jpg"
+                Image.new("RGB", (200, 200), (80, 90, 100)).save(img7)
+                conn.execute("INSERT INTO files(id,path,name,kind,size,status) VALUES(7,?,?,'image',500,'embedded')", (str(img7), img7.name))
+                conn.execute(
+                    "INSERT INTO faces(file_id,bbox,emb,person_id,det_score,quality) VALUES(7,'[10,10,90,90]',?,?,0.95,0.9)",
+                    (v3.tobytes(), p3),
+                )
+            face_ids_p1 = [int(r[0]) for r in conn.execute("SELECT id FROM faces WHERE person_id=? AND COALESCE(excluded,0)=0", (p1,))]
+        finally:
+            conn.close()
+
+        srv = _Server(_make_app(cfg))
+        try:
+            # Split: volti non della persona -> 400; volti validi -> nuova persona bloccata
+            c2 = dbm.connect(cfg.db_path)
+            other_face = int(c2.execute("SELECT id FROM faces WHERE person_id=? LIMIT 1", (p3,)).fetchone()[0])
+            c2.close()
+            assert srv.post("/api/people/split", {"person_id": p1, "face_ids": [other_face]})[0] == 400
+            assert srv.post("/api/people/split", {"person_id": p1, "face_ids": []})[0] == 400
+            assert srv.post("/api/people/split", {"person_id": 99999, "face_ids": face_ids_p1})[0] == 404
+            st, sp = srv.post("/api/people/split", {"person_id": p1, "face_ids": face_ids_p1[:1]})
+            assert st == 200 and sp["moved"] == 1 and sp["from"] == p1
+            new_pid = sp["person_id"]
+            conn = dbm.connect(cfg.db_path)
+            try:
+                assert conn.execute("SELECT locked FROM faces WHERE person_id=?", (new_pid,)).fetchone()[0] == 1
+            finally:
+                conn.close()
+
+            # «Diverse»: la coppia p1-p3 sparisce dai suggerimenti e torna dopo la rimozione
+            st, sugg = srv.get("/api/people/suggestions?min_sim=0.45")
+            assert st == 200 and any({s["a"]["id"], s["b"]["id"]} == {p1, p3} for s in sugg)
+            assert srv.post("/api/people/not-same", {"a": p1, "b": p1})[0] == 400
+            assert srv.post("/api/people/not-same", {"a": p1, "b": 99999})[0] == 404
+            st, ns = srv.post("/api/people/not-same", {"a": p3, "b": p1})
+            assert st == 200 and ns == {"a": min(p1, p3), "b": max(p1, p3)}
+            _, pairs_ns = srv.get("/api/people/not-same")
+            assert {"a": min(p1, p3), "b": max(p1, p3)} in pairs_ns
+            st, sugg = srv.get("/api/people/suggestions?min_sim=0.45")
+            assert not any({s["a"]["id"], s["b"]["id"]} == {p1, p3} for s in sugg)
+            _, groups = srv.get("/api/people/suggestion-groups?min_sim=0.45")
+            for g in groups:
+                ids = {m["id"] for m in g["members"]}
+                assert not {p1, p3} <= ids
+            assert srv.req("DELETE", f"/api/people/not-same/{p3}/{p1}")[0] == 200
+            st, sugg = srv.get("/api/people/suggestions?min_sim=0.45")
+            assert any({s["a"]["id"], s["b"]["id"]} == {p1, p3} for s in sugg)
+
+            # Gruppi: la coppia p1-p3 forma un gruppo da 2+ persone con similarita' >= soglia
+            _, groups = srv.get("/api/people/suggestion-groups?min_sim=0.45")
+            assert any({p1, p3} <= {m["id"] for m in g["members"]} and g["similarity"] >= 0.45 for g in groups)
+        finally:
+            srv.stop()
+
+
 if __name__ == "__main__":
     fns = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:

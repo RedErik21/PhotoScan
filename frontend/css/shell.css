@@ -241,6 +241,7 @@
 }
 .side-status__icon .material-symbols-outlined { font-size: 18px; display: block; line-height: 1; width: 18px; height: 18px; text-align: center; overflow: visible; }
 .side-status.is-done .side-status__icon { background: var(--fs-success-container); color: var(--fs-on-success-container); }
+.side-status.is-warn .side-status__icon { background: var(--md-sys-color-tertiary-container); color: var(--md-sys-color-on-tertiary-container); }
 .side-status__ring {
   display: block; width: 18px; height: 18px; border-radius: 50%; box-sizing: border-box;
   border: 2.5px solid color-mix(in srgb, currentColor 25%, transparent);
@@ -463,16 +464,22 @@
 .app-bottombar .nav-link:focus-visible { outline: none; }
 .app-bottombar .nav-link:focus-visible .nav-icon { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
 
-/* Banner connessione */
+/* Banner connessione e NAS */
 .app-banner {
-  display: flex; align-items: center; gap: var(--sp-2);
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2);
   flex: 0 0 auto;
   padding: var(--sp-2) var(--page-margin);
   background: var(--md-sys-color-error-container);
   color: var(--md-sys-color-on-error-container);
   font: 500 0.875rem/1.25rem var(--md-ref-typeface-plain);
 }
+.app-banner--warn {
+  background: var(--md-sys-color-tertiary-container);
+  color: var(--md-sys-color-on-tertiary-container);
+}
 .app-banner md-icon { flex: 0 0 auto; }
+.app-banner__text { flex: 1 1 240px; min-width: 0; }
+.app-banner__actions { display: flex; align-items: center; gap: var(--sp-1); flex: none; margin-left: auto; }
 
 /* Skip link */
 .skip-link {

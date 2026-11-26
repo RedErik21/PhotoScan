@@ -65,6 +65,11 @@ def test_rebase_after_root_rename_avoids_reindex():
     paths = [r["path"] for r in conn.execute("SELECT path FROM files")]
     assert len(paths) == len(names)
     assert all(p.startswith(sourcefs.norm_root(str(new))) for p in paths), paths
+    import json
+    rb = json.loads(dbm.get_meta(conn, "last_rebase") or "{}")
+    assert rb.get("moved") == len(names)
+    assert rb.get("from") == sourcefs.norm_root(str(old))
+    assert rb.get("to") == sourcefs.norm_root(str(new))
     conn.close()
 
 

@@ -1,7 +1,8 @@
-// Persone: riconoscimento volti locale, rinomina, unione, nascondi e revisione foto per persona.
-// Dati: GET /people, GET /people/{id}/files, PATCH /people/{id}, POST /people/merge,
-//       POST /faces/assign, POST /faces/{id}/exclude, POST /faces/{id}/restore,
-//       POST /people/recluster, POST /people/download-models.
+// Persone: riconoscimento volti locale, rinomina, unione con annulla, gruppi suggeriti, split volti e nascondi.
+// Dati: GET /people, GET /people/suggestion-groups, POST/DELETE /people/not-same,
+//       GET /people/{id}/files, PATCH /people/{id}, POST /people/merge, POST /people/merge/{id}/undo,
+//       POST /people/split, POST /faces/assign, POST /faces/{id}/exclude, POST /faces/{id}/restore,
+//       POST /people/scan, POST /people/recluster, POST /people/download-models.
 import { api, fileUrl } from '../api.js';
 import { store } from '../store.js';
 import { h, icon } from '../ui/el.js';
@@ -13,28 +14,6 @@ import { showSnackbar } from '../ui/snackbar.js';
 import { plural, formatNumber } from '../ui/format.js';
 
 const FILES_PAGE = 120;
-const DISMISSED_KEY = 'fs_people_dismissed_pairs';
-
-function pairKey(aId, bId) {
-  const x = Number(aId);
-  const y = Number(bId);
-  return x < y ? `${x}:${y}` : `${y}:${x}`;
-}
-
-function loadDismissedPairs() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(DISMISSED_KEY) || '[]');
-    return new Set(Array.isArray(raw) ? raw.map(String) : []);
-  } catch {
-    return new Set();
-  }
-}
-
-function saveDismissedPairs(set) {
-  try {
-    localStorage.setItem(DISMISSED_KEY, JSON.stringify([...set].slice(-300)));
-  } catch { /* quota */ }
-}
 
 function loadCss() {
   if (document.querySelector('link[data-view-css="people"]')) return;
@@ -67,6 +46,22 @@ function faceAvatar(person, size = 256) {
   return img;
 }
 
+/** Somma indicativa delle foto di un insieme di persone (per anteprima prima della conferma). */
+function sumPhotos(list) {
+  return list.reduce((acc, p) => acc + Number(p?.count || 0), 0);
+}
+
+/** Sceglie la destinazione predefinita tra piu' persone senza mostrare dialog (nome > preferita > piu' foto > id minore). */
+function defaultMergeTarget(list, preferredTargetId = null) {
+  const named = list.filter((p) => p.name && p.name.trim());
+  const pool = named.length ? named : list;
+  if (preferredTargetId != null) {
+    const pref = pool.find((p) => p.id === preferredTargetId);
+    if (pref) return pref;
+  }
+  return [...pool].sort((a, b) => (Number(b.count || 0) - Number(a.count || 0)) || (a.id - b.id))[0];
+}
+
 export async function mount(root, { navigate, query = {}, signal } = {}) {
   loadCss();
   const ac = new AbortController();
@@ -76,8 +71,7 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
 
   let disposed = false;
   let people = [];
-  let suggestions = [];
-  const dismissedPairs = loadDismissedPairs();
+  let suggestionGroups = [];
   let statusInfo = null;
   let settingsInfo = null;
   let showHidden = false;
@@ -85,7 +79,7 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
   const selectedIds = new Set();
   let draggedPersonId = null;
   let activePersonId = query.id && /^\d+$/.test(String(query.id)) ? Number(query.id) : null;
-  let detail = null;        // { person, items, total, ac }
+  let detail = null; // { person, items, total, ac, selectMode, selectedFaceIds, ... }
   let lastJobState = store.get('facesJob', null)?.state || null;
 
   const page = h('div', { class: 'view people-view' });
@@ -196,7 +190,7 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
       if (detail && detail.person.id === person.id) {
         detail.person = { ...detail.person, ...updated };
       }
-      showSnackbar(`Rinominata in «${updated.name}».`);
+      showSnackbar(`Rinominata in «${updated.name || 'Senza nome'}».`);
       renderCurrent();
     } catch (e) {
       if (!disposed) showSnackbar(e.message || 'Impossibile salvare il nome.', { error: true });
@@ -222,82 +216,154 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
     }
   }
 
-  async function mergeSelected() {
-    const ids = [...selectedIds];
-    if (ids.length < 2) return;
-    const chosen = people.filter((p) => selectedIds.has(p.id));
-    const options = chosen.map((p) => ({
-      value: p.id,
-      label: `${p.name || 'Senza nome'} (${plural(p.count, 'foto', 'foto')})`,
-    }));
-    const targetId = await choiceDialog({
-      title: `Unisci ${ids.length} persone`,
-      message: 'Scegli quale persona mantenere come principale: tutte le foto delle altre verranno spostate qui.',
-      options,
-      confirmLabel: 'Unisci',
-    });
-    if (!targetId || disposed) return;
-    try {
-      await api.post('/people/merge', { ids, into: targetId });
-      if (disposed) return;
-      mergeMode = false;
-      selectedIds.clear();
-      showSnackbar('Persone unite.');
-      await reloadPeopleList();
-    } catch (e) {
-      if (!disposed) showSnackbar(e.message || 'Impossibile unire le persone.', { error: true });
+  // ---------- Helper unici di unione (chooseMergeTarget + performMerge) ----------
+  /**
+   * Determina la persona di destinazione e chiede conferma all'utente.
+   * Se ci sono piu' nomi diversi (o forceChoice=true), apre choiceDialog; altrimenti confirmDialog
+   * mostrando la persona principale e il totale foto risultante. Ritorna targetId oppure null se annullato.
+   */
+  async function chooseMergeTarget(list, { preferredTargetId = null, skipConfirm = false, forceChoice = false } = {}) {
+    const unique = [];
+    const seen = new Set();
+    for (const p of list || []) {
+      if (p && !seen.has(p.id)) {
+        seen.add(p.id);
+        unique.push(p);
+      }
     }
-  }
+    if (unique.length < 2) return null;
 
-  /** Unisce due persone (usata da drag&drop, suggerimenti e «Unisci con…» nel dettaglio). */
-  async function mergePair(personA, personB, { preferredTargetId = null, openMergedDetail = false, skipConfirm = false } = {}) {
-    if (!personA || !personB || personA.id === personB.id) return;
-    let targetId = preferredTargetId;
-    const hasNameA = Boolean(personA.name && personA.name.trim());
-    const hasNameB = Boolean(personB.name && personB.name.trim());
+    const totalPhotos = sumPhotos(unique);
+    const distinctNames = new Set(
+      unique.map((p) => (p.name || '').trim().toLowerCase()).filter(Boolean),
+    );
+    const defaultDst = defaultMergeTarget(unique, preferredTargetId);
 
-    if (hasNameA && hasNameB && personA.name.trim().toLowerCase() !== personB.name.trim().toLowerCase()) {
-      targetId = await choiceDialog({
-        title: 'Unisci due persone',
-        message: 'Entrambe hanno già un nome. Quale vuoi mantenere come persona principale?',
-        options: [
-          { value: personA.id, label: `${personA.name} (${plural(personA.count, 'foto', 'foto')})` },
-          { value: personB.id, label: `${personB.name} (${plural(personB.count, 'foto', 'foto')})` },
-        ],
+    if (distinctNames.size > 1 || forceChoice) {
+      const ordered = [defaultDst, ...unique.filter((p) => p.id !== defaultDst.id)];
+      const chosenId = await choiceDialog({
+        title: `Unisci ${unique.length} persone`,
+        message: distinctNames.size > 1
+          ? `Più persone hanno un nome diverso. Scegli la persona principale da mantenere (risultato: fino a ${plural(totalPhotos, 'foto', 'foto')}):`
+          : `Scegli la persona principale da mantenere (risultato: fino a ${plural(totalPhotos, 'foto', 'foto')}):`,
+        options: ordered.map((p) => ({
+          value: p.id,
+          label: `${p.name || 'Senza nome'} (${plural(p.count, 'foto', 'foto')})`,
+        })),
         confirmLabel: 'Unisci',
       });
-      if (!targetId || disposed) return;
-    } else {
-      if (!targetId || (targetId !== personA.id && targetId !== personB.id)) {
-        if (hasNameA && !hasNameB) targetId = personA.id;
-        else if (hasNameB && !hasNameA) targetId = personB.id;
-        else targetId = (personB.count || 0) > (personA.count || 0) ? personB.id : personA.id;
-      }
-      if (!skipConfirm) {
-        const dst = targetId === personA.id ? personA : personB;
-        const src = targetId === personA.id ? personB : personA;
-        const ok = await confirmDialog({
-          title: 'Unire queste due persone?',
-          message: `Tutte le foto di «${src.name || 'Senza nome'}» (${plural(src.count, 'foto', 'foto')}) verranno unite in «${dst.name || 'Senza nome'}» (${plural(dst.count, 'foto', 'foto')}).`,
-          confirmLabel: 'Unisci',
-        });
-        if (!ok || disposed) return;
-      }
+      return chosenId || null;
     }
 
+    if (!skipConfirm) {
+      const others = unique.filter((p) => p.id !== defaultDst.id);
+      const othersDesc = others.length === 1
+        ? `«${others[0].name || 'Senza nome'}» (${plural(others[0].count, 'foto', 'foto')})`
+        : `${others.length} altre persone`;
+      const ok = await confirmDialog({
+        title: unique.length === 2 ? 'Unire queste due persone?' : `Unire ${unique.length} persone?`,
+        message: `Le foto di ${othersDesc} verranno unite in «${defaultDst.name || 'Senza nome'}» `
+          + `(persona principale, totale risultante: fino a ${plural(totalPhotos, 'foto', 'foto')}).`,
+        confirmLabel: 'Unisci',
+      });
+      if (!ok || disposed) return null;
+    }
+    return defaultDst.id;
+  }
+
+  /** Esegue l'unione di 2+ persone e offre lo snackbar con «Annulla» collegato a POST /people/merge/{log_id}/undo. */
+  async function performMerge(list, {
+    preferredTargetId = null,
+    openMergedDetail = false,
+    skipConfirm = false,
+    forceChoice = false,
+    clearMergeMode = false,
+  } = {}) {
+    const unique = [];
+    const seen = new Set();
+    for (const p of list || []) {
+      if (p && !seen.has(p.id)) {
+        seen.add(p.id);
+        unique.push(p);
+      }
+    }
+    if (unique.length < 2) return false;
+
+    const targetId = await chooseMergeTarget(unique, { preferredTargetId, skipConfirm, forceChoice });
+    if (!targetId || disposed) return false;
+
     try {
-      await api.post('/people/merge', { ids: [personA.id, personB.id], into: targetId });
-      if (disposed) return;
+      const res = await api.post('/people/merge', { ids: unique.map((p) => p.id), into: targetId });
+      if (disposed) return false;
+      if (clearMergeMode) {
+        mergeMode = false;
+        selectedIds.clear();
+      }
       if (openMergedDetail) activePersonId = targetId;
-      showSnackbar('Persone unite.');
+      const dst = unique.find((p) => p.id === targetId);
+      const label = dst?.name ? `Persone unite in «${dst.name}».` : 'Persone unite.';
+      const logId = res?.log_id;
+      showSnackbar(label, logId ? {
+        actionLabel: 'Annulla',
+        onAction: async () => {
+          try {
+            await api.post(`/people/merge/${logId}/undo`, {});
+            if (disposed) return;
+            showSnackbar('Unione annullata.');
+            await reloadPeopleList();
+          } catch (err) {
+            if (!disposed) showSnackbar(err.message || 'Impossibile annullare l’unione.', { error: true });
+          }
+        },
+      } : undefined);
       await reloadPeopleList();
+      return true;
     } catch (e) {
       if (!disposed) showSnackbar(e.message || 'Impossibile unire le persone.', { error: true });
+      return false;
     }
   }
 
-  /** Dialog visuale «Unisci con…» dal dettaglio persona (con avatar e filtro per nome). */
-  function openMergePicker(currentPerson) {
+  async function mergeSelected() {
+    const chosen = people.filter((p) => selectedIds.has(p.id));
+    if (chosen.length < 2) return;
+    await performMerge(chosen, { clearMergeMode: true });
+  }
+
+  /** Segna tutte le coppie di un gruppo come «Diverse» sul backend (POST /people/not-same) con Annulla. */
+  async function markGroupNotSame(members) {
+    const pairs = [];
+    for (let i = 0; i < members.length; i++) {
+      for (let j = i + 1; j < members.length; j++) {
+        pairs.push([members[i].id, members[j].id]);
+      }
+    }
+    if (!pairs.length) return;
+    try {
+      await Promise.all(pairs.map(([a, b]) => api.post('/people/not-same', { a, b })));
+      if (disposed) return;
+      showSnackbar(pairs.length === 1 ? 'Segnate come persone diverse.' : 'Gruppo segnato come persone diverse.', {
+        actionLabel: 'Annulla',
+        onAction: async () => {
+          try {
+            await Promise.all(pairs.map(([a, b]) => api.del(`/people/not-same/${a}/${b}`)));
+            if (!disposed) {
+              showSnackbar('Segnalazione annullata.');
+              await reloadPeopleList();
+            }
+          } catch (err) {
+            if (!disposed) showSnackbar(err.message || 'Impossibile annullare.', { error: true });
+          }
+        },
+      });
+      await reloadPeopleList();
+    } catch (e) {
+      if (!disposed) showSnackbar(e.message || 'Impossibile salvare la segnalazione.', { error: true });
+    }
+  }
+
+  /** Dialog visuale «Unisci con…» (usato dal dettaglio persona e come alternativa da tastiera al drag&drop sulle card). */
+  function openMergePicker(currentPerson, { openMergedDetail = true } = {}) {
     const others = people.filter((p) => p.id !== currentPerson.id);
     if (!others.length) {
       showSnackbar('Non ci sono altre persone con cui unirla.');
@@ -322,21 +388,31 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
         listEl.replaceChildren(h('p', { class: 'muted md-typescale-body-medium merge-picker-empty' }, 'Nessuna persona trovata.'));
         return;
       }
-      listEl.replaceChildren(...filtered.map((p) => h('button', {
-        type: 'button',
-        class: 'merge-picker-item',
-        role: 'listitem',
-        onclick: () => {
-          dlg.close();
-          const preferred = (p.name && !currentPerson.name) ? p.id : (currentPerson.name && !p.name ? currentPerson.id : p.id);
-          mergePair(currentPerson, p, { preferredTargetId: preferred, openMergedDetail: true });
+      listEl.replaceChildren(...filtered.map((p) => {
+        const preferred = (p.name && !currentPerson.name) ? p.id : (currentPerson.name && !p.name ? currentPerson.id : p.id);
+        const dst = defaultMergeTarget([currentPerson, p], preferred);
+        const tot = sumPhotos([currentPerson, p]);
+        const conflict = Boolean(currentPerson.name?.trim() && p.name?.trim()
+          && currentPerson.name.trim().toLowerCase() !== p.name.trim().toLowerCase());
+        const previewText = conflict
+          ? `Risultato: sceglierai il nome · fino a ${plural(tot, 'foto', 'foto')}`
+          : `Risultato: «${dst.name || 'Senza nome'}» · fino a ${plural(tot, 'foto', 'foto')}`;
+        return h('button', {
+          type: 'button',
+          class: 'merge-picker-item',
+          role: 'listitem',
+          onclick: () => {
+            dlg.close();
+            performMerge([currentPerson, p], { preferredTargetId: preferred, openMergedDetail });
+          },
         },
-      },
-        h('div', { class: 'merge-picker-item__avatar' }, faceAvatar(p, 128)),
-        h('div', { class: 'merge-picker-item__info' },
-          h('span', { class: `md-typescale-title-small${p.name ? '' : ' person-card__name--unnamed'}` }, p.name || 'Senza nome'),
-          h('span', { class: 'muted md-typescale-body-small' }, plural(p.count, 'foto', 'foto'))),
-        icon('merge', { class: 'merge-picker-item__icon' }))));
+          h('div', { class: 'merge-picker-item__avatar' }, faceAvatar(p, 128)),
+          h('div', { class: 'merge-picker-item__info' },
+            h('span', { class: `md-typescale-title-small${p.name ? '' : ' person-card__name--unnamed'}` }, p.name || 'Senza nome'),
+            h('span', { class: 'muted md-typescale-body-small' }, plural(p.count, 'foto', 'foto')),
+            h('span', { class: 'merge-picker-item__preview md-typescale-label-small' }, previewText)),
+          icon('merge', { class: 'merge-picker-item__icon' }));
+      }));
     };
     searchTf.addEventListener('input', () => renderOptions(searchTf.value));
     renderOptions('');
@@ -350,14 +426,15 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
     dlg.show();
   }
 
-  /** Dialog «Analizza»: confronta le foto delle due persone suggerite (prima la non nominata / con meno foto, separata dalla principale). */
-  function openCompareSuggestion(s) {
-    const rank = (p) => [p.name && p.name.trim() ? 1 : 0, Number(p.count || 0)];
-    const [ra, rb] = [rank(s.a), rank(s.b)];
-    const aIsMain = ra[0] !== rb[0] ? ra[0] > rb[0] : ra[1] >= rb[1];
-    const first = aIsMain ? s.b : s.a;   // non nominata o con meno foto
-    const second = aIsMain ? s.a : s.b;  // nominata o con piu' foto
-    const pct = Math.round((s.similarity || 0) * 100);
+  /** Dialog «Analizza»: confronta le foto di un gruppo suggerito (2 o piu' persone), con scelta di quali includere. */
+  function openCompareSuggestion(group) {
+    const members = Array.isArray(group?.members) ? group.members : [group?.a, group?.b].filter(Boolean);
+    if (members.length < 2) return;
+    const main = members[0]; // gia' ordinato dal backend: nominata / piu' foto
+    const others = members.slice(1);
+    const ordered = [...others, main]; // prima quelle da verificare, in fondo la principale
+    const pct = Math.round((group.similarity || 0) * 100);
+    const checkedIds = new Set(members.map((m) => m.id));
 
     const cmpAc = new AbortController();
     const dlg = document.createElement('md-dialog');
@@ -366,10 +443,31 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
     let savedScrollTop = 0;
 
     const headline = h('div', { slot: 'headline', class: 'compare-dialog__headline' },
-      h('span', {}, 'Confronta persone'),
+      h('span', {}, members.length === 2 ? 'Confronta persone' : `Confronta ${members.length} persone`),
       h('span', { class: 'compare-dialog__sim md-typescale-label-medium' }, `${pct}% simili`));
 
-    const buildSection = (person, roleLabel, roleCls) => {
+    const mergeBtn = h('md-filled-button', {
+      onclick: () => {
+        const toMerge = members.filter((m) => checkedIds.has(m.id));
+        if (toMerge.length < 2) return;
+        dlg.close();
+        performMerge(toMerge, { preferredTargetId: checkedIds.has(main.id) ? main.id : toMerge[0].id });
+      },
+    }, icon('merge', { slot: 'icon' }), members.length === 2 ? 'Unisci' : 'Unisci gruppo');
+
+    const updateMergeBtn = () => {
+      const sel = members.filter((m) => checkedIds.has(m.id));
+      mergeBtn.disabled = sel.length < 2;
+      const tot = sumPhotos(sel);
+      mergeBtn.replaceChildren(
+        icon('merge', { slot: 'icon' }),
+        sel.length === 2 ? `Unisci (~${formatNumber(tot)} foto)` : `Unisci ${sel.length} (~${formatNumber(tot)} foto)`,
+      );
+    };
+
+    const buildSection = (person, isPrimary) => {
+      const roleLabel = isPrimary ? 'Principale' : 'Da verificare';
+      const roleCls = isPrimary ? 'is-primary' : 'is-secondary';
       const state = { items: [], total: person.count || 0 };
       const gridEl = h('div', { class: 'compare-photos-grid' }, skeletonGrid(6, { tile: 120 }));
       const moreBtn = h('md-text-button', {
@@ -398,7 +496,6 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
               onOpen: async () => {
                 try {
                   const { openViewer } = await import('./viewer.js');
-                  // md-dialog usa il Top Layer del browser: lo sospendiamo mentre il visualizzatore e' aperto
                   savedScrollTop = content.scrollTop;
                   suspendedForViewer = true;
                   dlg.close();
@@ -437,8 +534,22 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
 
       loadMore();
 
+      let checkEl = null;
+      if (members.length > 2) {
+        const cb = document.createElement('md-checkbox');
+        cb.checked = checkedIds.has(person.id);
+        cb.setAttribute('aria-label', `Includi ${person.name || 'Senza nome'} nell'unione`);
+        cb.addEventListener('change', () => {
+          if (cb.checked) checkedIds.add(person.id);
+          else checkedIds.delete(person.id);
+          updateMergeBtn();
+        });
+        checkEl = cb;
+      }
+
       return h('section', { class: `compare-section ${roleCls}` },
         h('div', { class: 'compare-section__head' },
+          checkEl,
           h('div', { class: 'compare-section__avatar' }, faceAvatar(person, 128)),
           h('div', { class: 'compare-section__meta' },
             h('div', { class: 'compare-section__title-row' },
@@ -450,28 +561,26 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
         moreBtn);
     };
 
-    const content = h('div', { slot: 'content', class: 'compare-dialog__content' },
-      buildSection(first, 'Da verificare', 'is-secondary'),
-      h('div', { class: 'compare-dialog__divider', role: 'separator' },
-        h('span', { class: 'md-typescale-label-small' }, 'confronta con')),
-      buildSection(second, 'Principale', 'is-primary'));
+    const contentParts = [];
+    ordered.forEach((p, idx) => {
+      if (idx > 0) {
+        contentParts.push(h('div', { class: 'compare-dialog__divider', role: 'separator' },
+          h('span', { class: 'md-typescale-label-small' }, idx === ordered.length - 1 ? 'confronta con' : 'e con')));
+      }
+      contentParts.push(buildSection(p, p.id === main.id));
+    });
+    const content = h('div', { slot: 'content', class: 'compare-dialog__content' }, ...contentParts);
 
+    updateMergeBtn();
     const actions = h('div', { slot: 'actions', class: 'compare-dialog__actions' },
       h('md-text-button', { onclick: () => dlg.close() }, 'Chiudi'),
       h('md-outlined-button', {
         onclick: () => {
-          dismissedPairs.add(pairKey(s.a.id, s.b.id));
-          saveDismissedPairs(dismissedPairs);
           dlg.close();
-          renderList();
+          markGroupNotSame(members);
         },
       }, 'Diverse'),
-      h('md-filled-button', {
-        onclick: () => {
-          dlg.close();
-          mergePair(second, first, { preferredTargetId: second.id });
-        },
-      }, icon('merge', { slot: 'icon' }), 'Unisci'));
+      mergeBtn);
 
     dlg.append(headline, content, actions);
     dlg.addEventListener('closed', () => {
@@ -522,19 +631,88 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
     }
   }
 
+  function updateSplitBar(d) {
+    if (!d.splitBar) return;
+    d.splitBar.hidden = !d.selectMode;
+    d.grid.classList.toggle('is-select-mode', d.selectMode);
+    if (d.selectBtn) {
+      d.selectBtn.replaceChildren(
+        icon(d.selectMode ? 'close' : 'checklist', { slot: 'icon' }),
+        d.selectMode ? 'Fine selezione' : 'Seleziona volti',
+      );
+    }
+    const n = d.selectedFaceIds.size;
+    d.splitCountEl.textContent = n
+      ? `${formatNumber(n)} ${n === 1 ? 'volto selezionato' : 'volti selezionati'}`
+      : 'Tocca le foto da spostare in una nuova persona.';
+    d.splitBtn.disabled = n === 0;
+  }
+
+  async function splitSelectedFaces(d) {
+    const fids = [...d.selectedFaceIds];
+    if (!fids.length) return;
+    const ok = await confirmDialog({
+      title: 'Spostare i volti in una nuova persona?',
+      message: `${plural(fids.length, 'volto selezionato verrà spostato', 'volti selezionati verranno spostati')} da «${d.person.name || 'Senza nome'}» in una nuova persona separata.`,
+      confirmLabel: 'Sposta in nuova persona',
+    });
+    if (!ok || disposed || detail !== d) return;
+    try {
+      const res = await api.post('/people/split', { person_id: d.person.id, face_ids: fids });
+      if (disposed) return;
+      d.selectMode = false;
+      d.selectedFaceIds.clear();
+      const newPid = res?.person_id;
+      showSnackbar(`${plural(res?.moved || fids.length, 'volto spostato', 'volti spostati')} in una nuova persona.`, newPid ? {
+        actionLabel: 'Apri nuova persona',
+        onAction: () => {
+          const found = people.find((p) => p.id === newPid);
+          if (found) openDetail(found);
+          else { activePersonId = newPid; reloadPeopleList(); }
+        },
+      } : undefined);
+      await reloadPeopleList();
+    } catch (e) {
+      if (!disposed) showSnackbar(e.message || 'Impossibile spostare i volti.', { error: true });
+    }
+  }
+
   function buildPersonPhotoItem(d, file, idx) {
+    const faceId = file.face_id;
+    const checkEl = faceId
+      ? h('span', { class: 'person-photo-item__check', 'aria-hidden': 'true' })
+      : null;
+
+    const syncSelectedVisual = (wrap) => {
+      const sel = Boolean(faceId && d.selectedFaceIds.has(faceId));
+      wrap.classList.toggle('is-selected', sel);
+      if (checkEl) checkEl.replaceChildren(sel ? icon('check') : null);
+    };
+
+    let wrap;
     const tile = createTile(file, {
       size: 180,
-      onOpen: () => openFileViewer(d, idx),
+      onOpen: () => {
+        if (d.selectMode && faceId) {
+          if (d.selectedFaceIds.has(faceId)) d.selectedFaceIds.delete(faceId);
+          else d.selectedFaceIds.add(faceId);
+          syncSelectedVisual(wrap);
+          updateSplitBar(d);
+        } else {
+          openFileViewer(d, idx);
+        }
+      },
     });
-    const wrap = h('div', { class: 'person-photo-item' }, tile);
-    if (file.face_id) {
-      const isCover = Number(d.person.cover_face_id) === Number(file.face_id);
+    wrap = h('div', { class: 'person-photo-item', 'data-face-id': faceId ? String(faceId) : '' }, tile, checkEl);
+    syncSelectedVisual(wrap);
+
+    if (faceId) {
+      const isCover = Number(d.person.cover_face_id) === Number(faceId);
       const coverBtn = h('md-icon-button', {
         class: isCover ? 'is-active-cover' : '',
         'aria-label': isCover ? 'Foto profilo attuale' : 'Usa come foto profilo',
         title: isCover ? 'Foto profilo attuale' : 'Usa come foto profilo',
-        onclick: (e) => { e.stopPropagation(); setCoverFace(d.person, file.face_id); },
+        onclick: (e) => { e.stopPropagation(); setCoverFace(d.person, faceId); },
       }, icon('account_circle'));
       const notThisBtn = h('md-icon-button', {
         'aria-label': 'Non è questa persona',
@@ -565,7 +743,6 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
             h('span', { class: 'person-detail-head__avatar-edit', 'aria-hidden': 'true' }, icon('photo_camera')),
           );
         }
-        // Aggiorna evidenziazione pulsante "Foto profilo attuale" sulle foto gia' renderizzate
         detail.grid.querySelectorAll('.is-active-cover').forEach((el) => {
           el.classList.remove('is-active-cover');
           el.title = 'Usa come foto profilo';
@@ -659,8 +836,10 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
       await api.post('/faces/assign', { face_ids: [faceId], person_id: null });
       if (disposed) return;
       itemEl.remove();
+      d.selectedFaceIds.delete(faceId);
       d.total = Math.max(0, d.total - 1);
       d.countEl.textContent = plural(d.total, 'foto', 'foto');
+      updateSplitBar(d);
       showSnackbar('Volto rimosso da questa persona.', {
         actionLabel: 'Annulla',
         onAction: async () => {
@@ -683,8 +862,10 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
       await api.post(`/faces/${faceId}/exclude`, {});
       if (disposed) return;
       itemEl.remove();
+      d.selectedFaceIds.delete(faceId);
       d.total = Math.max(0, d.total - 1);
       d.countEl.textContent = plural(d.total, 'foto', 'foto');
+      updateSplitBar(d);
       showSnackbar('Volto escluso.', {
         actionLabel: 'Annulla',
         onAction: async () => {
@@ -714,7 +895,14 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
     detail?.ac.abort();
     activePersonId = person.id;
     history.replaceState(null, '', `#/people?id=${person.id}`);
-    const d = { person, items: [], total: person.count, ac: new AbortController() };
+    const d = {
+      person,
+      items: [],
+      total: person.count,
+      ac: new AbortController(),
+      selectMode: false,
+      selectedFaceIds: new Set(),
+    };
     detail = d;
 
     d.countEl = h('p', { class: 'muted md-typescale-body-medium' }, plural(person.count, 'foto', 'foto'));
@@ -739,6 +927,42 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
       faceAvatar(person, 256),
       h('span', { class: 'person-detail-head__avatar-edit', 'aria-hidden': 'true' }, icon('photo_camera')));
 
+    d.selectBtn = h('md-outlined-button', {
+      onclick: () => {
+        d.selectMode = !d.selectMode;
+        if (!d.selectMode) {
+          d.selectedFaceIds.clear();
+          d.grid.querySelectorAll('.person-photo-item.is-selected').forEach((el) => {
+            el.classList.remove('is-selected');
+            el.querySelector('.person-photo-item__check')?.replaceChildren();
+          });
+        }
+        updateSplitBar(d);
+      },
+    }, icon('checklist', { slot: 'icon' }), 'Seleziona volti');
+
+    d.splitCountEl = h('span', { class: 'md-typescale-body-medium' });
+    d.splitBtn = h('md-filled-button', {
+      disabled: true,
+      onclick: () => splitSelectedFaces(d),
+    }, icon('person_add', { slot: 'icon' }), 'Sposta in nuova persona');
+
+    d.splitBar = h('div', { class: 'people-merge-bar person-split-bar', role: 'region', 'aria-label': 'Selezione volti', hidden: true },
+      d.splitCountEl,
+      h('div', { class: 'people-merge-bar__actions' },
+        d.splitBtn,
+        h('md-text-button', {
+          onclick: () => {
+            d.selectMode = false;
+            d.selectedFaceIds.clear();
+            d.grid.querySelectorAll('.person-photo-item.is-selected').forEach((el) => {
+              el.classList.remove('is-selected');
+              el.querySelector('.person-photo-item__check')?.replaceChildren();
+            });
+            updateSplitBar(d);
+          },
+        }, 'Annulla')));
+
     const head = h('div', { class: 'person-detail-head' },
       h('md-icon-button', { 'aria-label': 'Torna a tutte le persone', title: 'Torna a tutte le persone', onclick: closeDetail }, icon('arrow_back')),
       d.avatarEl,
@@ -748,6 +972,7 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
       h('div', { class: 'person-detail-head__actions' },
         h('md-outlined-button', { onclick: () => renamePerson(d.person) }, icon('edit', { slot: 'icon' }), 'Rinomina'),
         h('md-outlined-button', { onclick: () => openCoverPicker(d.person) }, icon('photo_camera', { slot: 'icon' }), 'Foto profilo'),
+        d.selectBtn,
         people.length >= 2
           ? h('md-outlined-button', { onclick: () => openMergePicker(d.person) }, icon('merge', { slot: 'icon' }), 'Unisci con…')
           : null,
@@ -756,8 +981,67 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
           icon(person.hidden ? 'visibility' : 'visibility_off', { slot: 'icon' }),
           person.hidden ? 'Mostra' : 'Nascondi')));
 
-    contentSlot.replaceChildren(head, d.grid, d.more);
+    updateSplitBar(d);
+    contentSlot.replaceChildren(head, d.splitBar, d.grid, d.more);
     loadDetailPage(d);
+  }
+
+  // ---------- Fascia suggerimenti (per gruppi) ----------
+  function buildSuggestionsBox() {
+    if (!suggestionGroups.length) return null;
+    const cards = suggestionGroups.map((g) => {
+      const members = g.members || [];
+      const pct = Math.round((g.similarity || 0) * 100);
+      const shown = members.slice(0, 4);
+      const extra = members.length - shown.length;
+      const tot = sumPhotos(members);
+      const names = members.slice(0, 3).map((m) => m.name || 'Senza nome').join(' + ')
+        + (members.length > 3 ? ` + altri ${members.length - 3}` : '');
+
+      const avatarNodes = [];
+      shown.forEach((m, i) => {
+        if (i > 0 && members.length === 2) {
+          avatarNodes.push(h('span', { class: 'people-suggest-card__link', 'aria-hidden': 'true' }, icon('compare_arrows')));
+        }
+        avatarNodes.push(h('div', { class: 'people-suggest-card__avatar', title: m.name || 'Senza nome' }, faceAvatar(m, 128)));
+      });
+      if (extra > 0) {
+        avatarNodes.push(h('span', { class: 'people-suggest-card__more md-typescale-label-medium' }, `+${extra}`));
+      }
+
+      return h('div', { class: `people-suggest-card${members.length > 2 ? ' is-group' : ''}` },
+        h('div', { class: `people-suggest-card__avatars${members.length > 2 ? ' is-stack' : ''}` }, ...avatarNodes),
+        h('div', { class: 'people-suggest-card__info' },
+          h('p', { class: 'people-suggest-card__names md-typescale-label-large', title: names }, names),
+          h('p', { class: 'muted md-typescale-body-small' },
+            `${members.length === 2 ? '' : `${members.length} persone · `}fino a ${plural(tot, 'foto', 'foto')} · ${pct}% simili`)),
+        h('div', { class: 'people-suggest-card__actions' },
+          h('md-filled-tonal-button', {
+            onclick: () => performMerge(members, { preferredTargetId: members[0]?.id }),
+          }, icon('merge', { slot: 'icon' }), members.length > 2 ? 'Unisci gruppo' : 'Unisci'),
+          h('md-outlined-button', {
+            onclick: () => openCompareSuggestion(g),
+          }, icon('compare', { slot: 'icon' }), 'Analizza'),
+          h('md-text-button', {
+            onclick: () => markGroupNotSame(members),
+          }, 'Diverse')));
+    });
+
+    if (mergeMode) {
+      return h('details', { class: 'people-suggestions people-suggestions--collapsible' },
+        h('summary', { class: 'people-suggestions__head people-suggestions__summary' },
+          icon('auto_awesome'),
+          h('span', { class: 'md-typescale-title-small' }, 'Suggerimenti di unione'),
+          h('span', { class: 'people-suggestions__count md-typescale-label-small' }, String(suggestionGroups.length))),
+        h('div', { class: 'people-suggestions__grid' }, ...cards));
+    }
+
+    return h('section', { class: 'people-suggestions', 'aria-label': 'Possibili persone uguali' },
+      h('div', { class: 'people-suggestions__head' },
+        icon('auto_awesome'),
+        h('h2', { class: 'md-typescale-title-small' }, 'Potrebbero essere la stessa persona'),
+        h('span', { class: 'people-suggestions__count md-typescale-label-small' }, String(suggestionGroups.length))),
+      h('div', { class: 'people-suggestions__grid' }, ...cards));
   }
 
   // ---------- Griglia delle persone ----------
@@ -767,7 +1051,7 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
       h('div', {},
         h('h1', { class: 'md-typescale-headline-medium' }, 'Persone'),
         h('p', { class: 'muted md-typescale-body-medium' },
-          'Volti riconosciuti localmente sul tuo PC. Dai un nome alle persone o trascina una card sopra un’altra per unirle.')));
+          'Volti riconosciuti localmente sul tuo PC. Dai un nome alle persone, usa il pulsante Unisci sulle card o trascina una card sopra un’altra.')));
 
     // Stato 1: disattivato nelle impostazioni
     if (settingsInfo && !settingsInfo.enable_faces) {
@@ -840,75 +1124,93 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
       return;
     }
 
-    // Fascia «Potrebbero essere la stessa persona»
-    const visibleSuggestions = !mergeMode
-      ? suggestions.filter((s) => !dismissedPairs.has(pairKey(s.a.id, s.b.id)))
-      : [];
-    const suggestionsBox = visibleSuggestions.length
-      ? h('section', { class: 'people-suggestions', 'aria-label': 'Possibili persone uguali' },
-        h('div', { class: 'people-suggestions__head' },
-          icon('auto_awesome'),
-          h('h2', { class: 'md-typescale-title-small' }, 'Potrebbero essere la stessa persona'),
-          h('span', { class: 'people-suggestions__count md-typescale-label-small' }, String(visibleSuggestions.length))),
-        h('div', { class: 'people-suggestions__grid' },
-          ...visibleSuggestions.map((s) => {
-            const pct = Math.round((s.similarity || 0) * 100);
-            return h('div', { class: 'people-suggest-card' },
-              h('div', { class: 'people-suggest-card__avatars' },
-                h('div', { class: 'people-suggest-card__avatar' }, faceAvatar(s.a, 128)),
-                h('span', { class: 'people-suggest-card__link', 'aria-hidden': 'true' }, icon('compare_arrows')),
-                h('div', { class: 'people-suggest-card__avatar' }, faceAvatar(s.b, 128))),
-              h('div', { class: 'people-suggest-card__info' },
-                h('p', { class: 'people-suggest-card__names md-typescale-label-large' },
-                  `${s.a.name || 'Senza nome'} + ${s.b.name || 'Senza nome'}`),
-                h('p', { class: 'muted md-typescale-body-small' },
-                  `${plural(s.a.count, 'foto', 'foto')} · ${plural(s.b.count, 'foto', 'foto')} · ${pct}% simili`)),
-              h('div', { class: 'people-suggest-card__actions' },
-                h('md-filled-tonal-button', {
-                  onclick: () => mergePair(s.a, s.b, { preferredTargetId: s.a.id }),
-                }, icon('merge', { slot: 'icon' }), 'Unisci'),
-                h('md-outlined-button', {
-                  onclick: () => openCompareSuggestion(s),
-                }, icon('compare', { slot: 'icon' }), 'Analizza'),
-                h('md-text-button', {
-                  onclick: () => {
-                    dismissedPairs.add(pairKey(s.a.id, s.b.id));
-                    saveDismissedPairs(dismissedPairs);
-                    renderList();
-                  },
-                }, 'Diverse')));
-          })))
+    const suggestionsBox = buildSuggestionsBox();
+
+    // Barra di unione quando mergeMode e' attivo (con anteprima delle persone selezionate)
+    const selectedPeople = mergeMode ? people.filter((p) => selectedIds.has(p.id)) : [];
+    const selectedTot = sumPhotos(selectedPeople);
+    const mergePreview = selectedPeople.length
+      ? h('div', { class: 'people-merge-preview', 'aria-label': 'Persone selezionate per l’unione' },
+        ...selectedPeople.map((p) => h('span', { class: 'people-merge-chip' },
+          h('span', { class: 'people-merge-chip__avatar' }, faceAvatar(p, 96)),
+          h('span', { class: 'people-merge-chip__text md-typescale-label-medium' },
+            `${p.name || 'Senza nome'} (${formatNumber(p.count)})`),
+          h('button', {
+            type: 'button',
+            class: 'people-merge-chip__remove',
+            'aria-label': `Rimuovi ${p.name || 'Senza nome'} dalla selezione`,
+            title: 'Rimuovi dalla selezione',
+            onclick: () => { selectedIds.delete(p.id); renderList(); },
+          }, icon('close')))))
       : null;
 
-    // Barra di unione quando mergeMode e' attivo
     const mergeBar = mergeMode
       ? h('div', { class: 'people-merge-bar', role: 'region', 'aria-label': 'Unisci persone' },
-        h('span', { class: 'md-typescale-body-medium' },
-          selectedIds.size
-            ? `${formatNumber(selectedIds.size)} ${selectedIds.size === 1 ? 'persona selezionata' : 'persone selezionate'}`
-            : 'Tocca due o più persone da unire in una sola.'),
-        h('div', { class: 'people-merge-bar__actions' },
-          h('md-filled-button', { disabled: selectedIds.size < 2, onclick: mergeSelected }, 'Unisci selezionate'),
-          h('md-text-button', { onclick: () => { mergeMode = false; selectedIds.clear(); renderList(); } }, 'Annulla')))
+        h('div', { class: 'people-merge-bar__row' },
+          h('span', { class: 'md-typescale-body-medium' },
+            selectedPeople.length
+              ? `${formatNumber(selectedPeople.length)} ${selectedPeople.length === 1 ? 'persona selezionata' : 'persone selezionate'} · fino a ${plural(selectedTot, 'foto', 'foto')}`
+              : 'Seleziona due o più persone da unire. Puoi comunque aprirne le foto con l’icona in alto a sinistra.'),
+          h('div', { class: 'people-merge-bar__actions' },
+            h('md-filled-button', { disabled: selectedPeople.length < 2, onclick: mergeSelected }, 'Unisci selezionate'),
+            h('md-text-button', { onclick: () => { mergeMode = false; selectedIds.clear(); renderList(); } }, 'Annulla'))),
+        mergePreview)
       : null;
 
     const grid = h('div', { class: 'people-grid', role: 'list', 'aria-label': 'Persone' },
       ...people.map((p) => {
         const sel = mergeMode && selectedIds.has(p.id);
-        const card = h('button', {
-          type: 'button',
+        const toggleSelect = () => {
+          if (selectedIds.has(p.id)) selectedIds.delete(p.id);
+          else selectedIds.add(p.id);
+          renderList();
+        };
+
+        const openInMergeBtn = mergeMode
+          ? h('md-icon-button', {
+            class: 'person-card__open-btn',
+            'aria-label': `Apri foto di ${p.name || 'Senza nome'}`,
+            title: 'Apri foto',
+            onclick: (e) => {
+              e.stopPropagation();
+              openDetail(p);
+            },
+          }, icon('open_in_new'))
+          : null;
+
+        const quickMergeBtn = !mergeMode && people.length >= 2
+          ? h('md-icon-button', {
+            class: 'person-card__merge-btn',
+            'aria-label': `Unisci ${p.name || 'Senza nome'} con un’altra persona`,
+            title: 'Unisci con…',
+            onclick: (e) => {
+              e.stopPropagation();
+              openMergePicker(p, { openMergedDetail: false });
+            },
+          }, icon('merge'))
+          : null;
+
+        const card = h('div', {
           class: `person-card${sel ? ' is-selected' : ''}${p.hidden ? ' is-hidden-person' : ''}`,
           role: 'listitem',
+          tabindex: '0',
           draggable: !mergeMode,
-          onclick: () => {
-            if (mergeMode) {
-              if (selectedIds.has(p.id)) selectedIds.delete(p.id); else selectedIds.add(p.id);
-              renderList();
-            } else {
-              openDetail(p);
+          'aria-pressed': mergeMode ? String(sel) : undefined,
+          'aria-label': mergeMode
+            ? `${p.name || 'Senza nome'}, ${plural(p.count, 'foto', 'foto')}${sel ? ', selezionata' : ''}`
+            : `${p.name || 'Senza nome'}, ${plural(p.count, 'foto', 'foto')}`,
+          onclick: () => (mergeMode ? toggleSelect() : openDetail(p)),
+          onkeydown: (e) => {
+            if (e.target !== card) return;
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              if (mergeMode) toggleSelect();
+              else openDetail(p);
             }
           },
         },
+          openInMergeBtn,
+          quickMergeBtn,
           mergeMode ? h('span', { class: 'person-card__check', 'aria-hidden': 'true' }, sel ? icon('check') : null) : null,
           !mergeMode ? h('span', { class: 'person-card__drop-hint md-typescale-label-small', 'aria-hidden': 'true' }, 'Rilascia per unire') : null,
           h('div', { class: 'person-card__media' }, faceAvatar(p, 256)),
@@ -947,7 +1249,7 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
             if (!srcId || srcId === p.id) return;
             const srcPerson = people.find((x) => x.id === srcId);
             if (!srcPerson) return;
-            mergePair(srcPerson, p, { preferredTargetId: p.id });
+            performMerge([srcPerson, p], { preferredTargetId: p.id });
           });
         }
         return card;
@@ -967,13 +1269,13 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
 
   async function reloadPeopleList() {
     try {
-      const [data, sugg] = await Promise.all([
+      const [data, groups] = await Promise.all([
         api.get('/people', showHidden ? { include_hidden: 1 } : null, sig),
-        api.get('/people/suggestions', null, sig).catch(() => []),
+        api.get('/people/suggestion-groups', null, sig).catch(() => []),
       ]);
       if (disposed) return;
       people = Array.isArray(data) ? data : [];
-      suggestions = Array.isArray(sugg) ? sugg : [];
+      suggestionGroups = Array.isArray(groups) ? groups : [];
       renderCurrent();
     } catch (e) {
       if (disposed || e.name === 'AbortError') return;
@@ -984,17 +1286,17 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
   async function loadAll() {
     contentSlot.replaceChildren(skeletonGrid(10, { tile: 170 }));
     try {
-      const [st, cfg, ppl, sugg] = await Promise.all([
+      const [st, cfg, ppl, groups] = await Promise.all([
         api.get('/status', null, sig),
         api.get('/settings', null, sig),
         api.get('/people', showHidden ? { include_hidden: 1 } : null, sig),
-        api.get('/people/suggestions', null, sig).catch(() => []),
+        api.get('/people/suggestion-groups', null, sig).catch(() => []),
       ]);
       if (disposed) return;
       statusInfo = st;
       settingsInfo = cfg;
       people = Array.isArray(ppl) ? ppl : [];
-      suggestions = Array.isArray(sugg) ? sugg : [];
+      suggestionGroups = Array.isArray(groups) ? groups : [];
       renderCurrent();
     } catch (e) {
       if (disposed || e.name === 'AbortError') return;
