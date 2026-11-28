@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import socket
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from .. import netguard
 from . import deps
@@ -35,9 +35,8 @@ def _expected_updates(cfg) -> dict:
 def _expected(cfg) -> list[dict]:
     """Le uniche destinazioni esterne note, con quando e cosa viene inviato."""
     from .. import faces
-    from .routes_status import _model_cached
 
-    model_ok = _model_cached(cfg.model_name)
+    model_ok = netguard.model_in_cache(cfg.model_name)
     try:
         faces_ok = faces.models_present(cfg)
     except Exception:  # noqa: BLE001
@@ -106,7 +105,8 @@ def network_status(request: Request, limit: int = Query(200, ge=1, le=1000)):
 
 @router.delete("/network/log")
 def network_clear_log():
-    netguard.clear_log()
+    if not netguard.clear_log():
+        raise HTTPException(500, "Non riesco a svuotare il registro: un altro processo lo sta usando. Riprova tra poco.")
     return {"ok": True}
 
 

@@ -7,7 +7,7 @@ import { skeletonCard } from '../ui/skeleton.js';
 import { emptyState, errorState, loadingBlock } from '../ui/empty-state.js';
 import { filterChips } from '../ui/chips.js';
 import { confirmDialog } from '../ui/dialog.js';
-import { formatBytes, formatDateShort, formatNumber, plural } from '../ui/format.js';
+import { formatBytes, formatDateShort, formatNumber, plural, missingNote } from '../ui/format.js';
 
 const PAGE = 20;
 const TYPES = { exact: 'Identici', similar: 'Quasi uguali' };
@@ -22,6 +22,8 @@ const KIND = { exact: 1, similar: 2 }; // is_dup dei membri mostrati in ciascuna
 const REASON = { hash: 'Stesso file', nome: 'Versione modificata', immagine: 'Immagini molto simili' };
 const CSS_HREF = 'css/view-duplicates.css';
 
+/** Gruppi saltati da trash-copies: l'originale non c'e' piu' sul disco, quindi le copie non si toccano. */
+const skippedNote = (n) => `${plural(n, 'gruppo saltato', 'gruppi saltati')}: l’originale non è più sul disco, quindi le sue copie non sono state toccate.`;
 const isAbort = (e) => e?.name === 'AbortError';
 const errMsg = (e) => (e instanceof ApiError && e.message) || 'Operazione non riuscita. Riprova.';
 
@@ -207,6 +209,7 @@ export async function mount(root, { query = {}, signal } = {}) {
         showSnackbar(`${plural(r.trashed, 'copia spostata', 'copie spostate')} nel Cestino (${formatBytes(r.freed_bytes)}).`);
         window.dispatchEvent(new CustomEvent('fotoscan:cleanup-changed'));
       }
+      if (r.missing) showSnackbar(missingNote(r.missing));
       refreshSummary();
     } catch (e) {
       if (!isAbort(e) && state.alive) showSnackbar(errMsg(e), { error: true });
@@ -594,6 +597,7 @@ export async function mount(root, { query = {}, signal } = {}) {
         showSnackbar(`${plural(r.trashed, 'foto spostata', 'foto spostate')} nel Cestino (${formatBytes(r.freed_bytes)} liberati).`);
         window.dispatchEvent(new CustomEvent('fotoscan:cleanup-changed'));
       }
+      if (r.missing) showSnackbar(missingNote(r.missing));
       if (r.errors?.length) showSnackbar(`${plural(r.errors.length, 'file non spostato', 'file non spostati')}.`, { error: true });
       refreshSummary();
     } catch (e) {
@@ -616,13 +620,13 @@ export async function mount(root, { query = {}, signal } = {}) {
     }
     if (!state.alive) return;
     if (!plan.files) {
-      showSnackbar('Non ci sono copie da eliminare in questa scheda.');
+      showSnackbar(plan.skipped_groups ? skippedNote(plan.skipped_groups) : 'Non ci sono copie da eliminare in questa scheda.');
       return;
     }
     const typeWord = state.type === 'exact' ? 'identiche' : 'quasi uguali';
     const ok = await confirmDialog({
       title: `Eliminare tutte le ${formatNumber(plan.files)} copie ${typeWord}?`,
-      message: `Verranno spostate nel Cestino di Windows le copie di ${plural(plan.groups, 'gruppo', 'gruppi')}, liberando circa ${formatBytes(plan.bytes)}. Tutti gli originali restano al sicuro e potrai sempre recuperare le copie dal Cestino.`,
+      message: `Verranno spostate nel Cestino di Windows le copie di ${plural(plan.groups, 'gruppo', 'gruppi')}, liberando circa ${formatBytes(plan.bytes)}. Tutti gli originali restano al sicuro e potrai sempre recuperare le copie dal Cestino.${plan.skipped_groups ? ` ${skippedNote(plan.skipped_groups)}` : ''}`,
       confirmLabel: `Sposta ${formatNumber(plan.files)} copie nel Cestino`,
       danger: true,
     });
@@ -637,6 +641,7 @@ export async function mount(root, { query = {}, signal } = {}) {
         showSnackbar(`${plural(r.trashed, 'copia spostata', 'copie spostate')} nel Cestino (${formatBytes(r.freed_bytes)} liberati).`);
         window.dispatchEvent(new CustomEvent('fotoscan:cleanup-changed'));
       }
+      if (r.skipped_groups) showSnackbar(skippedNote(r.skipped_groups));
       if (r.errors?.length) showSnackbar(`${plural(r.errors.length, 'copia non spostata', 'copie non spostate')}.`, { error: true });
       reset();
       refreshSummary();

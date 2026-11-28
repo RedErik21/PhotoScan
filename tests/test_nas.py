@@ -317,6 +317,149 @@ def test_copy_verified_never_overwrites_late_file() -> None:
     assert dst.read_bytes() == b"ARRIVATO-PRIMA"
     assert not list(nas_dir.glob("*" + nas.TMP_SUFFIX))
 
+def test_nas_equal_to_source_is_refused() -> None:
+    base, source, nas_dir, cfg, conn = _fresh("stessa")
+    _add_file(conn, source / "a.jpg", b"AAAA")
+    cfg.nas_dir = str(source)  # il "NAS" e' la cartella sorgente: il backup sarebbe il file stesso
+    try:
+        nas.plan_send(conn, cfg, "as_is")
+    except nas.NasError:
+        pass
+    else:
+        raise AssertionError("NAS uguale alla sorgente accettato")
+
+
+def test_plan_skips_files_already_inside_nas_dir() -> None:
+    base, source, nas_dir, cfg, conn = _fresh("dentro")
+    _add_file(conn, source / "a.jpg", b"AAAA")
+    # sorgente = cartella madre del NAS: i file gia' nel NAS non si copiano su se stessi
+    cfg.source_dir = str(base)
+    cfg.nas_dir = str(nas_dir)
+    _add_file(conn, nas_dir / "gia.jpg", b"GIA")
+    names = {i["name"] for i in nas.plan_send(conn, cfg, "as_is")}
+    assert "gia.jpg" not in names and "a.jpg" in names, names
+
+
+def test_cleanup_never_trashes_a_file_that_is_its_own_backup() -> None:
+    base, source, nas_dir, cfg, conn = _fresh("stesso")
+    p = source / "s.jpg"
+    fid = _add_file(conn, p, b"SSSS")
+    st = p.stat()
+    with conn:  # copia "verificata" che in realta' punta al file locale stesso
+        conn.execute("INSERT INTO nas_copies(file_id, nas_path, local_size, local_mtime, hash, verified) VALUES(?,?,?,?,?,?)",
+                     (fid, str(p), st.st_size, st.st_mtime, nas.file_hash(str(p)), "x"))
+    with mock.patch.object(nas, "send_to_recycle") as rec:
+        res = nas.cleanup_job(FakeJob(), conn, cfg, expected_count=1)
+    rec.assert_not_called()
+    assert res["spostati"] == 0 and res["saltati"] == 1, res
+    assert p.exists()
+
+
+def test_cleanup_confirmation_compares_file_ids_not_only_count() -> None:
+    base, source, nas_dir, cfg, conn = _fresh("ids")
+    fid = _add_file(conn, source / "i.jpg", b"IIII")
+    nas.send_job(FakeJob(), conn, cfg, "as_is")
+    prev = nas.cleanup_preview(conn)
+    assert prev["ids"] == [fid], prev
+    try:  # stesso numero (1) ma un altro file: va rifiutato
+        nas.cleanup_job(FakeJob(), conn, cfg, expected_count=1, expected_ids=[fid + 100])
+    except nas.NasError:
+        pass
+    else:
+        raise AssertionError("conferma con id diversi accettata")
+    with mock.patch.object(nas, "send_to_recycle") as rec:
+        res = nas.cleanup_job(FakeJob(), conn, cfg, expected_count=1, expected_ids=[fid])
+    rec.assert_called_once()
+    assert res["spostati"] == 1, res
+
+
+def test_cleanup_calls_faces_forget_when_available() -> None:
+    from fotoscan import faces
+
+    base, source, nas_dir, cfg, conn = _fresh("volti")
+    fid = _add_file(conn, source / "v.jpg", b"VVVV")
+    nas.send_job(FakeJob(), conn, cfg, "as_is")
+    calls = []
+    with mock.patch.object(nas, "send_to_recycle"), \
+            mock.patch.object(faces, "forget_files", lambda c, ids, cfg=None: calls.append(list(ids)), create=True):
+        nas.cleanup_job(FakeJob(), conn, cfg, expected_count=1)
+    assert calls == [[fid]], calls
+
+
+def test_guarded_times_out() -> None:
+    import time
+
+    t0 = time.monotonic()
+    try:
+        nas._guarded(lambda: time.sleep(3), 0.2)
+    except nas.NasTimeout:
+        pass
+    else:
+        raise AssertionError("nessun timeout")
+    assert time.monotonic() - t0 < 2
+    assert nas._guarded(lambda: 42, 1.0) == 42
+
+
+def test_send_stops_after_repeated_nas_stalls() -> None:
+    import time
+
+    base, source, nas_dir, cfg, conn = _fresh("stallo")
+    for i in range(6):
+        _add_file(conn, source / f"s{i}.jpg", b"S" * (i + 1))
+    with mock.patch.object(nas, "_io_timeout", lambda size: 0.2), \
+            mock.patch.object(nas, "copy_verified", side_effect=lambda *a: time.sleep(2)):
+        res = nas.send_job(FakeJob(), conn, cfg, "as_is")
+    assert res["errori"] == nas.STALL_LIMIT and res.get("interrotto"), res
+    assert res["copiati"] == 0
+
+
+def test_send_removes_fresh_copy_when_local_file_changed() -> None:
+    base, source, nas_dir, cfg, conn = _fresh("cambiato")
+    _add_file(conn, source / "c.jpg", b"CCCC")
+    with mock.patch.object(nas, "_record_copy", side_effect=OSError("il file locale e' cambiato durante la copia")):
+        res = nas.send_job(FakeJob(), conn, cfg, "as_is")
+    assert res["errori"] == 1 and res["copiati"] == 0, res
+    assert not (nas_dir / "c.jpg").exists(), "copia vecchia lasciata sul NAS"
+
+
+def test_nas_jobs_are_mutually_exclusive() -> None:
+    import threading
+
+    from fastapi import HTTPException
+
+    from fotoscan.server import jobs, routes_nas
+
+    gate = threading.Event()
+    j = routes_nas._start_exclusive(routes_nas.CLEANUP, lambda job: gate.wait(5))
+    try:
+        for name in (routes_nas.SEND, routes_nas.RECEIVE, routes_nas.CLEANUP):
+            try:
+                routes_nas._start_exclusive(name, lambda job: None)
+            except HTTPException as e:
+                assert e.status_code == 409
+            else:
+                raise AssertionError(f"{name} avviato durante la pulizia")
+    finally:
+        gate.set()
+        import time
+        for _ in range(50):
+            if not jobs.running_job(routes_nas.CLEANUP):
+                break
+            time.sleep(0.1)
+    assert j["name"] == routes_nas.CLEANUP
+
+
+def test_require_nas_refuses_unmounted_network_mount() -> None:
+    base, source, nas_dir, cfg, conn = _fresh("smontato")
+    with mock.patch.object(nas.sourcefs, "network_mount_missing", return_value=True):
+        try:
+            nas.require_nas(cfg)
+        except nas.NasError as e:
+            assert "montata" in str(e)
+        else:
+            raise AssertionError("mount di rete mancante accettato")
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

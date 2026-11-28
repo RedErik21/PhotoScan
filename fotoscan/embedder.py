@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import itertools
 import logging
+import os
 import sqlite3
+import threading
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -13,12 +15,39 @@ from typing import Callable
 import numpy as np
 from PIL import Image, ImageOps
 
-from . import netguard
+from . import netguard, sourcefs
 from .config import Config
 from .db import from_blob, get_meta, set_meta, to_blob
-from .scanner_metadata import extract_frames
+from .scanner_metadata import _fs, extract_frames, source_lost_error
 
 log = logging.getLogger("fotoscan")
+
+_LOST = "sorgente-persa"  # segnaposto: file non letto perche' il disco e' sparito (resta 'meta', nessun errore)
+DEFAULT_MODEL = "google/siglip2-base-patch16-224"  # modello dei cataloghi vecchi senza meta 'embedding_model'
+
+
+class ModelMismatch(ValueError):
+    """Il modello impostato non e' quello degli embedding gia' nel catalogo (vettori non confrontabili)."""
+
+
+def catalog_model_conflict(conn: sqlite3.Connection, cfg: Config) -> str | None:
+    """Modello degli embedding presenti nel catalogo se diverso da cfg.model_name, altrimenti None."""
+    if conn.execute("SELECT 1 FROM embeddings LIMIT 1").fetchone() is None:
+        return None
+    cur = get_meta(conn, "embedding_model") or DEFAULT_MODEL
+    return cur if cur != cfg.model_name else None
+
+
+def _is_oom(torch, e: BaseException) -> bool:
+    oom = getattr(getattr(torch, "cuda", None), "OutOfMemoryError", None)
+    return isinstance(e, MemoryError) or (oom is not None and isinstance(e, oom)) or "out of memory" in str(e).lower()
+
+
+def _is_device_error(e: BaseException) -> bool:
+    """Guasto della GPU (non del singolo file): driver/architettura non supportati, CUDA rotto."""
+    msg = str(e).lower()
+    return isinstance(e, RuntimeError) and any(k in msg for k in (
+        "cuda", "no kernel image", "cudnn", "cublas", "hip", "mps", "device-side assert", "accelerator"))
 
 
 class Embedder:
@@ -29,6 +58,7 @@ class Embedder:
         self.torch = torch
         self.cfg = cfg
         self.device = device or cfg.resolve_device()
+        self._batch_cap: int | None = None  # lotto ridotto dopo un OOM della scheda video
         dtype = torch.float16 if self.device == "cuda" else torch.float32
         from transformers.utils import logging as hf_logging
 
@@ -36,7 +66,16 @@ class Embedder:
         hf_logging.disable_progress_bar()
         log.info("carico %s su %s", cfg.model_name, self.device)
         # solo dalla cache locale; la rete (solo Hugging Face) si apre unicamente se il modello manca
-        self.model = netguard.load_pretrained(AutoModel.from_pretrained, cfg.model_name, dtype=dtype).to(self.device).eval()
+        model = netguard.load_pretrained(AutoModel.from_pretrained, cfg.model_name, dtype=dtype)
+        try:
+            model = model.to(self.device)
+        except Exception as e:  # noqa: BLE001 - GPU assente/rotta, driver o architettura non supportati
+            if self.device == "cpu":
+                raise
+            log.warning("dispositivo %s non utilizzabile (%s): ripiego sul processore", self.device, e)
+            self.device, dtype = "cpu", torch.float32
+            model = model.to("cpu").float()
+        self.model = model.eval()
         self.tokenizer = netguard.load_pretrained(AutoTokenizer.from_pretrained, cfg.model_name)
         proc = netguard.load_pretrained(AutoProcessor.from_pretrained, cfg.model_name)
         ip = proc.image_processor
@@ -65,7 +104,7 @@ class Embedder:
         return a.transpose(2, 0, 1)
 
     def load_prep(self, path: str) -> np.ndarray:
-        with Image.open(path) as im:
+        with Image.open(_fs(path)) as im:  # _fs: percorsi >260 caratteri su Windows
             if im.format == "JPEG":
                 im.draft("RGB", (self.size * 2, self.size * 2))  # decodifica JPEG ridotta: molto piu' veloce
             im.load()
@@ -76,16 +115,48 @@ class Embedder:
         t = self.torch.nn.functional.normalize(t.float(), dim=-1)
         return t.cpu().numpy().astype(np.float32)
 
+    def to_cpu(self) -> None:
+        """Ripiego su processore (GPU rotta o troppo piccola anche per un'immagine sola)."""
+        log.warning("scheda video non utilizzabile: proseguo con il processore (piu' lento)")
+        self.model = self.model.to("cpu").float()
+        self.device, self.dtype = "cpu", self.torch.float32
+        self._batch_cap = None
+        try:
+            self.torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001
+            pass
+
     def encode_arrays(self, arrays: list[np.ndarray], batch: int | None = None) -> np.ndarray:
-        batch = batch or self.cfg.batch_size
+        batch = max(1, min(batch or self.cfg.batch_size, self._batch_cap or 10**9))
         outs = []
+        i = 0
         with self.torch.inference_mode():
-            for i in range(0, len(arrays), batch):
-                x = self.torch.from_numpy(np.stack(arrays[i:i + batch])).to(self.device, dtype=self.dtype)
-                f = self.model.get_image_features(pixel_values=x)
-                if not self.torch.is_tensor(f):
-                    f = f.pooler_output
-                outs.append(self._norm(f))
+            while i < len(arrays):
+                try:
+                    x = self.torch.from_numpy(np.stack(arrays[i:i + batch])).to(self.device, dtype=self.dtype)
+                    f = self.model.get_image_features(pixel_values=x)
+                    if not self.torch.is_tensor(f):
+                        f = f.pooler_output
+                    outs.append(self._norm(f))
+                except Exception as e:  # noqa: BLE001
+                    x = f = None
+                    if self.device != "cpu" and _is_oom(self.torch, e):
+                        try:
+                            self.torch.cuda.empty_cache()
+                        except Exception:  # noqa: BLE001
+                            pass
+                        if batch > 1:  # memoria video insufficiente: lotto dimezzato (e ricordato) e si riprova
+                            batch = max(1, batch // 2)
+                            self._batch_cap = batch
+                            log.warning("memoria video esaurita: lotto ridotto a %d", batch)
+                            continue
+                        self.to_cpu()  # nemmeno un'immagine sola ci sta
+                        continue
+                    if self.device != "cpu" and _is_device_error(e):
+                        self.to_cpu()
+                        continue
+                    raise
+                i += batch
         return np.concatenate(outs) if outs else np.zeros((0, 0), dtype=np.float32)
 
     def encode_texts(self, texts: list[str]) -> np.ndarray:
@@ -199,6 +270,10 @@ def embed_pending(conn: sqlite3.Connection, cfg: Config, embedder: Embedder | No
     rows = conn.execute("SELECT id,path,kind,duration FROM files WHERE status='meta' ORDER BY id").fetchall()
     total, done = len(rows), 0
     if rows:
+        other = catalog_model_conflict(conn, cfg)
+        if other:  # vettori di modelli diversi nello stesso catalogo: dimensioni incompatibili, ricerca e piano si rompono
+            raise ModelMismatch(f"Il catalogo contiene embedding del modello {other}, ma il modello impostato e' "
+                                f"{cfg.model_name}: azzera gli embedding dalle Impostazioni oppure torna a {other}.")
         set_meta(conn, "embedding_model", cfg.model_name)
     if progress:  # la fase si dichiara subito, prima del caricamento del modello (secondi su GPU)
         progress("embedding", 0, total)
@@ -212,7 +287,11 @@ def embed_pending(conn: sqlite3.Connection, cfg: Config, embedder: Embedder | No
     chunk = max(16, cfg.batch_size)
     window = max(chunk, 4 * cfg.workers)  # file preparati in anticipo (limita la memoria)
 
+    lost = threading.Event()  # sorgente sparita (disco scollegato): i file non letti restano 'meta', nessun errore
+
     def prepare(r) -> tuple[int, list[np.ndarray] | None, str | None]:
+        if lost.is_set():
+            return r["id"], None, _LOST
         try:
             if r["kind"] == "image":
                 return r["id"], [emb.load_prep(r["path"])], None
@@ -227,32 +306,47 @@ def embed_pending(conn: sqlite3.Connection, cfg: Config, embedder: Embedder | No
                 raise RuntimeError("fotogrammi illeggibili")
             return r["id"], arrs, None
         except Exception as e:
+            if cfg.source_dir and not os.path.exists(_fs(r["path"])) and not sourcefs.reachable(cfg.source_dir):
+                lost.set()
+                return r["id"], None, _LOST
             return r["id"], None, f"{type(e).__name__}: {e}"
 
     def flush(part: list) -> None:
-        """Codifica un blocco di file preparati e scrive embedding + stato in un'unica transazione."""
+        """Codifica un blocco di file preparati e scrive embedding + stato in una transazione breve: la codifica
+        (lenta) avviene prima di toccare il catalogo, cosi' non c'e' lock di scrittura durante la GPU."""
         flat: list[np.ndarray] = []
         spans: list[tuple[int, int, int]] = []
+        errors: list[tuple[int, str]] = []
         for fid, arrs, err in part:
+            if err == _LOST:
+                continue
             if err:
-                conn.execute("UPDATE files SET status='error', error=? WHERE id=?", (err, fid))
+                errors.append((fid, err))
                 continue
             spans.append((fid, len(flat), len(flat) + len(arrs)))
             flat.extend(arrs)
+        vecs: dict[int, np.ndarray] = {}
         if flat:
             try:
-                vecs = emb.encode_arrays(flat)
+                allv = emb.encode_arrays(flat)
                 for fid, a, b in spans:
-                    v = vecs[a:b].mean(axis=0)
-                    v /= (np.linalg.norm(v) + 1e-9)
-                    conn.execute("INSERT OR REPLACE INTO embeddings(file_id, vec) VALUES(?,?)", (fid, to_blob(v)))
-                    conn.execute("UPDATE files SET status='embedded' WHERE id=?", (fid,))
-            except Exception as e:  # es. OOM: segna il blocco in errore e prosegui
-                log.exception("errore embedding blocco")
-                for fid, _, _ in spans:
-                    conn.execute("UPDATE files SET status='error', error=? WHERE id=?", (f"embedding: {e}", fid))
+                    vecs[fid] = allv[a:b]
+            except Exception:  # noqa: BLE001
+                log.exception("errore embedding blocco: riprovo un file alla volta")
                 if emb.device == "cuda":
                     emb.torch.cuda.empty_cache()
+                for fid, a, b in spans:  # un solo file difettoso non deve far scartare tutto il blocco
+                    try:
+                        vecs[fid] = emb.encode_arrays(flat[a:b])
+                    except Exception as e2:  # noqa: BLE001
+                        errors.append((fid, f"embedding: {e2}"))
+        for fid, err in errors:
+            conn.execute("UPDATE files SET status='error', error=? WHERE id=?", (err, fid))
+        for fid, vv in vecs.items():
+            v = vv.mean(axis=0)
+            v /= (np.linalg.norm(v) + 1e-9)
+            conn.execute("INSERT OR REPLACE INTO embeddings(file_id, vec) VALUES(?,?)", (fid, to_blob(v)))
+            conn.execute("UPDATE files SET status='embedded' WHERE id=?", (fid,))
         conn.commit()
 
     # Pipeline a finestra (niente barriera per blocco): la CPU prepara i file successivi mentre la GPU
@@ -264,7 +358,7 @@ def embed_pending(conn: sqlite3.Connection, cfg: Config, embedder: Embedder | No
         for r in itertools.islice(it, window):
             pending.append(ex.submit(prepare, r))
         while pending:
-            if should_stop and should_stop():
+            if (should_stop and should_stop()) or lost.is_set():
                 break
             batch.append(pending.popleft().result())
             nxt = next(it, None)
@@ -281,4 +375,6 @@ def embed_pending(conn: sqlite3.Connection, cfg: Config, embedder: Embedder | No
             done += len(batch)
             if progress:
                 progress("embedding", done, total)
+    if lost.is_set():
+        raise source_lost_error(cfg)
     return done

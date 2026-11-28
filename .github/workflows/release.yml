@@ -1,5 +1,16 @@
-# Crea la Release GitHub con tutti gli asset Windows (Setup, GPU, CPU) e Linux (AppImage)
-# quando si spinge un tag v<versione> (es. v0.1.5 o v0.2.0-beta.1).
+# Crea la Release GitHub quando si spinge un tag v<versione> (es. v0.1.11 o v0.2.0-beta.1).
+#
+# Asset pubblicati (Windows):
+#   PhotoScan-Setup-<v>.exe, PhotoScan-Setup.exe            installer (e disinstallatore: --uninstall)
+#   PhotoScan-app-<v>-windows.zip(.NNN)                     app leggera, senza PyTorch (~0,5 GB): aggiornamento normale
+#   PhotoScan-runtime-<rv>-windows[-cpu].zip(.NNN)          PyTorch e transformers, SOLO se la versione del runtime
+#                                                           (fotoscan/runtime_version.py) non e' gia' in una Release
+#   PhotoScan-<v>-windows[-cpu].zip(.NNN)                   pacchetto COMPLETO: serve agli updater <= 0.1.10 e al ripiego
+#   release-manifest.json, SHA256SUMS                       versione del runtime richiesto e impronte di tutti i file
+# Linux: PhotoScan-<v>-x86_64.AppImage (file unico).
+#
+# La Release nasce come BOZZA e diventa pubblica solo dopo il caricamento di tutti gli asset: nessuno scarica una Release
+# a meta'. Le prove di fumo (importazione di torch/transformers dall'exe, app leggera col runtime a parte) girano prima.
 name: Release
 
 on:
@@ -23,6 +34,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.ver.outputs.version }}
+      runtime_version: ${{ steps.ver.outputs.runtime_version }}
+      need_runtime_gpu: ${{ steps.rt.outputs.need_gpu }}
+      need_runtime_cpu: ${{ steps.rt.outputs.need_cpu }}
     steps:
       - uses: actions/checkout@v4
 
@@ -30,11 +44,27 @@ jobs:
         id: ver
         run: |
           VER=$(python3 -c "import re; print(re.search(r'^__version__\s*=\s*[\"\x27]([^\"\x27]+)', open('fotoscan/version.py', encoding='utf-8').read(), re.M).group(1))")
+          RV=$(python3 -c "import re; print(re.search(r'^RUNTIME_VERSION\s*=\s*[\"\x27]([^\"\x27]+)', open('fotoscan/runtime_version.py', encoding='utf-8').read(), re.M).group(1))")
           if [[ "$GITHUB_REF" == refs/tags/* ]] && [ "${GITHUB_REF_NAME#v}" != "$VER" ]; then
             echo "::error::Il tag $GITHUB_REF_NAME non corrisponde a __version__ = $VER in fotoscan/version.py"
             exit 1
           fi
           echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "runtime_version=$RV" >> "$GITHUB_OUTPUT"
+
+      - name: Il runtime di questa versione e' gia' in una Release?
+        id: rt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RV: ${{ steps.ver.outputs.runtime_version }}
+        run: |
+          # Il runtime (PyTorch, transformers) si ripubblica solo quando cambia RUNTIME_VERSION: altrimenti l'app punta
+          # a quello gia' presente in una Release precedente (l'updater lo cerca in tutte le Release).
+          NAMES=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate --jq '.[] | select(.draft | not) | .assets[].name' || true)
+          has() { echo "$NAMES" | grep -Eq "^PhotoScan-runtime-${RV}-windows$1\.zip(\.[0-9]{3})?$"; }
+          if has ""; then echo "need_gpu=false" >> "$GITHUB_OUTPUT"; else echo "need_gpu=true" >> "$GITHUB_OUTPUT"; fi
+          if has "-cpu"; then echo "need_cpu=false" >> "$GITHUB_OUTPUT"; else echo "need_cpu=true" >> "$GITHUB_OUTPUT"; fi
+          echo "Runtime $RV: gpu gia' pubblicato=$(has '' && echo si || echo no), cpu gia' pubblicato=$(has '-cpu' && echo si || echo no)"
 
   build-linux:
     needs: verify
@@ -61,6 +91,9 @@ jobs:
     needs: verify
     if: github.event_name == 'push' || inputs.target == 'all'
     runs-on: windows-latest
+    env:
+      VER: ${{ needs.verify.outputs.version }}
+      RV: ${{ needs.verify.outputs.runtime_version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -68,93 +101,106 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Python come richiesto dal runtime
+        shell: pwsh
+        run: |
+          python -c "import sys; sys.path.insert(0, '.'); from fotoscan.runtime_version import PYTHON_TAG; cur = f'{sys.version_info[0]}.{sys.version_info[1]}'; assert cur == PYTHON_TAG, f'Python {cur} ma il runtime e definito per {PYTHON_TAG}'"
+
       - name: Compila PhotoScan-Setup.exe (launcher)
         shell: pwsh
         run: |
           python -m venv .venv-launcher
           .\.venv-launcher\Scripts\python.exe -m pip install --upgrade pip
-          .\.venv-launcher\Scripts\python.exe -m pip install psutil pywebview pyinstaller
+          .\.venv-launcher\Scripts\python.exe -m pip install psutil==7.2.2 pywebview==6.2.1 pyinstaller==6.22.3
           .\.venv-launcher\Scripts\python.exe -m PyInstaller --noconfirm --distpath release-win --workpath work-launcher launcher\PhotoScan-Setup.spec
+          # nome stabile per versione (per «Altre versioni» nell'app) e nome fisso (link «ultima versione»)
+          Copy-Item release-win\PhotoScan-Setup.exe "release-win\PhotoScan-Setup-$env:VER.exe"
 
-      - name: Compila pacchetto Windows CPU
+      - name: Prove automatiche (aggiornamenti, Setup, disinstallazione)
         shell: pwsh
-        env:
-          VER: ${{ needs.verify.outputs.version }}
+        run: |
+          python -m venv .venv-test
+          .\.venv-test\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv-test\Scripts\python.exe -m pip install -r requirements.txt psutil==7.2.2
+          .\.venv-test\Scripts\python.exe tools\run_tests.py updater launcher
+          Remove-Item -Recurse -Force .venv-test
+
+      # ---- ambiente CPU: serve all'app leggera (build unica per CPU e GPU) e al runtime CPU
+      - name: Ambiente CPU
+        shell: pwsh
         run: |
           python -m venv .venv-cpu
           .\.venv-cpu\Scripts\python.exe -m pip install --upgrade pip
-          .\.venv-cpu\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          .\.venv-cpu\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
-          .\.venv-cpu\Scripts\python.exe -m PyInstaller --noconfirm --distpath dist-cpu --workpath work-cpu photoscan.spec
-          .\.venv-cpu\Scripts\python.exe -c @'
-          import os, pathlib, zipfile
-          ver = os.environ["VER"]
-          out = pathlib.Path("release-win") / f"PhotoScan-{ver}-windows-cpu.zip"
-          src = pathlib.Path("dist-cpu/PhotoScan")
-          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-              for p in src.rglob("*"):
-                  if p.is_file():
-                      zf.write(p, pathlib.Path("PhotoScan") / p.relative_to(src))
-          chunk = 1900 * 1024 * 1024
-          with out.open("rb") as f:
-              idx = 1
-              while True:
-                  part = out.parent / f"{out.name}.{idx:03d}"
-                  written = 0
-                  with part.open("wb") as pf:
-                      while written < chunk:
-                          b = f.read(min(16 * 1024 * 1024, chunk - written))
-                          if not b:
-                              break
-                          pf.write(b)
-                          written += len(b)
-                  if written == 0:
-                      part.unlink()
-                      break
-                  idx += 1
-          out.unlink()
-          '@
-          Remove-Item -Recurse -Force .venv-cpu, dist-cpu, work-cpu
+          .\.venv-cpu\Scripts\python.exe -m pip install -r requirements-runtime.txt --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+          .\.venv-cpu\Scripts\python.exe -m pip install -r requirements.txt pyinstaller==6.22.3 pyinstaller-hooks-contrib==2026.10
 
-      - name: Compila pacchetto Windows GPU (CUDA)
+      - name: Runtime CPU
+        shell: pwsh
+        run: |
+          .\.venv-cpu\Scripts\python.exe packaging\windows\release_tools.py runtime-build --site .venv-cpu\Lib\site-packages --out build\rt-cpu --flavor cpu
+          # moduli della libreria standard che il runtime importa: l'elenco committato deve coprirli tutti
+          .\.venv-cpu\Scripts\python.exe packaging\windows\release_tools.py stdlib-scan --site build\rt-cpu\runtime\site --check
+
+      - name: App leggera (senza PyTorch)
         shell: pwsh
         env:
-          VER: ${{ needs.verify.outputs.version }}
+          PHOTOSCAN_BUILD: light
+        run: |
+          .\.venv-cpu\Scripts\python.exe -m PyInstaller --noconfirm --distpath dist-app --workpath work-app photoscan.spec
+
+      - name: Pacchetto completo CPU e prove di fumo
+        shell: pwsh
+        run: |
+          .\.venv-cpu\Scripts\python.exe packaging\windows\release_tools.py assemble-full --app dist-app\PhotoScan --runtime build\rt-cpu\runtime --out build\full-cpu\PhotoScan
+          # 1) pacchetto completo: il runtime e' dentro _internal\runtime
+          .\packaging\windows\smoke.ps1 -Exe build\full-cpu\PhotoScan\PhotoScan.exe -Mode runtime-check -ExpectExternal false
+          .\packaging\windows\smoke.ps1 -Exe build\full-cpu\PhotoScan\PhotoScan.exe -Mode help
+          # 2) app leggera: il runtime sta in una cartella a parte (<versione>-<tipo>)
+          New-Item -ItemType Directory -Force build\rt-cpu-external | Out-Null
+          Copy-Item -Recurse build\rt-cpu\runtime "build\rt-cpu-external\$env:RV-cpu"
+          .\packaging\windows\smoke.ps1 -Exe dist-app\PhotoScan\PhotoScan.exe -Mode runtime-check -RuntimeDir build\rt-cpu-external -ExpectExternal true
+          .\packaging\windows\smoke.ps1 -Exe dist-app\PhotoScan\PhotoScan.exe -Mode help
+          Remove-Item -Recurse -Force build\rt-cpu-external
+
+      - name: Impacchetta app leggera, completo CPU e runtime CPU
+        shell: pwsh
+        env:
+          NEED_CPU: ${{ needs.verify.outputs.need_runtime_cpu }}
+        run: |
+          $py = ".\.venv-cpu\Scripts\python.exe"
+          & $py packaging\windows\release_tools.py zip-split --src dist-app\PhotoScan --top PhotoScan --out-dir release-win --name "PhotoScan-app-$env:VER-windows.zip"
+          & $py packaging\windows\release_tools.py zip-split --src build\full-cpu\PhotoScan --top PhotoScan --out-dir release-win --name "PhotoScan-$env:VER-windows-cpu.zip"
+          if ($env:NEED_CPU -eq 'true') {
+            & $py packaging\windows\release_tools.py zip-split --src build\rt-cpu\runtime --top runtime --out-dir release-win --name "PhotoScan-runtime-$env:RV-windows-cpu.zip"
+          } else { Write-Host "Runtime $env:RV (cpu) gia' pubblicato: non si ricarica." }
+          Remove-Item -Recurse -Force build\full-cpu, build\rt-cpu, .venv-cpu, work-app
+
+      # ---- GPU (CUDA): solo il runtime e il pacchetto completo; l'app leggera e' la stessa
+      - name: Ambiente GPU e runtime GPU
+        shell: pwsh
         run: |
           python -m venv .venv-gpu
           .\.venv-gpu\Scripts\python.exe -m pip install --upgrade pip
-          .\.venv-gpu\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
-          .\.venv-gpu\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
-          .\.venv-gpu\Scripts\python.exe -m PyInstaller --noconfirm --distpath dist-gpu --workpath work-gpu photoscan.spec
-          .\.venv-gpu\Scripts\python.exe -c @'
-          import os, pathlib, zipfile
-          ver = os.environ["VER"]
-          out = pathlib.Path("release-win") / f"PhotoScan-{ver}-windows.zip"
-          src = pathlib.Path("dist-gpu/PhotoScan")
-          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-              for p in src.rglob("*"):
-                  if p.is_file():
-                      zf.write(p, pathlib.Path("PhotoScan") / p.relative_to(src))
-          chunk = 1900 * 1024 * 1024
-          with out.open("rb") as f:
-              idx = 1
-              while True:
-                  part = out.parent / f"{out.name}.{idx:03d}"
-                  written = 0
-                  with part.open("wb") as pf:
-                      while written < chunk:
-                          b = f.read(min(16 * 1024 * 1024, chunk - written))
-                          if not b:
-                              break
-                          pf.write(b)
-                          written += len(b)
-                  if written == 0:
-                      part.unlink()
-                      break
-                  idx += 1
-          out.unlink()
-          '@
-          ls release-win
+          .\.venv-gpu\Scripts\python.exe -m pip install -r requirements-runtime.txt --index-url https://download.pytorch.org/whl/cu126 --extra-index-url https://pypi.org/simple
+          .\.venv-gpu\Scripts\python.exe -m pip install -r requirements.txt
+          .\.venv-gpu\Scripts\python.exe packaging\windows\release_tools.py runtime-build --site .venv-gpu\Lib\site-packages --out build\rt-gpu --flavor gpu
+          .\.venv-gpu\Scripts\python.exe packaging\windows\release_tools.py stdlib-scan --site build\rt-gpu\runtime\site --check
+          Remove-Item -Recurse -Force .venv-gpu
+
+      - name: Pacchetto completo GPU, prove di fumo e impacchettamento
+        shell: pwsh
+        env:
+          NEED_GPU: ${{ needs.verify.outputs.need_runtime_gpu }}
+        run: |
+          $py = "python"
+          & $py packaging\windows\release_tools.py assemble-full --app dist-app\PhotoScan --runtime build\rt-gpu\runtime --out build\full-gpu\PhotoScan
+          .\packaging\windows\smoke.ps1 -Exe build\full-gpu\PhotoScan\PhotoScan.exe -Mode runtime-check -ExpectExternal false
+          & $py packaging\windows\release_tools.py zip-split --src build\full-gpu\PhotoScan --top PhotoScan --out-dir release-win --name "PhotoScan-$env:VER-windows.zip"
+          if ($env:NEED_GPU -eq 'true') {
+            & $py packaging\windows\release_tools.py zip-split --src build\rt-gpu\runtime --top runtime --out-dir release-win --name "PhotoScan-runtime-$env:RV-windows.zip"
+          } else { Write-Host "Runtime $env:RV (gpu) gia' pubblicato: non si ricarica." }
+          Remove-Item -Recurse -Force build\full-gpu, build\rt-gpu
+          Get-ChildItem release-win | Select-Object Name, @{n='MB'; e={[int]($_.Length / 1MB)}}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -173,7 +219,14 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: Crea la Release con tutti gli asset
+      - name: Manifest e impronte SHA-256 di tutti i file
+        run: |
+          VER="${{ needs.verify.outputs.version }}"
+          python3 packaging/windows/release_tools.py manifest --version "$VER" --out release-assets/release-manifest.json
+          python3 packaging/windows/release_tools.py sums --dir release-assets
+          ls -lh release-assets
+
+      - name: Crea la Release (bozza), carica tutto, pubblica
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -183,7 +236,14 @@ jobs:
           VER="${{ needs.verify.outputs.version }}"
           awk -v v="$VER" 'BEGIN{p=0} /^## /{ if(p) exit; if ($0 ~ ("^## " v "( |$)")) p=1; next } p' CHANGELOG.md > release-notes.md
           if [ -s release-notes.md ]; then NOTES="--notes-file release-notes.md"; else NOTES="--generate-notes"; fi
-          ls -lh release-assets
-          gh release create "$GITHUB_REF_NAME" release-assets/* \
+          # bozza: gli utenti non la vedono finche' ogni asset non e' caricato
+          gh release create "$GITHUB_REF_NAME" release-assets/* --draft \
             --title "PhotoScan $VER" \
             $NOTES $PRE
+          EXPECTED=$(ls release-assets | wc -l)
+          UPLOADED=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')
+          if [ "$EXPECTED" != "$UPLOADED" ]; then
+            echo "::error::Caricati $UPLOADED asset su $EXPECTED: la Release resta in bozza"
+            exit 1
+          fi
+          gh release edit "$GITHUB_REF_NAME" --draft=false

@@ -144,6 +144,48 @@ def _unit(x):
     return (x / np.linalg.norm(x, axis=-1, keepdims=True)).astype(np.float32)
 
 
+def test_calibrate_rejects_invalid_sample_size_and_double_start():
+    from fotoscan.server import jobs
+    import threading
+
+    with server() as base:
+        # "n" non numerico: 400 (prima era un 500 per ValueError)
+        code, _ = _request(base, "POST", "/api/models/calibrate", {"id": SO, "n": "abc"})
+        assert code == 400, code
+        code, _ = _request(base, "POST", "/api/models/calibrate", {"id": SO, "n": True})
+        assert code == 400, code
+        # un job gia' in corso (anche una misura hardware) blocca l'avvio in modo atomico
+        gate = threading.Event()
+        job, created = jobs.start_job_unique("hardware_bench", lambda j: gate.wait(5))
+        try:
+            assert created
+            code, _ = _request(base, "POST", "/api/models/calibrate", {"id": SO})
+            assert code == 409, code
+        finally:
+            gate.set()
+
+
+def test_models_list_uses_complete_cache_check():
+    home = Path(tempfile.mkdtemp(prefix="hf_models_"))
+    old = os.environ.get("HF_HUB_CACHE")
+    os.environ["HF_HUB_CACHE"] = str(home)
+    try:
+        snap = home / ("models--" + SO.replace("/", "--")) / "snapshots" / "abc"
+        snap.mkdir(parents=True)
+        (snap / "config.json").write_text("{}")             # download interrotto: niente pesi
+        with server() as base:
+            code, d = _request(base, "GET", "/api/models")
+            assert next(m for m in d["models"] if m["id"] == SO)["cached"] is False
+            (snap / "model.safetensors").write_bytes(b"x")
+            code, d = _request(base, "GET", "/api/models")
+            assert next(m for m in d["models"] if m["id"] == SO)["cached"] is True
+    finally:
+        if old is None:
+            os.environ.pop("HF_HUB_CACHE", None)
+        else:
+            os.environ["HF_HUB_CACHE"] = old
+
+
 def test_fit_levels_matches_quantiles():
     rng = np.random.default_rng(0)
     ref = rng.normal(0.08, 0.03, (500, 20))

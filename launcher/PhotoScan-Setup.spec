@@ -11,7 +11,8 @@ a = Analysis(
         ("../frontend/icon-192.png", "."),
         ("../frontend/vendor/fonts/playwrite-us-trad.woff2", "."),
     ],
-    hiddenimports=[],
+    # importati dentro funzioni: li si dichiara per non dipendere dall'analisi statica
+    hiddenimports=["setup_gui", "uninstall_photoscan", "psutil", "winreg"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

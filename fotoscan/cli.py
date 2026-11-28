@@ -26,8 +26,8 @@ def _progress_factory(conn):
 
 def cmd_index(args, cfg):
     from . import sourcefs
-    from .embedder import Embedder, embed_pending
-    from .scanner_metadata import process_metadata, scan_into_db
+    from .embedder import ModelMismatch, catalog_model_conflict, embed_pending
+    from .scanner_metadata import SourceUnavailable, process_metadata, refresh_video_metadata, scan_into_db
 
     conn = dbm.connect(cfg.db_path)
     if args.source:
@@ -43,26 +43,50 @@ def cmd_index(args, cfg):
         cfg.workers = args.workers
     print(f"ffmpeg: {ffmpeg or 'NON TROVATO (i video verranno saltati)'}  device: {cfg.resolve_device()}  "
           f"thread: {cfg.workers}")
+    def fail(code: str, message: str):
+        dbm.set_meta(conn, "last_index_error", code)
+        sys.exit(f"Errore: {message}")
+
+    def source_error(e: FileNotFoundError):
+        # "non risponde" nel messaggio: la UI lo riconosce anche dal log (disco di rete / disco scollegato)
+        net = "non risponde" in str(e).lower() or sourcefs.is_network(cfg.source_dir)
+        fail("network_unreachable" if net else "source_missing", e)
+
+    other = catalog_model_conflict(conn, cfg)
+    if other:  # niente scansione inutile: l'embedding si rifiuterebbe comunque
+        fail("model_mismatch", f"il catalogo contiene embedding del modello {other}, ma il modello impostato e' "
+                               f"{cfg.model_name}. Azzera gli embedding dalle Impostazioni oppure rimetti {other}.")
     try:
         n = scan_into_db(conn, cfg, limit=args.limit, subdir=args.subdir, progress=prog)
     except FileNotFoundError as e:
-        err_code = "network_unreachable" if ("non risponde" in str(e).lower() or sourcefs.is_network(cfg.source_dir)) else "source_missing"
-        dbm.set_meta(conn, "last_index_error", err_code)
-        sys.exit(f"Errore: {e}")
+        source_error(e)
     print(f"file nuovi o modificati da elaborare: {n}")
     try:
+        refresh_video_metadata(conn, cfg, progress=prog)  # una tantum: data/durata dei video gia' indicizzati
         process_metadata(conn, cfg, progress=prog)
         embed_pending(conn, cfg, progress=prog)
     except KeyboardInterrupt:
         # ogni blocco e' una transazione: il catalogo resta consistente, basta rilanciare index
         sys.exit("\ninterrotto: catalogo consistente, rilancia 'index' per riprendere")
+    except SourceUnavailable as e:
+        source_error(e)
+    except ModelMismatch as e:
+        fail("model_mismatch", e)
+    except Exception as e:  # noqa: BLE001 - modello non scaricato/rete assente, memoria, disco pieno...
+        log = logging.getLogger("fotoscan")
+        log.exception("indicizzazione interrotta")
+        fail("index_failed", f"{type(e).__name__}: {e}")
     if cfg.enable_faces:
         from . import faces
 
         ok, reason = faces.availability(cfg)
         if ok:
-            faces.detect_faces(conn, cfg=cfg, progress=prog)
-            print("persone riconosciute:", faces.cluster_faces(conn, cfg=cfg))
+            try:
+                faces.detect_faces(conn, cfg=cfg, progress=prog)
+                print("persone riconosciute:", faces.cluster_faces(conn, cfg=cfg))
+            except Exception as e:  # noqa: BLE001 - foto e embedding sono gia' a posto: solo i volti falliscono
+                logging.getLogger("fotoscan").exception("riconoscimento volti interrotto")
+                fail("index_failed", f"riconoscimento volti: {type(e).__name__}: {e}")
         else:
             print(f"enable_faces=true ma riconoscimento volti non disponibile ({reason}): saltato")
     dbm.set_meta(conn, "progress", "completato|1|1|%d" % time.time())

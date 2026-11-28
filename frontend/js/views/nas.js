@@ -27,6 +27,7 @@ const LOG_LABELS = {
   conflitto_ricezione: { text: 'Conflitto', cls: 'down' },
   saltato_copia_non_valida: { text: 'Saltato', cls: 'down' },
   saltato_locale_cambiato: { text: 'Modificato', cls: 'down' },
+  saltato_stesso_file: { text: 'Saltato', cls: 'down' },
   errore: { text: 'Errore', cls: 'down' },
   errore_ricezione: { text: 'Errore', cls: 'down' },
   errore_cestino: { text: 'Errore', cls: 'down' },
@@ -285,6 +286,7 @@ function sectionJob() {
       if (r.errori) chips.push(`Errori: ${formatNumber(r.errori)}`);
     }
     if (r.annullato) chips.push('Operazione interrotta dall’utente');
+    if (r.interrotto) chips.push(r.interrotto);
   }
 
   const prog = document.createElement('md-linear-progress');
@@ -566,7 +568,7 @@ function sectionCleanup() {
       S.busy = true;
       render();
       try {
-        const j = await api.post('/nas/cleanup', { confirm: 'CESTINO', expected_count: pv.count });
+        const j = await api.post('/nas/cleanup', { confirm: 'CESTINO', expected_count: pv.count, expected_ids: pv.ids || [] });
         S.jobId = j.id;
         S.job = j;
         render();
@@ -590,7 +592,7 @@ function sectionCleanup() {
         h('span', { class: `nas-card__icon ${pv.count > 0 ? 'nas-card__icon--danger' : 'nas-card__icon--warn'}`, 'aria-hidden': 'true' }, icon('delete_sweep')),
         h('h2', { id: 'nas-clean-title', class: 'md-typescale-title-medium' }, 'Pulisci il PC (Cestino)'))),
     h('p', { class: 'nas-desc md-typescale-body-medium' },
-      'Sposta nel Cestino di Windows solo i file che risultano già copiati e verificati sul NAS con lo stesso hash, e che non sono cambiati sul PC. Puoi sempre recuperarli dal Cestino finché non lo svuoti.'),
+      'Sposta nel Cestino del sistema solo i file che risultano già copiati e verificati sul NAS con lo stesso hash, e che non sono cambiati sul PC. Puoi sempre recuperarli dal Cestino finché non lo svuoti.'),
     pv.count === 0
       ? h('div', { class: 'callout callout--info', role: 'status' },
         icon('verified'),

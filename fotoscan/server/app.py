@@ -12,6 +12,7 @@ import re
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.middleware.gzip import GZipMiddleware
@@ -73,6 +74,79 @@ async def events():
             jobs.bus.unsubscribe(q)
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ------------------------------------------------------------------ sicurezza: Host e Origin
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]", "testserver"}  # testserver = TestClient
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def _hostname(netloc: str) -> str:
+    """Nome host senza porta ('[::1]:8000' -> '[::1]', 'localhost:80' -> 'localhost')."""
+    netloc = netloc.strip().lower()
+    if netloc.startswith("["):
+        end = netloc.find("]")
+        return netloc[:end + 1] if end > 0 else netloc
+    return netloc.rsplit(":", 1)[0] if netloc.count(":") == 1 else netloc
+
+
+def _port(netloc: str) -> str:
+    netloc = netloc.strip().lower()
+    tail = netloc[netloc.find("]") + 1:] if netloc.startswith("[") else netloc
+    return tail.rsplit(":", 1)[1] if ":" in tail else ""
+
+
+class LocalOnlyMiddleware:
+    """Difende il server locale da DNS rebinding e da pagine web esterne (CSRF):
+    - Host diverso da 127.0.0.1 / localhost / [::1] -> 403;
+    - richieste che modificano (non GET/HEAD/OPTIONS) con Origin presente e non della stessa origine -> 403.
+    Un Origin assente e' ammesso (client non-browser, pywebview, test)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+        host = headers.get("host", "")
+        reason = None
+        if _hostname(host) not in LOCAL_HOSTS:
+            reason = "Host non consentito."
+        else:
+            origin = headers.get("origin")
+            if origin is not None and (scope["type"] == "websocket" or scope.get("method", "GET") not in SAFE_METHODS):
+                o = urlsplit(origin)
+                same = bool(o.scheme in ("http", "https") and o.netloc
+                            and (o.netloc.lower() == host.strip().lower()
+                                 or (_hostname(o.netloc) in LOCAL_HOSTS and _port(o.netloc) == _port(host))))
+                if not same:
+                    reason = "Origine non consentita."
+        if reason is None:
+            await self.app(scope, receive, send)
+        elif scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": 1008})
+        else:
+            await JSONResponse({"detail": reason}, status_code=403)(scope, receive, send)
+
+
+# Risposte binarie gia' compresse (JPEG, video): gzip spreca solo CPU e toglie Content-Length.
+_BINARY_PATH = re.compile(r"^/api/(files/\d+/(thumb|display|media|frames(/\d+)?)|faces/\d+/crop)$")
+
+
+class SelectiveGZip:
+    """GZip per JSON e testo; salta miniature, anteprime, originali, fotogrammi e ritagli volto."""
+
+    def __init__(self, app, minimum_size: int = 1024):
+        self.app = app
+        self.gzip = GZipMiddleware(app, minimum_size=minimum_size, compresslevel=5)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and _BINARY_PATH.match(scope.get("path", "")):
+            await self.app(scope, receive, send)
+        else:
+            await self.gzip(scope, receive, send)
 
 
 class NoCacheStatic(StaticFiles):
@@ -139,7 +213,8 @@ def index_html() -> HTMLResponse:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="PhotoScan", version=__version__, docs_url="/api/docs", openapi_url="/api/openapi.json")
-    app.add_middleware(GZipMiddleware, minimum_size=1024)
+    app.add_middleware(SelectiveGZip, minimum_size=1024)
+    app.add_middleware(LocalOnlyMiddleware)  # ultimo aggiunto = piu' esterno: controlla prima di tutto
     app.include_router(core)
 
     # scoperta automatica: ogni fotoscan/server/routes_*.py espone `router`

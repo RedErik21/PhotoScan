@@ -157,6 +157,7 @@ export async function mount(root, { navigate, signal }) {
 
     R.nasBox = h('section', { class: 'section', hidden: true });
     R.rebaseBox = h('section', { class: 'section', hidden: true });
+    R.errBox = h('section', { class: 'section', hidden: true });
 
     R.statVals = {};
     R.statsNote = null;
@@ -230,6 +231,7 @@ export async function mount(root, { navigate, signal }) {
           h('p', { class: 'muted md-typescale-body-medium' },
             'Legge le tue foto e le prepara per cercarle e organizzarle. Le foto originali non vengono mai modificate.'))),
       R.nasBox,
+      R.errBox,
       R.rebaseBox,
       h('section', { class: 'section' }, main),
       h('section', { class: 'section', hidden: true }, R.done),
@@ -279,6 +281,7 @@ export async function mount(root, { navigate, signal }) {
 
     // Stato NAS preventivo (se sorgente su rete)
     renderNasNotice(s);
+    renderErrorNotice(s);
     // Avviso riallineamento percorso catalogo (se presente)
     renderRebaseNotice(s.last_rebase);
 
@@ -459,6 +462,66 @@ export async function mount(root, { navigate, signal }) {
     R.rebaseBox.hidden = false;
   }
 
+  // ---------- Errori dell'ultima analisi (error_code) ----------
+  const ERROR_NOTICES = {
+    model_mismatch: {
+      icon: 'model_training', title: 'Il modello scelto non coincide con quello delle foto già analizzate',
+      text: 'Le foto sono state analizzate con un altro modello, quindi non si possono mescolare. Puoi rimettere il modello precedente nelle impostazioni, oppure azzerare l’analisi delle foto e rifarla con il modello attuale (foto, album e preferiti restano intatti).',
+      reset: true,
+    },
+    index_failed: {
+      icon: 'error', title: 'L’analisi si è interrotta per un errore',
+      text: 'Il lavoro già fatto è stato salvato. Apri il registro qui sotto per vedere il dettaglio, poi riprova ad avviare l’analisi.',
+    },
+    source_missing: {
+      icon: 'folder_off', title: 'Cartella delle foto non trovata',
+      text: 'Il disco o la cartella delle foto non risultano collegati. Ricollega il disco (o controlla il percorso nelle impostazioni), poi riavvia l’analisi.',
+    },
+  };
+
+  /** Azzera gli embedding (dopo conferma) per rifare l'analisi con il modello attuale. */
+  async function resetEmbeddings() {
+    const ok = await confirmDialog({
+      title: 'Azzerare l’analisi delle foto?',
+      message: 'Verranno cancellati solo i risultati dell’analisi fatta con il vecchio modello. Foto, metadati, preferiti e album restano intatti. Poi premi «Avvia» per rifare l’analisi con il modello attuale.',
+      confirmLabel: 'Azzera analisi delle foto',
+      danger: true,
+    });
+    if (!ok || !alive) return;
+    try {
+      const r = await api.post('/index/reset-embeddings', { confirm: true });
+      startConflict = null;
+      showSnackbar(`${formatNumber(r.reset || 0)} file pronti per essere analizzati di nuovo.`);
+    } catch (e) {
+      showSnackbar(errMsg(e, 'Operazione non riuscita'), { error: true });
+    } finally {
+      refresh();
+    }
+  }
+
+  /** Riquadro d'errore sopra la pagina. `code`/`detail` arrivano da error_code o da una risposta 409. */
+  let startConflict = null;   // ultimo 409 all'avvio (modello diverso): resta finche' non si avvia o si azzera
+  function renderErrorNotice(s, override = null) {
+    if (!R.errBox) return;
+    if (s.running) startConflict = null;
+    if (!override) override = startConflict;
+    const code = override ? override.code : (!s.running ? s.error_code : null);
+    const info = ERROR_NOTICES[code];
+    if (!info) { R.errBox.hidden = true; R.errBox.replaceChildren(); return; }
+    const detail = override?.detail;
+    R.errBox.replaceChildren(
+      h('div', { class: 'callout callout--warning', role: 'alert' },
+        icon(info.icon),
+        h('div', { class: 'idx-done__body' },
+          h('p', { class: 'callout__title' }, info.title),
+          detail ? h('p', {}, detail) : null,
+          h('p', {}, info.text),
+          info.reset ? h('div', { class: 'idx-done__actions' },
+            h('md-filled-tonal-button', { onclick: () => resetEmbeddings() }, 'Azzera analisi delle foto'),
+            h('md-text-button', { onclick: () => navigate('/settings') }, 'Cambia modello')) : null)));
+    R.errBox.hidden = false;
+  }
+
   function updateElapsed() {
     R.elapsed.textContent = started ? formatElapsed(Date.now() / 1000 - started) : '—';
   }
@@ -545,9 +608,14 @@ export async function mount(root, { navigate, signal }) {
     setBusy(true);
     try {
       await api.post('/index/start', body);
+      startConflict = null;
       showSnackbar('Indicizzazione avviata. Puoi seguirla qui.');
     } catch (e) {
       showSnackbar(errMsg(e, 'Avvio non riuscito'), { error: true });
+      // 409 per modello diverso da quello delle foto già analizzate: stesso riquadro con l'azione per azzerare.
+      if (e?.status === 409 && /modell|embedding/i.test(String(e.message || ''))) {
+        startConflict = { code: 'model_mismatch', detail: e.message };
+      }
     } finally {
       await refresh();
       setBusy(false);

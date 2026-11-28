@@ -33,6 +33,9 @@ _ORDER = {
     "name": "f.name COLLATE NOCASE, f.id",
 }
 
+# Data ben formata AAAA-MM-GG...: protegge timeline e ricordi da valori anomali nel catalogo (int() su testo vuoto o troncato).
+_DATA_OK = "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*"
+
 # Indice (status, date_taken) per WHERE status='embedded' ORDER BY data: in db.SCHEMA (ix_files_status_date).
 
 
@@ -163,9 +166,12 @@ def _where(f: Filtri) -> tuple[str, list]:
 
 
 def _id_file(valore: str) -> int:
-    if not valore.isdigit():
+    if not (valore.isascii() and valore.isdigit()):
         raise HTTPException(422, "id file non valido")
-    return int(valore)
+    n = int(valore)
+    if n > 2**63 - 1:  # oltre l'INTEGER di SQLite: nessun file puo' avere questo id
+        raise HTTPException(404, "file non trovato")
+    return n
 
 
 def _lista(conn: sqlite3.Connection, f: Filtri, sort: str, offset: int, limit: int) -> tuple[int, list]:
@@ -252,10 +258,10 @@ def timeline_buckets(
     certe = f"{where} AND COALESCE(f.data_incerta,0)=0"
     rows = conn.execute(
         f"SELECT substr(f.date_taken,1,{n}) AS k, COUNT(*) AS c {_FROM} "
-        f"WHERE {certe} AND f.date_taken IS NOT NULL GROUP BY k ORDER BY k DESC",
+        f"WHERE {certe} AND f.date_taken GLOB '{_DATA_OK}' GROUP BY k ORDER BY k DESC",
         args,
     ).fetchall()
-    senza_data = conn.execute(f"SELECT COUNT(*) {_FROM} WHERE {certe} AND f.date_taken IS NULL", args).fetchone()[0]
+    senza_data = conn.execute(f"SELECT COUNT(*) {_FROM} WHERE {certe} AND NOT COALESCE(f.date_taken GLOB '{_DATA_OK}', 0)", args).fetchone()[0]
     incerte = conn.execute(f"SELECT COUNT(*) {_FROM} WHERE {where} AND f.data_incerta=1", args).fetchone()[0]
 
     buckets, offset = [], 0
@@ -286,7 +292,7 @@ def timeline_years(f: Filtri = Depends(filtri), conn: sqlite3.Connection = Depen
     where, args = _where(f)
     rows = conn.execute(
         f"SELECT CAST(substr(f.date_taken,1,4) AS INTEGER) AS y, COUNT(*) AS c {_FROM} "
-        f"WHERE {where} AND f.date_taken IS NOT NULL GROUP BY y ORDER BY y DESC",
+        f"WHERE {where} AND f.date_taken GLOB '{_DATA_OK}' GROUP BY y ORDER BY y DESC",
         args,
     ).fetchall()
     return [{"year": r["y"], "count": r["c"]} for r in rows]
@@ -310,7 +316,7 @@ def memories(
         oggi = date.today()
     rows = conn.execute(
         f"{deps.SELECT_FILE} WHERE f.status='embedded' AND COALESCE(p.is_dup,0)=0 "
-        "AND f.date_taken IS NOT NULL AND substr(f.date_taken,6,5)=? "
+        f"AND f.date_taken GLOB '{_DATA_OK}' AND substr(f.date_taken,6,5)=? "
         "AND CAST(substr(f.date_taken,1,4) AS INTEGER) < ? ORDER BY f.date_taken, f.id",
         (oggi.strftime("%m-%d"), oggi.year),
     ).fetchall()
@@ -332,6 +338,8 @@ def _ids_validi(ids: object) -> list[int]:
         raise HTTPException(422, "'ids' deve essere una lista di numeri")
     if len(ids) > 50000:
         raise HTTPException(422, "'ids' contiene troppi elementi (massimo 50000)")
+    if any(not 0 < i <= 2**63 - 1 for i in ids):
+        raise HTTPException(422, "'ids' contiene id non validi")
     return ids
 
 
@@ -406,8 +414,8 @@ def _broken_check_job(job) -> dict:
         for n, r in enumerate(rows, 1):
             if job.cancel_requested:
                 return {**_broken_summary(conn), "checked": n - 1, "cancelled": True}
-            if not os.path.isfile(r["path"]):
-                gone.append(r["id"])
+            if not os.path.isfile(r["path"]) and deps.volume_online(r["path"]):
+                gone.append(r["id"])  # senza cartella raggiungibile (disco scollegato) non e' "mancante"
             if n % 500 == 0:
                 job.update(done=n)
         gone_set = set(gone)
@@ -430,8 +438,42 @@ def broken_check():
     magari su un disco di rete, non sta dentro una richiesta HTTP. Esito in job.result."""
     from . import jobs
 
-    running = jobs.running_job(BROKEN_CHECK)
-    return (running or jobs.start_job(BROKEN_CHECK, _broken_check_job)).public()
+    job, _created = jobs.start_job_unique(BROKEN_CHECK, _broken_check_job)
+    return job.public()
+
+
+def _si_legge(path: str) -> bool:
+    """Immagine che si apre ancora (segno "illeggibile" vecchio o dovuto a un errore passeggero)."""
+    from PIL import Image
+
+    try:
+        with Image.open(path) as im:
+            im.verify()
+        return True
+    except Exception:  # noqa: BLE001 - qualsiasi errore = ancora illeggibile
+        return False
+
+
+def _da_rimuovere(conn: sqlite3.Connection) -> tuple[list[int], list[int], list[int]]:
+    """(da togliere dal catalogo, ritrovati, saltati). Ogni voce si riverifica adesso: un disco scollegato o un
+    errore passeggero non devono far perdere album, preferiti e volti di file che esistono ancora."""
+    import os
+
+    rimuovere: list[int] = []
+    ritrovati: list[int] = []
+    saltati: list[int] = []
+    for r in conn.execute("SELECT b.file_id, b.reason, f.path, f.kind FROM broken b JOIN files f ON f.id=b.file_id").fetchall():
+        path = r["path"]
+        if os.path.isfile(path):
+            if r["reason"] == "mancante" or (r["kind"] == "image" and _si_legge(path)):
+                ritrovati.append(r["file_id"])
+            else:
+                rimuovere.append(r["file_id"])  # esiste ma non si legge: l'utente lo toglie dal catalogo
+        elif deps.volume_online(path):
+            rimuovere.append(r["file_id"])
+        else:
+            saltati.append(r["file_id"])  # cartella non raggiungibile: non si sa se il file esista
+    return rimuovere, ritrovati, saltati
 
 
 @router.post("/library/broken/remove")
@@ -439,13 +481,18 @@ def broken_remove(body: dict = Body(...), conn: sqlite3.Connection = Depends(dep
     """Toglie dal CATALOGO le voci dei file mancanti/illeggibili. Nessun file sul disco viene toccato."""
     if body.get("confirm") is not True:
         raise HTTPException(400, "Serve la conferma esplicita (confirm: true).")
-    ids = [r["file_id"] for r in conn.execute("SELECT file_id FROM broken")]
+    ids, ritrovati, saltati = _da_rimuovere(conn)
+    if ritrovati:  # il file c'e' di nuovo (o si legge): non va tolto dal catalogo, si toglie solo il segno
+        conn.executemany("DELETE FROM broken WHERE file_id=?", [(i,) for i in ritrovati])
+        conn.commit()
     if ids:
         conn.executemany("UPDATE albums SET cover_file_id=NULL WHERE cover_file_id=?", [(i,) for i in ids])
         conn.executemany("DELETE FROM file_override WHERE file_id=?", [(i,) for i in ids])
-        conn.executemany("DELETE FROM faces_done WHERE file_id=?", [(i,) for i in ids])
+        from .. import faces as faces_mod
+
+        faces_mod.forget_files(conn, ids, deps.get_cfg())  # volti, faces_done, persone e ritagli: prima del DELETE, senza commit
         conn.executemany("UPDATE plan SET dup_of=NULL WHERE dup_of=?", [(i,) for i in ids])
         # embeddings, plan, favorites, album_items, faces e broken: ON DELETE CASCADE
         conn.executemany("DELETE FROM files WHERE id=?", [(i,) for i in ids])
         conn.commit()
-    return {"removed": len(ids)}
+    return {"removed": len(ids), "recovered": len(ritrovati), "skipped": len(saltati)}

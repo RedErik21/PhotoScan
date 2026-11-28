@@ -33,10 +33,18 @@ const CSS = `
 @media (prefers-reduced-motion: reduce) { .fs-update-banner { animation: none; } }
 `;
 
+/** localStorage puo' essere bloccato (profilo privato, criteri del browser): mai un errore per un avviso. */
+const store = {
+  get(key) { try { return localStorage.getItem(key); } catch { return null; } },
+  set(key, value) { try { localStorage.setItem(key, value); } catch { /* storage non disponibile: vale solo per questa sessione */ } },
+};
+
 let banner = null;
 let lastState = null;
 let pollTimer = null;
 let busy = false;
+let sessionDismissed = null;  // «Più tardi» vale almeno per la sessione anche se lo storage e' bloccato
+let announced = null;         // installazione gia' annunciata in questa sessione
 
 function injectStyle() {
   if (document.getElementById(STYLE_ID)) return;
@@ -103,7 +111,7 @@ async function refresh() {
 function render() {
   const st = lastState;
   const m = st && !st.checking && !location.hash.startsWith(SETTINGS_HASH) ? model(st) : null;
-  const dismissed = m?.key && localStorage.getItem(DISMISS_KEY) === m.key;
+  const dismissed = m?.key && (store.get(DISMISS_KEY) === m.key || sessionDismissed === m.key);
   if (!m || dismissed) {
     banner?.remove();
     banner = null;
@@ -130,7 +138,7 @@ function render() {
 }
 
 function dismiss(key) {
-  if (key) localStorage.setItem(DISMISS_KEY, key);
+  if (key) { sessionDismissed = key; store.set(DISMISS_KEY, key); }
   render();
 }
 
@@ -179,8 +187,9 @@ const restart = () => act(async () => {
 
 function announceInstalled(st) {
   const li = st.last_install;
-  if (li && li.to === st.current && localStorage.getItem(INSTALLED_KEY) !== li.to) {
-    localStorage.setItem(INSTALLED_KEY, li.to);
+  if (li && li.to === st.current && store.get(INSTALLED_KEY) !== li.to && announced !== li.to) {
+    announced = li.to;
+    store.set(INSTALLED_KEY, li.to);
     showSnackbar(`PhotoScan è stato aggiornato alla versione ${li.to}.`, { duration: 6000 });
   }
 }

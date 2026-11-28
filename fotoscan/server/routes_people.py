@@ -1,8 +1,11 @@
 """Persone e volti: elenco persone, foto per persona, ritaglio volto, rinomina, unione, assegnazione, esclusione, recluster."""
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import sqlite3
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -108,6 +111,27 @@ def _visible_person_vectors(conn: sqlite3.Connection):
     return items, mat
 
 
+MAX_SUGGEST_PAIRS = 200_000  # tetto agli archi tenuti in memoria (i piu' simili) con moltissime persone
+
+
+def _similar_pairs(mat: np.ndarray, min_sim: float, block: int = 1024) -> list[tuple[int, int, float]]:
+    """Coppie (i<j, similarita') con sim >= min_sim, calcolate a blocchi (mai la matrice P x P intera)."""
+    n = len(mat)
+    out: list[tuple[int, int, float]] = []
+    for i in range(0, n, block):
+        sims = mat[i:i + block] @ mat[i:].T          # righe i..i+block contro colonne i..fine
+        rows, cols = np.nonzero(sims >= min_sim)
+        for r, c in zip(rows.tolist(), cols.tolist()):
+            gi, gj = i + r, i + c
+            if gj > gi:
+                out.append((gi, gj, float(sims[r, c])))
+        if len(out) > MAX_SUGGEST_PAIRS * 2:
+            out.sort(key=lambda e: e[2], reverse=True)
+            del out[MAX_SUGGEST_PAIRS:]
+    out.sort(key=lambda e: e[2], reverse=True)
+    return out[:MAX_SUGGEST_PAIRS]
+
+
 @router.get("/people/suggestions")
 def suggest_merges(
     limit: int = Query(12, ge=1, le=50),
@@ -121,10 +145,8 @@ def suggest_merges(
     if len(items) < 2:
         return []
     not_same = _not_same_pairs(conn)
-    sims = mat @ mat.T
-    i_idx, j_idx = np.where(np.triu(sims, k=1) >= float(min_sim))
     pairs = []
-    for i, j in zip(i_idx.tolist(), j_idx.tolist()):
+    for i, j, sim_ij in _similar_pairs(mat, float(min_sim)):
         a, b = items[i], items[j]
         if _pair_key(a["id"], b["id"]) in not_same:
             continue
@@ -136,7 +158,7 @@ def suggest_merges(
         pairs.append({
             "a": a,
             "b": b,
-            "similarity": round(float(sims[i, j]), 4),
+            "similarity": round(sim_ij, 4),
         })
     pairs.sort(key=lambda x: x["similarity"], reverse=True)
     return pairs[:limit]
@@ -159,16 +181,21 @@ def suggestion_groups(
     if len(items) < 2:
         return []
     not_same = _not_same_pairs(conn)
-    sims = mat @ mat.T
-    i_idx, j_idx = np.where(np.triu(sims, k=1) >= float(min_sim))
 
     # Unione greedy dalle coppie piu' simili; due gruppi non si fondono se contengono una coppia «Diverse»
     edges: list[tuple[int, int, float]] = []
-    for i, j in zip(i_idx.tolist(), j_idx.tolist()):
+    for i, j, s_ij in _similar_pairs(mat, float(min_sim)):
         if _pair_key(items[i]["id"], items[j]["id"]) in not_same:
             continue
-        edges.append((i, j, float(sims[i, j])))
+        edges.append((i, j, s_ij))
     edges.sort(key=lambda e: e[2], reverse=True)
+    # indice persona -> indici delle persone marcate «Diverse» (controllo O(grado) invece di O(|A|*|B|))
+    idx_of = {it["id"]: k for k, it in enumerate(items)}
+    ns_adj: dict[int, set[int]] = {}
+    for a, b in not_same:
+        if a in idx_of and b in idx_of:
+            ns_adj.setdefault(idx_of[a], set()).add(idx_of[b])
+            ns_adj.setdefault(idx_of[b], set()).add(idx_of[a])
 
     group_of = list(range(len(items)))          # indice persona -> id gruppo
     members: dict[int, set[int]] = {k: {k} for k in range(len(items))}
@@ -176,7 +203,7 @@ def suggestion_groups(
         gi, gj = group_of[i], group_of[j]
         if gi == gj:
             continue
-        if any(_pair_key(items[x]["id"], items[y]["id"]) in not_same for x in members[gi] for y in members[gj]):
+        if any(ns_adj.get(x, set()) & members[gj] for x in members[gi]):
             continue
         if len(members[gi]) < len(members[gj]):
             gi, gj = gj, gi
@@ -453,7 +480,7 @@ def face_crop(
 ):
     """Ritaglio quadrato del volto con margine, salvato in cache/faces/."""
     r = conn.execute(
-        "SELECT fc.bbox, f.path FROM faces fc JOIN files f ON f.id=fc.file_id WHERE fc.id=?",
+        "SELECT fc.bbox, fc.file_id, f.path, f.size, f.mtime FROM faces fc JOIN files f ON f.id=fc.file_id WHERE fc.id=?",
         (face_id,),
     ).fetchone()
     if r is None:
@@ -461,44 +488,66 @@ def face_crop(
     cfg = deps.get_cfg()
     out_dir = Path(cfg.cache_dir) / "faces"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / f"{face_id}_{size}.jpg"
+    # La chiave include file, riquadro, size e mtime: gli id dei volti possono essere riusati dopo un reset o una
+    # cancellazione, e un ritaglio vecchio non deve mai essere servito per un volto diverso.
+    ver = hashlib.sha1(
+        f"{r['file_id']}|{r['bbox']}|{r['size']}|{r['mtime']}".encode("utf-8", "replace")
+    ).hexdigest()[:10]
+    out = out_dir / f"{face_id}_{size}_{ver}.jpg"
     if not out.is_file():
-        src = Path(r["path"])
-        if not src.is_file():
+        src_path = str(r["path"])
+        if not os.path.isfile(faces_mod._fs_path(src_path)):
             raise HTTPException(404, "File originale non trovato.")
         try:
             bbox = json.loads(r["bbox"] or "[]")
-            with Image.open(src) as im:
-                im = ImageOps.exif_transpose(im).convert("RGB")
-                w, h = im.size
-                if len(bbox) == 4:
-                    x1, y1, x2, y2 = [float(v) for v in bbox]
-                    # Scala se il bbox e' stato salvato su immagine ridimensionata a max 1600 px
-                    max_orig = max(w, h)
-                    if max_orig > 1600 and max(x2, y2) <= 1605:
-                        sc = max_orig / 1600.0
-                        x1, y1, x2, y2 = x1 * sc, y1 * sc, x2 * sc, y2 * sc
-                    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-                    side = max(x2 - x1, y2 - y1) * 1.65
-                    left = max(0, int(round(cx - side / 2.0)))
-                    top = max(0, int(round(cy - side / 2.0)))
-                    right = min(w, int(round(cx + side / 2.0)))
-                    bottom = min(h, int(round(cy + side / 2.0)))
-                    if right > left + 4 and bottom > top + 4:
-                        im = im.crop((left, top, right, bottom))
-                im = ImageOps.fit(im, (size, size), method=Image.LANCZOS)
-                tmp = out.with_suffix(".jpg.tmp")
+            # Stesso caricamento del rilevamento (EXIF applicato, lato max 1600): le coordinate del riquadro coincidono
+            # senza indovinare la scala, e non si decodifica l'originale a piena risoluzione.
+            im = faces_mod._load_image_rgb(src_path, max_side=1600)
+            w, h = im.size
+            if len(bbox) == 4:
+                x1, y1, x2, y2 = [float(v) for v in bbox]
+                cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+                side = max(x2 - x1, y2 - y1) * 1.65
+                left = max(0, int(round(cx - side / 2.0)))
+                top = max(0, int(round(cy - side / 2.0)))
+                right = min(w, int(round(cx + side / 2.0)))
+                bottom = min(h, int(round(cy + side / 2.0)))
+                if right > left + 4 and bottom > top + 4:
+                    im = im.crop((left, top, right, bottom))
+            im = ImageOps.fit(im, (size, size), method=Image.LANCZOS)
+            # file temporaneo univoco: due richieste simultanee dello stesso volto non si pestano i piedi
+            tmp = out.with_name(f"{out.stem}.{uuid.uuid4().hex[:8]}.jpg.tmp")
+            try:
                 im.save(tmp, format="JPEG", quality=88)
-                tmp.replace(out)
+                try:
+                    tmp.replace(out)
+                except OSError:
+                    if not out.is_file():  # su Windows il replace puo' fallire se l'altra richiesta ha gia' vinto
+                        raise
+            finally:
+                tmp.unlink(missing_ok=True)
+            # elimina i ritagli obsoleti dello stesso volto/dimensione (versioni precedenti, formato vecchio senza hash)
+            for old in list(out_dir.glob(f"{face_id}_{size}_*.jpg")) + [out_dir / f"{face_id}_{size}.jpg"]:
+                if old != out:
+                    try:
+                        old.unlink(missing_ok=True)
+                    except OSError:
+                        pass
         except HTTPException:
             raise
+        except faces_mod.PermanentImageError as exc:
+            raise HTTPException(404, f"Immagine non leggibile: {exc}") from exc
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(500, f"Impossibile creare il ritaglio del volto: {exc}") from exc
-    return FileResponse(str(out), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+    # no-cache + ETag (FileResponse): il browser rivalida a ogni uso, cosi' un reset non mostra mai ritagli vecchi
+    return FileResponse(str(out), media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
+
+
+_FACE_JOBS = ("volti_scan", "volti_cluster", "volti_modelli")  # nomi letti anche dall'indicizzazione: non rinominare
 
 
 def _active_face_job():
-    for name in ("volti_scan", "volti_cluster", "volti_modelli"):
+    for name in _FACE_JOBS:
         j = jobs.running_job(name)
         if j is not None:
             return j
@@ -538,6 +587,8 @@ def scan_people(body: dict = Body(default={})):
                 job.update(stage="volti_rilevamento", done=d, total=t, message=msg)
 
             found = faces_mod.detect_faces(conn, cfg=cfg, progress=_prog, should_stop=lambda: job.cancel_requested)
+            if job.cancel_requested:  # fermato dall'utente: il lavoro svolto e' salvato, niente raggruppamento lungo
+                return {"faces_found": found, "people": None}
             job.update(stage="volti_cluster", message="Raggruppamento delle persone…")
             n = faces_mod.cluster_faces(conn, cfg=cfg, reset_unlocked=reset_unlocked)
             job.update(
@@ -548,7 +599,9 @@ def scan_people(body: dict = Body(default={})):
         finally:
             conn.close()
 
-    job = jobs.start_job("volti_scan", _run)
+    job, created = jobs.start_job_unique("volti_scan", _run, conflicts=_FACE_JOBS)
+    if not created:
+        raise HTTPException(409, "Un'operazione sui volti e' gia' in corso.")
     return {"job_id": job.id, "job": job.public()}
 
 
@@ -571,7 +624,9 @@ def recluster_people(body: dict = Body(default={})):
         finally:
             conn.close()
 
-    job = jobs.start_job("volti_cluster", _run)
+    job, created = jobs.start_job_unique("volti_cluster", _run, conflicts=_FACE_JOBS)
+    if not created:
+        raise HTTPException(409, "Un'operazione sui volti e' gia' in corso.")
     return {"job_id": job.id, "job": job.public()}
 
 
@@ -588,7 +643,9 @@ def download_face_models():
         job.update(stage="completato", message="Modelli volti pronti.")
         return {"ok": True}
 
-    job = jobs.start_job("volti_modelli", _run)
+    job, created = jobs.start_job_unique("volti_modelli", _run, conflicts=_FACE_JOBS)
+    if not created:
+        raise HTTPException(409, "Un'operazione sui volti e' gia' in corso.")
     return {"job_id": job.id, "job": job.public()}
 
 
@@ -600,6 +657,12 @@ def reset_face_scan(conn: sqlite3.Connection = Depends(deps.get_db)):
     if _active_face_job() is not None:
         raise HTTPException(409, "Un'operazione sui volti e' gia' in corso.")
     with conn:
+        # I volti delle persone con nome diventano «bloccati»: restano assegnati (con il nome) e il rilevamento non li
+        # duplica. Altrimenti la persona con nome resterebbe senza volti e senza centroide, e il nome andrebbe perso.
+        conn.execute(
+            "UPDATE faces SET locked=1 WHERE COALESCE(locked,0)=0 AND person_id IN "
+            "(SELECT id FROM persons WHERE name IS NOT NULL AND TRIM(name)<>'')"
+        )
         conn.execute("DELETE FROM faces_done")
         cur = conn.execute("DELETE FROM faces WHERE COALESCE(locked,0)=0 AND COALESCE(excluded,0)=0")
         removed = int(cur.rowcount or 0)
@@ -609,4 +672,6 @@ def reset_face_scan(conn: sqlite3.Connection = Depends(deps.get_db)):
         )
         for (pid,) in conn.execute("SELECT id FROM persons ORDER BY id").fetchall():
             faces_mod.recompute_person(conn, int(pid))
+    # gli id dei volti verranno riusati: i ritagli in cache non sono piu' validi
+    faces_mod.clear_crop_cache(deps.get_cfg())
     return {"ok": True, "removed_faces": removed}

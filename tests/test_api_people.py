@@ -288,14 +288,15 @@ def test_people_error_cases_and_reset_scan():
             conn.close()
 
             st, rst = srv.post("/api/people/reset-scan", {})
-            assert st == 200 and rst["ok"] is True and rst["removed_faces"] == 4
+            # i volti della persona con nome (Anna) vengono bloccati e conservati: si perdono solo i 2 volti non bloccati di p2
+            assert st == 200 and rst["ok"] is True and rst["removed_faces"] == 2
 
             conn = dbm.connect(cfg.db_path)
             try:
                 assert conn.execute("SELECT COUNT(*) FROM faces_done").fetchone()[0] == 0
-                assert conn.execute("SELECT COUNT(*) FROM faces").fetchone()[0] == 2
+                assert conn.execute("SELECT COUNT(*) FROM faces").fetchone()[0] == 4
                 row_p1 = conn.execute("SELECT name, n FROM persons WHERE id=?", (p1,)).fetchone()
-                assert row_p1 is not None and row_p1["name"] == "Anna" and row_p1["n"] == 1
+                assert row_p1 is not None and row_p1["name"] == "Anna" and row_p1["n"] == 3
                 assert conn.execute("SELECT excluded FROM faces WHERE id=?", (f2,)).fetchone()[0] == 1
             finally:
                 conn.close()
@@ -490,6 +491,31 @@ def test_split_and_not_same_and_suggestion_groups():
             # Gruppi: la coppia p1-p3 forma un gruppo da 2+ persone con similarita' >= soglia
             _, groups = srv.get("/api/people/suggestion-groups?min_sim=0.45")
             assert any({p1, p3} <= {m["id"] for m in g["members"]} and g["similarity"] >= 0.45 for g in groups)
+        finally:
+            srv.stop()
+
+
+def test_face_crop_cache_is_versioned_and_cleared_by_reset_scan():
+    """Il ritaglio in cache cambia se cambia il riquadro (id riusati dopo un reset) e reset-scan svuota la cache."""
+    with _Tmp() as tmp:
+        cfg = _setup_catalog(tmp, enable_faces=True)
+        srv = _Server(_make_app(cfg))
+        try:
+            _, ppl = srv.get("/api/people")
+            face_id = ppl[0]["cover_face_id"]
+            assert srv.get(f"/api/faces/{face_id}/crop?size=128", raw=True)[0] == 200
+            cache = Path(cfg.cache_dir) / "faces"
+            first = sorted(p.name for p in cache.glob(f"{face_id}_128_*.jpg"))
+            assert len(first) == 1
+            conn = dbm.connect(cfg.db_path)
+            with conn:
+                conn.execute("UPDATE faces SET bbox=? WHERE id=?", (json.dumps([20, 20, 100, 100]), face_id))
+            conn.close()
+            assert srv.get(f"/api/faces/{face_id}/crop?size=128", raw=True)[0] == 200
+            second = sorted(p.name for p in cache.glob(f"{face_id}_128_*.jpg"))
+            assert len(second) == 1 and second != first          # nuova versione, la vecchia e' stata eliminata
+            assert srv.post("/api/people/reset-scan", {})[0] == 200
+            assert not list(cache.glob("*.jpg"))
         finally:
             srv.stop()
 

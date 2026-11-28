@@ -30,9 +30,9 @@ def _run(job):
 @router.post("/labels/suggestions/run")
 def run_suggestions():
     """Avvia la ricerca dei temi ricorrenti (job in background, ~30 s)."""
-    if jobs.running_job(JOB) is not None:
+    job, created = jobs.start_job_unique(JOB, _run)
+    if not created:
         raise HTTPException(409, "La ricerca dei temi e' gia' in corso.")
-    job = jobs.start_job(JOB, _run)
     return {"job_id": job.id}
 
 

@@ -142,7 +142,103 @@ def test_api_network() -> None:
     print("ok api_network")
 
 
+def test_local_names_and_mapped_addresses() -> None:
+    assert netguard.is_loopback("::1") and netguard.is_loopback("::ffff:127.0.0.1") and netguard.is_loopback("LOCALHOST.")
+    assert not netguard.is_loopback("8.8.8.8") and not netguard.is_loopback("::ffff:8.8.8.8")
+    assert netguard._is_local("0.0.0.0") and netguard._is_local(socket.gethostname())
+    assert not netguard._is_local("example.com")
+    # il nome di questo PC non e' bloccato (risolve ai suoi indirizzi) ma internet si'
+    try:
+        socket.getaddrinfo(socket.gethostname(), None)
+    except netguard.NetworkBlocked:
+        raise AssertionError("nome host del PC bloccato")
+    except OSError:
+        pass  # nome non risolvibile su questa macchina: non e' un blocco
+    print("ok local_names_and_mapped_addresses")
+
+
+def test_dns_block_is_also_gaierror() -> None:
+    try:
+        socket.gethostbyname("example.org")
+    except socket.gaierror as e:
+        assert isinstance(e, netguard.NetworkBlocked)
+    else:
+        raise AssertionError("DNS non bloccato")
+    print("ok dns_block_is_also_gaierror")
+
+
+def test_log_rotation_keeps_valid_lines_and_clear_reports_result() -> None:
+    netguard.clear_log()
+    old_max = netguard.LOG_MAX_BYTES
+    try:
+        netguard.LOG_MAX_BYTES = 2000
+        netguard.LOG_FILE.write_text("\n".join(json.dumps({"i": i, "ts": "x", "outcome": "bloccato", "host": "h"})
+                                               for i in range(300)) + "\n", encoding="utf-8")
+        netguard._rotate_log()
+    finally:
+        netguard.LOG_MAX_BYTES = old_max
+    lines = netguard.LOG_FILE.read_text(encoding="utf-8").splitlines()
+    assert 0 < len(lines) <= 1000 and all(json.loads(l) for l in lines)
+    assert not list(netguard.LOG_FILE.parent.glob("*.tmp")), "file temporaneo lasciato"
+    assert netguard.clear_log() is True and not netguard.read_log()
+    print("ok log_rotation")
+
+
+def test_load_pretrained_redownloads_corrupted_cache() -> None:
+    calls = []
+
+    class Corrupt(Exception):
+        pass
+
+    def fn(name, **kw):
+        calls.append(kw)
+        if kw.get("local_files_only"):
+            raise Corrupt("file danneggiato")
+        return "ok"
+
+    assert netguard.load_pretrained(fn, "x/y") == "ok"
+    assert calls[0] == {"local_files_only": True} and calls[1] == {"force_download": True}, calls
+    print("ok load_pretrained_corrupted")
+
+
+def test_model_in_cache_requires_weights() -> None:
+    home = Path(tempfile.mkdtemp(prefix="hf_cache_"))
+    old = os.environ.get("HF_HUB_CACHE")
+    os.environ["HF_HUB_CACHE"] = str(home)
+    try:
+        snap = home / "models--a--b" / "snapshots" / "abc"
+        snap.mkdir(parents=True)
+        (snap / "config.json").write_text("{}")
+        assert netguard.model_in_cache("a/b") is False   # download interrotto: solo la configurazione
+        (snap / "model.safetensors").write_bytes(b"x")
+        assert netguard.model_in_cache("a/b") is True
+        assert netguard.model_in_cache("a/zzz") is False
+    finally:
+        if old is None:
+            os.environ.pop("HF_HUB_CACHE", None)
+        else:
+            os.environ["HF_HUB_CACHE"] = old
+    print("ok model_in_cache")
+
+
+def test_download_window_closes_on_exception() -> None:
+    try:
+        with netguard.download_window("prova"):
+            assert netguard.window_open()
+            raise RuntimeError("download interrotto")
+    except RuntimeError:
+        pass
+    assert not netguard.window_open()
+    print("ok window_closes_on_exception")
+
+
 if __name__ == "__main__":
+    test_local_names_and_mapped_addresses()
+    test_dns_block_is_also_gaierror()
+    test_log_rotation_keeps_valid_lines_and_clear_reports_result()
+    test_load_pretrained_redownloads_corrupted_cache()
+    test_model_in_cache_requires_weights()
+    test_download_window_closes_on_exception()
     test_external_blocked()
     test_loopback_allowed()
     test_window_only_download_hosts()

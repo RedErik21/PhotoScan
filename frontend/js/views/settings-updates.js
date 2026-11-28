@@ -74,11 +74,15 @@ export async function mountSection(container) {
   injectStyle();
   let disposed = false;
   let data = null;
-  let busy = '';            // azione in corso: check | download | install | discard
+  let busy = '';            // azione in corso: check | download | install | discard | releases | version | uninstall
   const saving = new Set();
 
   const statusSlot = h('section', { class: 'upd-group' });
   const optionsSlot = h('section', { class: 'upd-group' });
+  const moreSlot = h('section', { class: 'upd-group' });
+  const uninstSlot = h('section', { class: 'upd-group' });
+  let releases = null;      // «Altre versioni»: null = non ancora caricate
+  let releasesError = '';
   container.replaceChildren(skeletonList(3));
 
   async function load() {
@@ -135,7 +139,7 @@ export async function mountSection(container) {
       title: restartable ? `Installare PhotoScan ${v}?` : `Preparare l’installazione di PhotoScan ${v}?`,
       message: restartable
         ? 'PhotoScan si chiude, installa la nuova versione e si riapre. Un’analisi in corso viene interrotta e riprende alla riapertura.'
-        : (data.frozen ? 'L’aggiornamento verrà installato quando chiudi PhotoScan: poi l’app si riapre da sola.'
+        : (data.frozen ? 'L’aggiornamento verrà installato quando chiudi PhotoScan' + (data.uninstall?.kind === 'linux' ? ': poi riaprilo tu.' : ': poi l’app si riapre da sola.')
           : 'L’aggiornamento verrà installato quando chiudi e riapri PhotoScan.'),
       confirmLabel: restartable ? 'Installa e riavvia' : 'Va bene',
     });
@@ -149,6 +153,136 @@ export async function mountSection(container) {
         : 'Chiudi e riapri PhotoScan per completare l’aggiornamento.', { duration: 8000 });
     }
   });
+
+  // ---- Altre versioni
+  const loadReleases = () => run('releases', async () => {
+    releasesError = '';
+    try {
+      releases = (await api.get('/update/releases')).releases;
+    } catch (e) {
+      releases = [];
+      releasesError = e.message;
+    }
+  });
+
+  const installVersion = (rel) => run('version', async () => {
+    const older = compareVersions(rel.version, data.current) < 0;
+    const ok = await confirmDialog({
+      title: older ? `Tornare a PhotoScan ${rel.version}?` : `Installare PhotoScan ${rel.version}?`,
+      message: older
+        ? `Stai installando una versione più vecchia di quella in uso (${data.current}). Il catalogo potrebbe essere stato `
+          + 'aggiornato da una versione più nuova e non essere letto bene da questa. Prima del download PhotoScan ne fa una '
+          + 'copia di sicurezza nella cartella degli aggiornamenti. Le foto non vengono toccate.'
+        : 'La versione viene scaricata e verificata; l’installazione avviene alla chiusura di PhotoScan.',
+      confirmLabel: older ? 'Scarica la versione precedente' : 'Scarica',
+    });
+    if (!ok || disposed) return;
+    await api.post('/update/install-version', { version: rel.version, confirm_downgrade: older });
+    showSnackbar(`Download di PhotoScan ${rel.version} avviato.`);
+  });
+
+  /** Confronto numerico 1.2.10 > 1.2.9 (le etichette di prova contano meno della versione finale). */
+  function compareVersions(a, b) {
+    const parse = (v) => {
+      const [main, pre] = String(v).replace(/^v/i, '').split('-');
+      return { n: (main.match(/\d+/g) || []).map(Number), pre: pre || '' };
+    };
+    const x = parse(a), y = parse(b);
+    for (let i = 0; i < Math.max(x.n.length, y.n.length, 3); i++) {
+      const d = (x.n[i] || 0) - (y.n[i] || 0);
+      if (d) return Math.sign(d);
+    }
+    if (x.pre === y.pre) return 0;
+    if (!x.pre) return 1;
+    if (!y.pre) return -1;
+    return x.pre < y.pre ? -1 : 1;
+  }
+
+  function renderMore() {
+    const d = data;
+    const out = [h('h2', { class: 'upd-group__title' }, 'Altre versioni')];
+    const card = [];
+    if (!d.configured) return [];
+    if (releases === null) {
+      card.push(hint('Qui trovi le versioni precedenti e quelle di prova. Se l’aggiornamento automatico non funziona, '
+        + 'scarica l’installer (PhotoScan-Setup) di una versione e installalo sopra a questa: i dati restano.'));
+      card.push(h('div', { class: 'upd-actions' },
+        h('md-filled-tonal-button', { onclick: loadReleases, disabled: !!busy }, icon('history', { slot: 'icon' }),
+          busy === 'releases' ? 'Carico l’elenco…' : 'Mostra le versioni')));
+    } else if (releasesError) {
+      card.push(callout('error', 'cloud_off', 'Elenco non disponibile', h('p', {}, releasesError)));
+      card.push(h('div', { class: 'upd-actions' }, h('md-text-button', { onclick: loadReleases, disabled: !!busy }, 'Riprova')));
+    } else if (!releases.length) {
+      card.push(hint('Nessuna versione trovata su GitHub.'));
+    } else {
+      for (const r of releases) {
+        const isCurrent = r.version === d.current;
+        const canInstall = !d.git_checkout && r.installable && !isCurrent;
+        const links = [];
+        const setupHref = r.setup_url || r.html_url;
+        if (setupHref) {
+          links.push(h('md-text-button', { href: setupHref, target: '_blank', rel: 'noopener' },
+            icon('download', { slot: 'icon' }), r.setup_url ? 'Scarica installer' : 'Pagina della Release'));
+        }
+        if (canInstall) {
+          links.push(h('md-filled-tonal-button', { onclick: () => installVersion(r), disabled: !!busy || !!d.download_job },
+            icon('system_update_alt', { slot: 'icon' }), 'Installa questa versione'));
+        }
+        card.push(h('div', { class: 'upd-version' },
+          h('span', { class: 'md-typescale-body-large' },
+            `PhotoScan ${r.version}${r.prerelease ? ' (di prova)' : ''}${isCurrent ? ' · in uso' : ''}`),
+          h('span', { class: 'upd-hint md-typescale-body-small' }, r.published_at ? `Pubblicata il ${formatDateTime(r.published_at)}` : ''),
+          r.notes ? h('details', {}, h('summary', {}, 'Novità'), h('pre', { class: 'upd-notes' }, r.notes)) : null,
+          h('div', { class: 'upd-actions' }, ...links)));
+      }
+    }
+    out.push(h('div', { class: 'upd-card' }, ...card));
+    return out;
+  }
+
+  // ---- Disinstalla
+  const uninstall = () => run('uninstall', async () => {
+    const u = data.uninstall || {};
+    const ok = await confirmDialog({
+      title: 'Disinstallare PhotoScan?',
+      message: 'PhotoScan si chiude e viene rimosso da questo PC (programma, componente di calcolo e collegamenti). '
+        + 'Le tue foto non vengono toccate.',
+      confirmLabel: 'Continua', cancelLabel: 'Annulla',
+    });
+    if (!ok || disposed) return;
+    const withData = await confirmDialog({
+      title: 'Eliminare anche i dati di PhotoScan?',
+      message: `Catalogo, miniature, modelli scaricati e impostazioni stanno in ${u.data_dir || 'la cartella dei dati'}. `
+        + 'Se li conservi, reinstallando PhotoScan ritrovi tutto. Le foto non vengono mai toccate.',
+      confirmLabel: 'Elimina anche i dati', cancelLabel: 'Conserva i dati',
+    });
+    const res = await api.post('/update/uninstall', { confirm: true, delete_data: !!withData });
+    if (res.kind === 'linux') showSnackbar(res.message || 'Alla chiusura PhotoScan viene rimosso.', { duration: 10000 });
+    else showSnackbar('Avvio del disinstallatore…');
+    if (typeof window.pywebview?.api?.force_close === 'function') {
+      setTimeout(() => window.pywebview.api.force_close(), 800);
+    } else {
+      showSnackbar('Chiudi la finestra di PhotoScan per completare la disinstallazione.', { duration: 10000 });
+    }
+  });
+
+  function renderUninstall() {
+    const u = data.uninstall || {};
+    if (!u.kind) return [];      // clone git o sviluppo: non c'e' nulla da disinstallare
+    const card = [];
+    if (u.kind === 'windows' && !u.available) {
+      card.push(hint('PhotoScan non è stato installato con PhotoScan-Setup: per rimuoverlo elimina la sua cartella '
+        + '(le impostazioni e il catalogo stanno in ' + (u.data_dir || '%LOCALAPPDATA%\\PhotoScan') + ').'));
+    } else {
+      card.push(hint(u.kind === 'windows'
+        ? 'Rimuove PhotoScan da questo PC. Ti viene chiesto se conservare o eliminare i dati (catalogo, impostazioni, cache).'
+        : 'Toglie il collegamento nel menu e, a tua scelta, i dati dell’app. Il file AppImage va cancellato a mano'
+          + (u.appimage ? `: ${u.appimage}` : '') + '.'));
+      card.push(h('div', { class: 'upd-actions' },
+        h('md-text-button', { onclick: uninstall, disabled: !!busy }, icon('delete', { slot: 'icon' }), 'Disinstalla PhotoScan')));
+    }
+    return [h('h2', { class: 'upd-group__title' }, 'Disinstalla'), h('div', { class: 'upd-card' }, ...card)];
+  }
 
   async function setOption(key, value, sw) {
     saving.add(key);
@@ -225,7 +359,8 @@ export async function mountSection(container) {
           icon('system_update_alt', { slot: 'icon' }), canRestart() ? 'Installa e riavvia' : 'Installa alla riapertura'),
         h('md-text-button', { onclick: discard, disabled: !!busy }, 'Annulla aggiornamento'),
       ];
-      const when = p.approved || d.settings.update_auto_install
+      const when = p.downgrade ? 'Versione precedente: ' + (p.catalog_backup ? `copia del catalogo in ${p.catalog_backup}. ` : '') + 'Si installa alla chiusura.'
+        : p.approved || d.settings.update_auto_install
         ? 'Verrà installato alla prossima apertura di PhotoScan.'
         : 'Scaricato e verificato: si installa quando lo decidi tu.';
       out.push(callout('warning', 'download_done', `PhotoScan ${p.version} pronto da installare`, h('p', {}, when)));
@@ -271,7 +406,9 @@ export async function mountSection(container) {
     if (disposed || !data) return;
     statusSlot.replaceChildren(h('h2', { class: 'upd-group__title' }, 'Aggiornamenti'), h('div', { class: 'upd-card' }, renderStatus()));
     optionsSlot.replaceChildren(...renderOptions());
-    if (!container.contains(statusSlot)) container.replaceChildren(statusSlot, optionsSlot);
+    moreSlot.replaceChildren(...renderMore());
+    uninstSlot.replaceChildren(...renderUninstall());
+    if (!container.contains(statusSlot)) container.replaceChildren(statusSlot, optionsSlot, moreSlot, uninstSlot);
   }
 
   const offUpdate = onEvent('update', (d) => { if (!disposed && d) { data = d; paint(); } });

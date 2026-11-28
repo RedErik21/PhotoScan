@@ -116,7 +116,7 @@ export async function confirmDialog({ title, message = '', confirmLabel = 'Confe
   const res = await Swal.fire({
     ...swalBase(),
     icon: danger ? 'warning' : 'question',
-    title: title ?? '',
+    titleText: title ?? '',   // testo, non HTML (il titolo puo' contenere nomi scelti dall'utente)
     text: message,
     showCancelButton: true,
     reverseButtons: true,
@@ -142,7 +142,7 @@ export async function promptDialog({ title, label = '', value = '', confirmLabel
   const list = (suggestions || []).filter((s) => typeof s === 'string' && s.trim());
   const res = await Swal.fire({
     ...swalBase(),
-    title: title ?? '',
+    titleText: title ?? '',
     text: supportingText || undefined,
     input: 'text',
     inputLabel: label,
@@ -157,7 +157,8 @@ export async function promptDialog({ title, label = '', value = '', confirmLabel
       toTopLayer();
       const input = Swal.getInput();
       // `error`: messaggio iniziale (es. nome gia' usato); sparisce appena si modifica il testo.
-      if (error) Swal.showValidationMessage(error);
+      // showValidationMessage accetta HTML: il testo va escapato.
+      if (error) Swal.showValidationMessage(String(error).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])));
       if (list.length) {
         const box = h('div', { class: 'fs-swal-chips', role: 'group', 'aria-label': 'Suggerimenti' },
           ...list.map((s) => h('button', {
@@ -187,7 +188,7 @@ export async function choiceDialog({ title, message = '', options = [], confirmL
         opt.description ? h('span', { class: 'fs-swal-choice__desc' }, opt.description) : null))));
   const res = await Swal.fire({
     ...swalBase(),
-    title: title ?? '',
+    titleText: title ?? '',
     text: message || undefined,
     html: undefined,
     showCancelButton: true,

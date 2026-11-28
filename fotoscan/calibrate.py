@@ -22,6 +22,7 @@ import sqlite3
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import numpy as np
 
@@ -146,7 +147,7 @@ def run(cfg: Config, model_id: str, n: int | None = None) -> dict:
         raise ValueError("SigLIP 2 Base è il riferimento della calibrazione: i suoi valori sono già tarati a mano.")
     device = cfg.resolve_device()
     n = n or (SAMPLE_GPU if device == "cuda" else SAMPLE_CPU)
-    conn = sqlite3.connect(f"file:{cfg.db_path}?mode=ro", uri=True, timeout=60)
+    conn = sqlite3.connect(Path(cfg.db_path).resolve().as_uri() + "?mode=ro", uri=True, timeout=60)  # as_uri: '#', '?', '%'
     conn.row_factory = sqlite3.Row
     try:
         rows = _sample(conn, n)

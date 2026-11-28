@@ -92,7 +92,27 @@ def start_job(name: str, fn: Callable[[Job], Any]) -> Job:
     with _jlock:
         _prune_locked()
         _jobs[job.id] = job
+    _launch(job, fn)
+    return job
 
+
+def start_job_unique(name: str, fn: Callable[[Job], Any], conflicts: tuple[str, ...] = ()) -> tuple[Job, bool]:
+    """Come start_job, ma atomico: se e' gia' in corso un job `name` (o uno dei nomi in `conflicts`)
+    non ne avvia un altro. Ritorna (job, creato): creato=False -> `job` e' quello gia' in corso.
+    Chiude la finestra tra running_job() e start_job() (doppio clic, richieste parallele nel threadpool)."""
+    names = (name, *conflicts)
+    with _jlock:
+        for j in _jobs.values():
+            if j.name in names and j.state == "running":
+                return j, False
+        job = Job(id=uuid.uuid4().hex[:12], name=name)
+        _prune_locked()
+        _jobs[job.id] = job
+    _launch(job, fn)
+    return job, True
+
+
+def _launch(job: Job, fn: Callable[[Job], Any]) -> None:
     def run():
         try:
             job.result = fn(job)
@@ -103,9 +123,8 @@ def start_job(name: str, fn: Callable[[Job], Any]) -> Job:
         job.finished = time.time()
         bus.publish("job", job.public())
 
-    threading.Thread(target=run, daemon=True, name=f"job-{name}").start()
+    threading.Thread(target=run, daemon=True, name=f"job-{job.name}").start()
     bus.publish("job", job.public())
-    return job
 
 
 def get_job(job_id: str) -> Job | None:

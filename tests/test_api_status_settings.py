@@ -240,6 +240,61 @@ def test_disk_reports_missing_output_and_files():
     assert code2 == 200 and d2["exists"] is False and d2["is_file"] is True
 
 
+def test_source_overlapping_nas_is_rejected():
+    nas = _TMP / "backup-nas"
+    nas.mkdir(exist_ok=True)
+    altra = _TMP / "altra-sorgente"
+    altra.mkdir(exist_ok=True)
+    cfg = get_cfg()
+    import dataclasses
+    routes_status._write_config(dataclasses.replace(cfg, nas_dir=str(nas)))
+    try:
+        with server() as base:
+            code, data = _request(base, "PUT", "/api/settings", {"source_dir": str(nas)})
+            assert code == 400 and "source_dir" in data["fields"], data
+            sotto = nas / "sub"
+            sotto.mkdir(exist_ok=True)
+            code, data = _request(base, "PUT", "/api/settings", {"source_dir": str(sotto)})
+            assert code == 400 and "source_dir" in data["fields"], data
+            code, data = _request(base, "PUT", "/api/settings", {"source_dir": str(altra)})
+            assert code == 200, data
+    finally:
+        routes_status._write_config(dataclasses.replace(get_cfg(), nas_dir="", source_dir=str(_SRC)))
+
+
+def test_unknown_model_and_unavailable_device_are_rejected():
+    with server() as base:
+        code, data = _request(base, "PUT", "/api/settings", {"model_name": "nessuno/modello-inventato"})
+        assert code == 400 and "model_name" in data["fields"], data
+        known = config_mod.AVAILABLE_MODELS[0]["id"]
+        code, data = _request(base, "PUT", "/api/settings", {"model_name": known})
+        assert code == 200, data
+        from fotoscan import hardware
+        if hardware.detect()["device"] != "cuda":
+            code, data = _request(base, "PUT", "/api/settings", {"device": "cuda"})
+            assert code == 400 and "device" in data["fields"], data
+
+
+def test_probe_does_not_block_on_hanging_call():
+    started = time.monotonic()
+    gate = threading.Event()
+    routes_status.PROBE_TIMEOUT_S = 0.3
+    try:
+        r1 = routes_status._probe("test:blocca", lambda: gate.wait(5) and "tardi", "default")
+        r2 = routes_status._probe("test:blocca", lambda: "mai", "default")  # stessa chiave: nessun secondo thread
+    finally:
+        routes_status.PROBE_TIMEOUT_S = 2.0
+        gate.set()
+    assert r1 == "default" and r2 == "default"
+    assert time.monotonic() - started < 2.0
+
+
+def test_disk_rejects_nul_byte():
+    with server() as base:
+        code, _ = _request(base, "GET", "/api/system/disk?path=" + urllib.parse.quote("a\x00b"))
+    assert code == 400
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     for t in tests:

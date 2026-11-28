@@ -160,9 +160,9 @@ def put_settings(body: dict = Body(...)):
         updates["nas_layout"] = body["nas_layout"]
     eff_nas = updates.get("nas_dir", cur.nas_dir)
     eff_recv = updates.get("nas_receive_dir", cur.nas_receive_dir)
-    if eff_nas and cur.source_dir and _overlap(eff_nas, cur.source_dir):
+    if eff_nas and cur.source_dir and (_overlap(eff_nas, cur.source_dir) or nas._same_folder(eff_nas, cur.source_dir)):
         raise HTTPException(400, "La cartella NAS non puo' coincidere con (o essere dentro) la cartella sorgente.")
-    if eff_nas and eff_recv and _overlap(eff_nas, eff_recv):
+    if eff_nas and eff_recv and (_overlap(eff_nas, eff_recv) or nas._same_folder(eff_nas, eff_recv)):
         raise HTTPException(400, "La cartella di ricezione non puo' coincidere con (o essere dentro) la cartella NAS.")
     if updates:
         _write_config(dataclasses.replace(cur, **updates))
@@ -206,6 +206,22 @@ def plan(
     return {"layout": layout, "total": len(items), "counts": counts, "bytes_to_copy": bytes_to_copy, "sample": sample}
 
 
+ALL_NAS_JOBS = (SEND, RECEIVE, CLEANUP)
+_BUSY_MSG = {SEND: "Un invio al NAS e' gia' in corso.", RECEIVE: "Una ricezione dal NAS e' gia' in corso.",
+             CLEANUP: "Una pulizia e' gia' in corso."}
+
+
+def _start_exclusive(name: str, fn):
+    """Avvia il job se nessun altro job NAS (invio, ricezione, pulizia) e' in corso: si escludono a vicenda."""
+    others = tuple(n for n in ALL_NAS_JOBS if n != name)
+    job, created = jobs.start_job_unique(name, fn, conflicts=others)
+    if not created:
+        if job.name == name:
+            raise HTTPException(409, _BUSY_MSG[name])
+        raise HTTPException(409, f"Attendi la fine dell'operazione NAS in corso ({job.name.replace('nas_', '')}).")
+    return job.public()
+
+
 @router.post("/send")
 def send(body: dict = Body(default={})):
     cfg = deps.get_cfg()
@@ -214,8 +230,6 @@ def send(body: dict = Body(default={})):
         raise HTTPException(400, "Struttura non valida.")
     parsed_albums = _parse_album_ids(body.get("album_ids"))
     include_unsorted = bool(body.get("include_unsorted", True))
-    if jobs.running_job(SEND):
-        raise HTTPException(409, "Un invio al NAS e' gia' in corso.")
     try:
         nas.require_nas(cfg)
     except nas.NasError as e:
@@ -227,7 +241,7 @@ def send(body: dict = Body(default={})):
             return nas.send_job(job, conn, cfg, layout, album_ids=parsed_albums, include_unsorted=include_unsorted)
         finally:
             conn.close()
-    return jobs.start_job(SEND, run).public()
+    return _start_exclusive(SEND, run)
 
 
 @router.post("/receive")
@@ -236,13 +250,11 @@ def receive(body: dict = Body(default={})):
     dest = _check_write_dir(body.get("dest") or cfg.nas_receive_dir, "Cartella di ricezione")
     if not dest:
         raise HTTPException(400, "Scegli la cartella dove ricevere i file.")
-    if jobs.running_job(RECEIVE):
-        raise HTTPException(409, "Una ricezione dal NAS e' gia' in corso.")
     try:
         nas.require_nas(cfg)
     except nas.NasError as e:
         raise HTTPException(400, str(e)) from e
-    return jobs.start_job(RECEIVE, lambda j: nas.receive_job(j, cfg, dest)).public()
+    return _start_exclusive(RECEIVE, lambda j: nas.receive_job(j, cfg, dest))
 
 
 @router.get("/cleanup")
@@ -256,20 +268,19 @@ def cleanup(body: dict = Body(...), conn=Depends(deps.get_db)):
     if body.get("confirm") != "CESTINO":
         raise HTTPException(400, "Conferma non valida: scrivi CESTINO per confermare.")
     expected = body.get("expected_count")
-    if not isinstance(expected, int) or expected < 1:
+    if not isinstance(expected, int) or isinstance(expected, bool) or expected < 1:
         raise HTTPException(400, "Numero di file da confermare non valido.")
-    if jobs.running_job(CLEANUP):
-        raise HTTPException(409, "Una pulizia e' gia' in corso.")
-    if jobs.running_job(SEND):
-        raise HTTPException(409, "Attendi la fine dell'invio al NAS prima di pulire il PC.")
-    now = nas.cleanup_candidates(conn)
-    if len(now) != expected:
+    ids = body.get("expected_ids")
+    if not isinstance(ids, list) or not all(isinstance(x, int) and not isinstance(x, bool) for x in ids)             or len(ids) != expected:
+        raise HTTPException(400, "Elenco dei file da confermare non valido: riapri l'anteprima.")
+    now = {c["file_id"] for c in nas.cleanup_candidates(conn)}
+    if now != set(ids):
         raise HTTPException(409, f"L'elenco e' cambiato dall'anteprima ({len(now)} file ora). Ricontrolla prima di confermare.")
 
     def run(job):
         c = deps.open_db()
         try:
-            return nas.cleanup_job(job, c, cfg, expected)
+            return nas.cleanup_job(job, c, cfg, expected, expected_ids=ids)
         finally:
             c.close()
-    return jobs.start_job(CLEANUP, run).public()
+    return _start_exclusive(CLEANUP, run)

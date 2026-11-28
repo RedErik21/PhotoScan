@@ -4,20 +4,21 @@ Regole (non negoziabili):
 - Nessuna copia sovrascrive un file esistente. Se la destinazione esiste ma non coincide, e' un conflitto.
 - Una copia e' valida solo se l'hash della destinazione, riletta dal disco, coincide con quello della sorgente.
 - Dal PC si elimina solo un file la cui copia sul NAS e' verificata adesso (hash riletto), e solo dopo
-  una conferma esplicita con il numero di file mostrato. I file vanno nel Cestino di Windows.
+  una conferma esplicita con il numero di file mostrato. I file vanno nel Cestino del sistema (fotoscan/trash.py).
 - Ogni azione viene scritta in cache/nas_log.txt.
 """
 from __future__ import annotations
 
-import ctypes
 import os
 import shutil
 import sqlite3
+import threading
 import uuid
-from ctypes import wintypes
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 
+from . import sourcefs, trash
 from .organizer import safe_name
 from .scanner_metadata import _fs, file_hash
 
@@ -30,14 +31,53 @@ class NasError(RuntimeError):
     """Errore di configurazione o di stato del NAS, con messaggio leggibile in italiano."""
 
 
+NET_PROBE_TIMEOUT = 8.0   # secondi: una condivisione bloccata non deve tenere appeso il server
+STALL_LIMIT = 3           # operazioni di rete consecutive in timeout dopo cui il job si ferma
+
+
+class NasTimeout(OSError):
+    """Il NAS non ha risposto entro il tempo previsto."""
+
+
+def _guarded(fn, timeout: float):
+    """Esegue fn() in un thread e aspetta al massimo `timeout` secondi: su SMB bloccato stat/scandir/copy possono
+    restare appesi per minuti. Se scade solleva NasTimeout (il thread resta in background, e' un daemon)."""
+    box: dict = {}
+    done = threading.Event()
+
+    def run() -> None:
+        try:
+            box["v"] = fn()
+        except BaseException as e:  # noqa: BLE001 - rilanciata nel thread chiamante
+            box["e"] = e
+        finally:
+            done.set()
+
+    threading.Thread(target=run, daemon=True, name="nas-io").start()
+    if not done.wait(timeout):
+        raise NasTimeout("il NAS non risponde (tempo scaduto)")
+    if "e" in box:
+        raise box["e"]
+    return box.get("v")
+
+
+def _io_timeout(size: int | None) -> float:
+    """Tempo massimo per copiare o rileggere un file: base fissa + dimensione a 1 MB/s (minimo accettabile)."""
+    return 120.0 + (size or 0) / (1024 * 1024)
+
+
 def space(path: str) -> dict:
     """Spazio libero e totale del disco del NAS. reachable=False se la cartella non risponde."""
     out = {"configured": bool(path), "reachable": False, "free_bytes": None, "total_bytes": None}
     if not path:
         return out
     try:
-        if Path(path).is_dir():
-            usage = shutil.disk_usage(_fs(path))
+        def probe():
+            if Path(path).is_dir() and not sourcefs.network_mount_missing(path):
+                return shutil.disk_usage(_fs(path))
+            return None
+        usage = _guarded(probe, NET_PROBE_TIMEOUT)
+        if usage is not None:
             out.update(reachable=True, free_bytes=usage.free, total_bytes=usage.total)
     except OSError:
         pass
@@ -49,7 +89,15 @@ def require_nas(cfg) -> Path:
     if not cfg.nas_dir:
         raise NasError("Nessuna cartella NAS impostata.")
     root = Path(cfg.nas_dir)
-    if not root.is_dir():
+    try:
+        ok = _guarded(lambda: root.is_dir(), NET_PROBE_TIMEOUT)
+        missing = ok and _guarded(lambda: sourcefs.network_mount_missing(cfg.nas_dir), NET_PROBE_TIMEOUT)
+    except OSError:
+        ok, missing = False, False
+    if missing:
+        raise NasError(f"Il NAS non e' collegato (la condivisione non e' montata): {cfg.nas_dir}. "
+                       "Montala e riprova: senza, i file finirebbero sul disco del PC.")
+    if not ok:
         raise NasError(f"Il NAS non risponde: {cfg.nas_dir}. Controlla che sia acceso e connesso.")
     return root
 
@@ -85,6 +133,24 @@ def _under(path: str, root: str) -> bool:
     return p.startswith(r.rstrip("\\/") + os.sep)
 
 
+def _same_folder(a: str, b: str) -> bool:
+    """Le due cartelle sono la stessa (anche con nomi di accesso diversi: lettera/UNC, junction, maiuscole)."""
+    sep = "\\/"
+    if os.path.normcase(os.path.abspath(a)).rstrip(sep) == os.path.normcase(os.path.abspath(b)).rstrip(sep):
+        return True
+    try:
+        return os.path.samefile(_fs(a), _fs(b))
+    except OSError:
+        return False
+
+
+def _same_file(a: str, b: str) -> bool:
+    try:
+        return os.path.samefile(_fs(a), _fs(b))
+    except OSError:
+        return False
+
+
 def target_rel(row, layout: str, source: str, albums: dict[int, list[tuple[int, str]]],
                album_ids: set[int] | None = None) -> str:
     """Percorso relativo sul NAS per un file del catalogo, secondo il layout scelto."""
@@ -113,6 +179,9 @@ def plan_send(conn: sqlite3.Connection, cfg, layout: str,
     source = cfg.source_dir
     if not source:
         raise NasError("Nessuna cartella sorgente impostata.")
+    if _same_folder(str(root), source):
+        raise NasError("La cartella NAS coincide con la cartella sorgente: l'invio non avrebbe senso e la pulizia "
+                       "eliminerebbe l'unico esemplare. Scegli una cartella NAS diversa.")
     albums = _albums_by_file(conn)
     allowed_albums = {int(x) for x in album_ids} if album_ids is not None else None
     items = []
@@ -123,8 +192,8 @@ def plan_send(conn: sqlite3.Connection, cfg, layout: str,
         "n.hash AS nas_hash FROM files f LEFT JOIN nas_copies n ON n.file_id = f.id ORDER BY f.id"
     )
     for r in rows:
-        if not _under(r["path"], source):
-            continue
+        if not _under(r["path"], source) or _under(r["path"], str(root)):
+            continue  # fuori dalla sorgente, o gia' dentro la cartella del NAS (sarebbe copia su se stessa)
         if layout == "by_album":
             file_albs = albums.get(int(r["id"]), [])
             if allowed_albums is not None:
@@ -233,6 +302,16 @@ def _publish_no_overwrite(tmp: Path, dst: Path) -> None:
     os.unlink(_fs(str(tmp)))
 
 
+def _fsync(path: Path) -> None:
+    """Forza la scrittura sul NAS prima di riletterla per l'hash (la rilettura non deve venire dalla cache locale)."""
+    try:
+        with open(_fs(str(path)), "r+b") as f:
+            f.flush()
+            os.fsync(f.fileno())
+    except OSError:
+        pass  # non tutte le condivisioni lo permettono: l'hash successivo resta la verifica
+
+
 def copy_verified(src: str, dst: Path, expected_hash: str) -> None:
     """Copia src in dst senza sovrascrivere. Il file finale esiste solo se il suo hash e' quello atteso."""
     if dst.exists():
@@ -242,6 +321,7 @@ def copy_verified(src: str, dst: Path, expected_hash: str) -> None:
     tmp = dst.with_name(f"{dst.name}.{uuid.uuid4().hex[:10]}{TMP_SUFFIX}")
     try:
         shutil.copyfile(_fs(src), _fs(str(tmp)))
+        _fsync(tmp)
         if file_hash(str(tmp)) != expected_hash:
             raise OSError("verifica fallita: la copia non coincide con l'originale")
         _publish_no_overwrite(tmp, dst)
@@ -270,7 +350,11 @@ def send_job(job, conn: sqlite3.Connection, cfg, layout: str, verify_all: bool =
     items = plan_send(conn, cfg, layout, album_ids=album_ids, include_unsorted=include_unsorted)
     needed = sum(i["size"] for i in items if i["state"] == "da_copiare")
     if needed > 0:
-        free = shutil.disk_usage(_fs(str(require_nas(cfg)))).free
+        root = require_nas(cfg)
+        try:
+            free = _guarded(partial(shutil.disk_usage, _fs(str(root))), NET_PROBE_TIMEOUT).free
+        except OSError as e:
+            raise NasError(f"Il NAS non risponde: {e}") from e
         if needed > free:
             raise NasError("Spazio insufficiente sul NAS per completare l'invio.")
     known_copies = {
@@ -280,10 +364,12 @@ def send_job(job, conn: sqlite3.Connection, cfg, layout: str, verify_all: bool =
     todo = [i for i in items if i["state"] in ("da_copiare", "presente")]
     res = {"totale": len(items), "copiati": 0, "verificati": 0, "conflitti": 0, "errori": 0, "annullato": False}
     job.update(stage="invio al NAS", done=0, total=len(todo))
+    stalls = 0
     for n, it in enumerate(todo, 1):
         if job.cancel_requested:
             res["annullato"] = True
             break
+        copied_now = False
         try:
             if it["state"] == "presente" and not verify_all:
                 rec = known_copies.get(it["file_id"])
@@ -295,18 +381,38 @@ def send_job(job, conn: sqlite3.Connection, cfg, layout: str, verify_all: bool =
                         job.update(done=n)
                         continue
             local_hash = it.get("known_hash") or file_hash(it["local"])  # riuso se size+mtime coincidono
+            limit = _io_timeout(it["size"])
             if it["state"] == "da_copiare":
-                copy_verified(it["local"], Path(it["target"]), local_hash)
+                _guarded(partial(copy_verified, it["local"], Path(it["target"]), local_hash), limit)
                 res["copiati"] += 1
-            elif file_hash(it["target"]) == local_hash:
+                copied_now = True
+            elif _guarded(partial(file_hash, it["target"]), limit) == local_hash:
                 res["verificati"] += 1
             else:
                 res["conflitti"] += 1
                 _log(cfg, "conflitto", it["target"])
                 job.update(done=n)
                 continue
-            _record_copy(conn, it["file_id"], it["target"], it["local"], local_hash, it["size"], it.get("mtime"))
+            try:
+                _record_copy(conn, it["file_id"], it["target"], it["local"], local_hash, it["size"], it.get("mtime"))
+            except OSError:
+                if copied_now:  # il file locale e' cambiato: la copia appena creata e' di un contenuto vecchio
+                    res["copiati"] -= 1
+                    try:
+                        os.unlink(_fs(it["target"]))
+                    except OSError:
+                        pass
+                raise
+            stalls = 0
             _log(cfg, "copia_verificata" if it["state"] == "da_copiare" else "presente_verificato", it["target"])
+        except NasTimeout as e:
+            res["errori"] += 1
+            stalls += 1
+            _log(cfg, "errore", f"{it['local']} -> {it['target']}: {e}")
+            if stalls >= STALL_LIMIT:
+                res["interrotto"] = "Il NAS non risponde: invio interrotto. Controlla la connessione e riprova."
+                _log(cfg, "errore", res["interrotto"])
+                break
         except (OSError, FileExistsError) as e:
             res["errori"] += 1
             _log(cfg, "errore", f"{it['local']} -> {it['target']}: {e}")
@@ -320,9 +426,9 @@ def send_job(job, conn: sqlite3.Connection, cfg, layout: str, verify_all: bool =
 def receive_job(job, cfg, dest: str) -> dict:
     """Riceve dal NAS i file che non esistono ancora nella cartella di destinazione. Mai sovrascritti."""
     root = require_nas(cfg)
-    dest_root = Path(dest)
     if not dest:
         raise NasError("Scegli la cartella dove ricevere i file.")
+    dest_root = Path(dest)
     files = _walk_media(_fs(str(root)))  # (percorso, relativo, dimensione): uno scandir per cartella
     # Calcola lo spazio necessario solo per i file non ancora presenti in destinazione
     missing_bytes = sum(size for _f, rel, size in files if not (dest_root / rel).exists())
@@ -333,6 +439,7 @@ def receive_job(job, cfg, dest: str) -> dict:
         raise NasError("Spazio insufficiente sulla cartella di destinazione per ricevere i file del NAS.")
     res = {"totale": len(files), "ricevuti": 0, "gia_presenti": 0, "conflitti": 0, "errori": 0, "annullato": False}
     job.update(stage="ricezione dal NAS", done=0, total=len(files))
+    stalls = 0
     for n, (full, rel, size) in enumerate(files, 1):
         if job.cancel_requested:
             res["annullato"] = True
@@ -349,7 +456,8 @@ def receive_job(job, cfg, dest: str) -> dict:
                 _log(cfg, "conflitto_ricezione", str(target))
                 job.update(done=n)
                 continue
-            nas_hash = file_hash(full)
+            limit = _io_timeout(size)
+            nas_hash = _guarded(partial(file_hash, full), limit)
             if local_size is not None or target.exists():
                 if file_hash(str(target)) == nas_hash:
                     res["gia_presenti"] += 1
@@ -358,9 +466,18 @@ def receive_job(job, cfg, dest: str) -> dict:
                     _log(cfg, "conflitto_ricezione", str(target))
                 job.update(done=n)
                 continue
-            copy_verified(full, target, nas_hash)
+            _guarded(partial(copy_verified, full, target, nas_hash), limit)
             res["ricevuti"] += 1
+            stalls = 0
             _log(cfg, "ricevuto", str(target))
+        except NasTimeout as e:
+            res["errori"] += 1
+            stalls += 1
+            _log(cfg, "errore_ricezione", f"{full}: {e}")
+            if stalls >= STALL_LIMIT:
+                res["interrotto"] = "Il NAS non risponde: ricezione interrotta. Controlla la connessione e riprova."
+                _log(cfg, "errore_ricezione", res["interrotto"])
+                break
         except (OSError, FileExistsError) as e:
             res["errori"] += 1
             _log(cfg, "errore_ricezione", f"{full}: {e}")
@@ -417,57 +534,55 @@ def cleanup_candidates(conn: sqlite3.Connection) -> list[dict]:
 def cleanup_preview(conn: sqlite3.Connection) -> dict:
     cands = cleanup_candidates(conn)
     return {"count": len(cands), "bytes": sum(c["bytes"] for c in cands),
-            "sample": [c["name"] for c in cands[:12]]}
+            "sample": [c["name"] for c in cands[:12]], "ids": [c["file_id"] for c in cands]}
 
 
 def _is_remote_path(path: str) -> bool:
-    """Condivisione di rete o unita' mappata: li' il Cestino non esiste e Windows cancellerebbe davvero."""
-    if path.startswith("\\\\"):
-        return True
-    drive = os.path.splitdrive(path)[0]
-    if not drive:
-        return False
-    return ctypes.windll.kernel32.GetDriveTypeW(drive + "\\") == 4  # DRIVE_REMOTE
+    """Condivisione di rete o unita' mappata: li' il Cestino non esiste e il sistema cancellerebbe davvero."""
+    return sourcefs.is_network(path)
 
 
 def send_to_recycle(path: str) -> None:
-    """Sposta un file nel Cestino di Windows (recuperabile). Solo Windows, solo dischi locali."""
-    if os.name != "nt":
-        raise NasError("Lo spostamento nel Cestino e' disponibile solo su Windows.")
-    full = os.path.abspath(path)
-    if _is_remote_path(full):
-        raise NasError("Il file e' su un disco di rete: li' il Cestino non esiste, non lo elimino.")
-
-    class SHFILEOPSTRUCTW(ctypes.Structure):
-        _fields_ = [("hwnd", wintypes.HWND), ("wFunc", wintypes.UINT), ("pFrom", wintypes.LPCWSTR),
-                    ("pTo", wintypes.LPCWSTR), ("fFlags", ctypes.c_ushort), ("fAnyOperationsAborted", wintypes.BOOL),
-                    ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", wintypes.LPCWSTR)]
-
-    FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_SILENT, FOF_NOERRORUI = 3, 0x40, 0x10, 0x4, 0x400
-    # pFrom e' un elenco di percorsi chiuso da DUE caratteri nulli: buffer esplicito, non affidato a ctypes
-    buf = ctypes.create_unicode_buffer(full + "\0\0")
-    op = SHFILEOPSTRUCTW(hwnd=None, wFunc=FO_DELETE, pFrom=ctypes.cast(buf, wintypes.LPCWSTR),
-                         pTo=None, fFlags=FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI,
-                         fAnyOperationsAborted=False, hNameMappings=None, lpszProgressTitle=None)
-    code = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
-    if code != 0 or op.fAnyOperationsAborted:
-        raise OSError(f"spostamento nel Cestino non riuscito (codice {code})")
-    if os.path.lexists(full):
-        raise OSError("spostamento nel Cestino non riuscito: il file e' ancora al suo posto")
+    """Sposta un file nel Cestino del sistema (recuperabile). Fallisce, senza cancellare, se non e' possibile:
+    disco di rete, Cestino disattivato o troppo piccolo (vedi fotoscan/trash.py)."""
+    trash.send_to_trash(path)
 
 
-def cleanup_job(job, conn: sqlite3.Connection, cfg, expected_count: int) -> dict:
-    """Sposta nel Cestino i file verificati. Rifiuta se l'elenco e' cambiato dall'anteprima."""
+def _forget_faces(conn: sqlite3.Connection, cfg, file_ids: list[int]) -> None:
+    """Toglie volti e persone legati ai file che stanno per uscire dal catalogo. Da chiamare PRIMA del DELETE su
+    `files`, dentro la stessa transazione e senza commit (faces.forget_files)."""
+    try:
+        from . import faces
+    except Exception:  # noqa: BLE001 - modulo volti non importabile: nulla da ripulire
+        return
+    forget = getattr(faces, "forget_files", None)
+    if forget is not None:
+        forget(conn, file_ids, cfg)
+
+
+def cleanup_job(job, conn: sqlite3.Connection, cfg, expected_count: int,
+                expected_ids: list[int] | None = None) -> dict:
+    """Sposta nel Cestino i file verificati. Rifiuta se l'elenco e' cambiato dall'anteprima
+    (stessi file_id, non solo lo stesso numero)."""
     cands = cleanup_candidates(conn)
-    if len(cands) != expected_count:
+    if expected_ids is not None:
+        if {c["file_id"] for c in cands} != {int(x) for x in expected_ids}:
+            raise NasError(f"L'elenco e' cambiato dall'anteprima ({len(cands)} file ora). Ricontrolla.")
+    elif len(cands) != expected_count:
         raise NasError(f"L'elenco e' cambiato dall'anteprima ({len(cands)} file ora, {expected_count} confermati). Ricontrolla.")
     res = {"spostati": 0, "saltati": 0, "errori": 0, "annullato": False}
     job.update(stage="spostamento nel Cestino", done=0, total=len(cands))
+    stalls = 0
     for n, c in enumerate(cands, 1):
         if job.cancel_requested:
             res["annullato"] = True
             break
         try:
+            if _same_file(c["local"], c["target"]):  # il "backup" e' il file stesso: eliminarlo = perderlo
+                res["saltati"] += 1
+                _log(cfg, "saltato_stesso_file", c["local"])
+                job.update(done=n)
+                continue
             # riverifica adesso: la copia sul NAS si rilegge sempre (hash); il file locale si rilegge solo se
             # size o mtime sono cambiati dalla verifica, altrimenti l'hash registrato e' ancora il suo
             try:
@@ -475,7 +590,9 @@ def cleanup_job(job, conn: sqlite3.Connection, cfg, expected_count: int) -> dict
                 local_same = lst.st_size == c["size"] and lst.st_mtime == c["mtime"]
             except OSError:
                 local_same = None
-            if not os.path.isfile(_fs(c["target"])) or file_hash(c["target"]) != c["hash"]:
+            nas_ok = _guarded(partial(_nas_copy_valid, c["target"], c["hash"]), _io_timeout(c["bytes"]))
+            stalls = 0
+            if not nas_ok:
                 res["saltati"] += 1
                 _log(cfg, "saltato_copia_non_valida", c["target"])
             elif local_same is None or (not local_same and file_hash(c["local"]) != c["hash"]):
@@ -484,12 +601,25 @@ def cleanup_job(job, conn: sqlite3.Connection, cfg, expected_count: int) -> dict
             else:
                 send_to_recycle(c["local"])
                 with conn:
+                    _forget_faces(conn, cfg, [c["file_id"]])
                     conn.execute("DELETE FROM nas_copies WHERE file_id=?", (c["file_id"],))
                     conn.execute("DELETE FROM files WHERE id=?", (c["file_id"],))
                 res["spostati"] += 1
                 _log(cfg, "cestino", c["local"])
+        except NasTimeout as e:
+            res["errori"] += 1
+            stalls += 1
+            _log(cfg, "errore_cestino", f"{c['local']}: {e}")
+            if stalls >= STALL_LIMIT:
+                res["interrotto"] = "Il NAS non risponde: pulizia interrotta. Nessun altro file e' stato eliminato."
+                _log(cfg, "errore_cestino", res["interrotto"])
+                break
         except (OSError, NasError) as e:
             res["errori"] += 1
             _log(cfg, "errore_cestino", f"{c['local']}: {e}")
         job.update(done=n)
     return res
+
+
+def _nas_copy_valid(target: str, expected_hash: str) -> bool:
+    return os.path.isfile(_fs(target)) and file_hash(target) == expected_hash

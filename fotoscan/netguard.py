@@ -45,8 +45,20 @@ _reason: str | None = None     # motivo dell'ultima finestra di download aperta
 _local = threading.local()     # evita la ricorsione mentre si scrive il registro
 
 # Registro dei tentativi verso internet (condiviso da server e sottoprocessi, una riga JSON per evento).
+def _default_cache_dir() -> Path:
+    """Stessa cartella dati del resto dell'app (config.ROOT/cache): nell'eseguibile NON la cartella del programma
+    (_internal, sola lettura se installato in Program Files, cancellata a ogni aggiornamento)."""
+    if getattr(sys, "frozen", False):
+        if sys.platform == "win32":
+            base = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "PhotoScan"
+        else:
+            base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "PhotoScan"
+        return base / "cache"
+    return Path(__file__).resolve().parent.parent / "cache"
+
+
 LOG_FILE = Path(os.environ.get("FOTOSCAN_NETLOG")
-                or Path(os.environ.get("FOTOSCAN_CACHE") or Path(__file__).resolve().parent.parent / "cache") / "rete.jsonl")
+                or Path(os.environ.get("FOTOSCAN_CACHE") or _default_cache_dir()) / "rete.jsonl")
 LOG_MAX_BYTES = 512 * 1024
 _log_lock = threading.Lock()
 _last_logged: dict[tuple, float] = {}  # (host, esito, origine) -> ultima scrittura (niente raffiche)
@@ -60,6 +72,11 @@ class NetworkBlocked(ConnectionRefusedError):
     """Connessione verso internet rifiutata da PhotoScan (sottoclasse di OSError: le librerie la gestiscono)."""
 
 
+class NetworkBlockedLookup(NetworkBlocked, socket.gaierror):
+    """Risoluzione DNS rifiutata: anche un socket.gaierror, cosi' il codice che gestisce "nome non risolvibile"
+    (ma non "connessione rifiutata") si comporta come senza rete."""
+
+
 def _host_str(host: Any) -> str:
     if isinstance(host, (bytes, bytearray)):
         host = bytes(host).decode("ascii", "replace")
@@ -71,7 +88,29 @@ def is_loopback(host: Any) -> bool:
     if h in _LOOPBACK_NAMES:
         return True
     try:
-        return ipaddress.ip_address(h.split("%", 1)[0]).is_loopback
+        ip = ipaddress.ip_address(h.split("%", 1)[0])
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)  # ::ffff:127.0.0.1
+    return ip.is_loopback or bool(mapped is not None and mapped.is_loopback)
+
+
+try:
+    _OWN_NAMES = {socket.gethostname().lower()}
+except OSError:
+    _OWN_NAMES = set()
+_own_ips: set[str] = set()   # indirizzi di questo PC risolti dal suo nome (sempre locali)
+
+
+def _is_local(host: Any) -> bool:
+    """Questo stesso PC: loopback, 0.0.0.0/::, il suo nome host e gli indirizzi a cui il nome risolve."""
+    if is_loopback(host):
+        return True
+    h = _host_str(host)
+    if h in _OWN_NAMES or h in _own_ips:
+        return True
+    try:
+        return ipaddress.ip_address(h.split("%", 1)[0]).is_unspecified
     except ValueError:
         return False
 
@@ -82,7 +121,7 @@ def _is_download_host(host: Any) -> bool:
 
 
 def _allowed(host: Any) -> bool:
-    if is_loopback(host):
+    if _is_local(host):
         return True
     if _window > 0:
         h = _host_str(host)
@@ -153,12 +192,13 @@ def _record(event: str, host: Any, port: Any, allowed: bool) -> None:
         h = _host_str(host)
         key = (h, allowed, fs or lib)
         now = time.monotonic()
-        if now - _last_logged.get(key, -99.0) < 5.0:
-            return
-        _last_logged[key] = now
-        if len(_last_logged) > 512:  # le chiavi scadute (oltre la finestra di 5 s) non servono piu'
-            for k in [k for k, t in _last_logged.items() if now - t >= 5.0]:
-                _last_logged.pop(k, None)
+        with _log_lock:  # _last_logged e' toccato da piu' thread
+            if now - _last_logged.get(key, -99.0) < 5.0:
+                return
+            _last_logged[key] = now
+            if len(_last_logged) > 512:  # le chiavi scadute (oltre la finestra di 5 s) non servono piu'
+                for k in [k for k, t in _last_logged.items() if now - t >= 5.0]:
+                    _last_logged.pop(k, None)
         row = {
             "ts": datetime.now().isoformat(timespec="seconds"),
             "outcome": "consentito" if allowed else "bloccato",
@@ -169,14 +209,26 @@ def _record(event: str, host: Any, port: Any, allowed: bool) -> None:
         with _log_lock:
             LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
             if LOG_FILE.exists() and LOG_FILE.stat().st_size > LOG_MAX_BYTES:
-                keep = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()[-1000:]
-                LOG_FILE.write_text("\n".join(keep) + "\n", encoding="utf-8")
+                _rotate_log()
             with open(LOG_FILE, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(row, ensure_ascii=False) + "\n")
     except Exception:  # noqa: BLE001
         pass
     finally:
         _local.busy = False
+
+
+def _rotate_log() -> None:
+    """Tiene le ultime righe. Scrive un file nuovo e lo sostituisce in un colpo solo (os.replace): chi legge o
+    un altro processo non vede mai un file troncato a meta'. Se la sostituzione non riesce (file in uso
+    da un altro processo, Windows) si riprova alla scrittura successiva."""
+    tmp = LOG_FILE.with_name(f"{LOG_FILE.name}.{os.getpid()}.tmp")
+    try:
+        keep = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()[-1000:]
+        tmp.write_text("\n".join(keep) + "\n", encoding="utf-8")
+        os.replace(tmp, LOG_FILE)
+    except OSError:
+        tmp.unlink(missing_ok=True)
 
 
 def read_log(limit: int = 200) -> list[dict]:
@@ -196,13 +248,21 @@ def read_log(limit: int = 200) -> list[dict]:
     return out
 
 
-def clear_log() -> None:
+def clear_log() -> bool:
+    """Svuota il registro. True se il registro e' davvero vuoto (anche se un altro processo lo stava usando)."""
     with _log_lock:
         _last_logged.clear()
         try:
             LOG_FILE.unlink(missing_ok=True)
+            return True
         except OSError:
             pass
+        try:  # file aperto da un altro processo (Windows): si svuota senza eliminarlo
+            with open(LOG_FILE, "w", encoding="utf-8"):
+                pass
+            return True
+        except OSError:
+            return False
 
 
 def _deny(event: str, host: Any, port: Any = None) -> None:
@@ -211,6 +271,8 @@ def _deny(event: str, host: Any, port: Any = None) -> None:
     _record(event, host, port, allowed=False)
     msg = f"PhotoScan: connessione a internet bloccata ({event} -> {_host_str(host)})"
     log.warning(msg)
+    if event in ("socket.getaddrinfo", "socket.gethostbyname", "socket.gethostbyname_ex", "socket.gethostbyaddr"):
+        raise NetworkBlockedLookup(socket.EAI_NONAME, msg)
     raise NetworkBlocked(msg)
 
 
@@ -227,7 +289,7 @@ def _audit(event: str, args: tuple) -> None:
         port = address[1] if isinstance(address, tuple) and len(address) > 1 else None
         if not _allowed(host):
             _deny(event, host, port)
-        elif not is_loopback(host):
+        elif not _is_local(host):
             _record(event, host, port, allowed=True)
     elif event in ("socket.getaddrinfo", "socket.gethostbyname", "socket.gethostbyname_ex"):
         host = args[0] if args else None
@@ -236,7 +298,7 @@ def _audit(event: str, args: tuple) -> None:
             _deny(event, host, port)
     elif event == "socket.gethostbyaddr":
         host = args[0] if args else None
-        if not is_loopback(host):
+        if not _is_local(host):
             _deny(event, host)
 
 
@@ -246,6 +308,12 @@ def _wrap_getaddrinfo() -> None:
 
     def getaddrinfo(host, *a, **kw):  # type: ignore[no-untyped-def]
         res = orig(host, *a, **kw)
+        if _host_str(host) in _OWN_NAMES:  # il nome di questo PC risolve a indirizzi locali (LAN): restano locali
+            for r in res:
+                try:
+                    _own_ips.add(str(r[4][0]).lower().split("%", 1)[0])
+                except (IndexError, TypeError):
+                    pass
         if _window > 0 and _is_download_host(host):
             for r in res:
                 try:
@@ -318,12 +386,32 @@ def download_window(reason: str):
 def load_pretrained(fn: Callable[..., Any], name: str, **kw: Any) -> Any:
     """`fn(name)` di transformers leggendo SOLO la cache locale; se il modello manca, lo scarica
     (unico caso in cui la rete viene aperta, e solo verso Hugging Face)."""
+    force = False
     try:
         return fn(name, local_files_only=True, **kw)
     except (OSError, ValueError) as e:
         log.info("modello %s non completo in cache (%s): download", name, str(e).splitlines()[0][:160] if str(e) else e)
+    except Exception as e:  # noqa: BLE001 - file in cache illeggibile (es. SafetensorError): si riscarica da capo
+        log.warning("modello %s in cache danneggiato (%s): riscarico", name, type(e).__name__)
+        force = True
     with download_window(f"download del modello {name}"):
-        return fn(name, **kw)
+        return fn(name, force_download=True, **kw) if force else fn(name, **kw)
+
+
+def model_in_cache(model_name: str) -> bool:
+    """Il modello Hugging Face e' in cache locale COMPLETO (config e pesi), non solo una cartella di snapshot
+    lasciata da un download interrotto."""
+    home = os.environ.get("HF_HUB_CACHE") or os.path.join(
+        os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface"), "hub")
+    snaps = Path(home) / ("models--" + model_name.replace("/", "--")) / "snapshots"
+    try:
+        for snap in snaps.iterdir():
+            names = {p.name for p in snap.iterdir()}
+            if "config.json" in names and any(n.endswith((".safetensors", ".bin", ".pt", ".onnx")) for n in names):
+                return True
+    except OSError:
+        return False
+    return False
 
 
 def quiet_onnxruntime(ort: Any) -> None:

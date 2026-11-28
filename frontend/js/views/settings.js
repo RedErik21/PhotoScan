@@ -148,6 +148,7 @@ export async function mount(root, { query = {}, navigate } = {}) {
     if (disposed) return;
     const inv = invalidIds();
     bar.hidden = !dirtyAny();
+    store.set('settingsDirty', dirtyAny());   // letto dalla shell per le scorciatoie da tastiera
     barText.textContent = inv.length
       ? 'Correggi i campi evidenziati per salvare.'
       : 'Hai modifiche non salvate.';
@@ -445,6 +446,7 @@ export async function mount(root, { query = {}, navigate } = {}) {
   return () => {
     disposed = true;
     mountSeq++;
+    store.set('settingsDirty', false);
     window.removeEventListener('popstate', onPopState);
     document.removeEventListener('click', onDocClick, true);
     window.removeEventListener('beforeunload', onBeforeUnload);

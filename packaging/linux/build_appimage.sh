@@ -24,13 +24,17 @@ tar -C "$SRC" \
     -cf - . | tar -C "$WORK" -xf -
 cd "$WORK"
 
-echo "==> Dipendenze (PyTorch solo CPU: nessun CUDA nel pacchetto Linux)"
-pip install --quiet torch torchvision --index-url https://download.pytorch.org/whl/cpu
-pip install --quiet transformers accelerate sentencepiece protobuf numpy pillow pillow-heif \
-    xxhash pandas fastapi "uvicorn[standard]" psutil onnxruntime pyinstaller
+echo "==> Dipendenze (versioni esatte; PyTorch solo CPU: nessun CUDA nel pacchetto Linux)"
+# PyTorch, transformers e compagni: requirements-runtime.txt. Su Linux restano DENTRO l'AppImage (file unico).
+pip install --quiet -r requirements-runtime.txt --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+pip install --quiet numpy==2.5.4 pillow==13.0.0 pillow-heif==1.8.1 xxhash==4.1.0 pandas==3.1.1     fastapi==0.165.0 "uvicorn[standard]==0.54.0" psutil==7.2.2 onnxruntime==1.32.0     pyinstaller==6.22.3 pyinstaller-hooks-contrib==2026.10
 
 echo "==> PyInstaller (cartella onedir)"
 pyinstaller --noconfirm photoscan.spec >/tmp/pyinstaller.log 2>&1 || { tail -80 /tmp/pyinstaller.log; exit 1; }
+
+echo "==> Prova di fumo: l'eseguibile importa torch/transformers e si avvia"
+"$WORK/dist/PhotoScan/PhotoScan" --runtime-check /tmp/runtime-check.json || { cat /tmp/runtime-check.json; exit 1; }
+"$WORK/dist/PhotoScan/PhotoScan" -m fotoscan --help > /dev/null
 
 APPDIR="$WORK/AppDir"
 rm -rf "$APPDIR" && mkdir -p "$APPDIR/usr/bin"

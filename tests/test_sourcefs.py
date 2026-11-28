@@ -123,6 +123,44 @@ def _walk_with_error(top, onerror, err):
     yield from _REAL_WALK(top)
 
 
+def test_rebase_refuses_when_new_root_has_only_part_of_the_files():
+    names = [f"d/{i}.jpg" for i in range(20)]
+    old = _TMP / "completa" / "foto"
+    new = _TMP / "parziale" / "foto"
+    _make_tree(old, names)
+    conn = _connect("rebase_parziale")
+    assert sm.scan_into_db(conn, Config(source_dir=str(old))) == len(names)
+    for n in names[:14]:  # solo il 70%: riscrivere tutti i percorsi farebbe "sparire" gli altri 6 file
+        (new / n).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(old / n, new / n)
+    assert sourcefs.rebase_catalog(conn, str(old), str(new)) == 0
+    paths = [r["path"] for r in conn.execute("SELECT path FROM files")]
+    assert all(p.startswith(sourcefs.norm_root(str(old))) for p in paths), paths
+    for n in names[14:]:  # ora ci sono tutti
+        (new / n).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(old / n, new / n)
+    assert sourcefs.rebase_catalog(conn, str(old), str(new)) == len(names)
+    conn.close()
+
+
+def test_network_mount_missing_detects_unmounted_fstab_share():
+    import io
+
+    fstab = "# nas\n//nas/foto /mnt/nas cifs defaults 0 0\n/dev/sda1 / ext4 defaults 0 1\n"
+    real_open = open
+
+    def fake_open(path, *a, **k):
+        return io.StringIO(fstab) if str(path) == "/etc/fstab" else real_open(path, *a, **k)
+
+    with mock.patch.object(sourcefs.sys, "platform", "linux"), mock.patch("builtins.open", fake_open):
+        with mock.patch.object(sourcefs.os.path, "ismount", return_value=False):
+            assert sourcefs.network_mount_missing("/mnt/nas") is True
+            assert sourcefs.network_mount_missing("/home/utente/foto") is False
+        with mock.patch.object(sourcefs.os.path, "ismount", return_value=True):
+            assert sourcefs.network_mount_missing("/mnt/nas") is False
+    assert sourcefs.network_mount_missing(str(_TMP)) is False  # percorso locale (e su Windows sempre False)
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in list(globals().items()):

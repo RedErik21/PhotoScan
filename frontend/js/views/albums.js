@@ -8,7 +8,7 @@ import { emptyState, errorState } from '../ui/empty-state.js';
 import { skeletonCard, skeletonGrid } from '../ui/skeleton.js';
 import { createTile, updateTile } from '../ui/photo-tile.js';
 import { createSelection, useRangeSelect } from '../ui/selection.js';
-import { formatBytes, formatNumber, plural } from '../ui/format.js';
+import { formatBytes, formatNumber, plural, missingNote } from '../ui/format.js';
 
 const SEARCH_MIN_ALBUMS = 12; // sopra questa soglia compare la ricerca per nome
 const SKELETON_COUNT = 6;
@@ -278,7 +278,9 @@ export async function mount(root, { navigate, signal }) {
     }
   }
 
+  const removing = new Set();   // album con eliminazione in corso (doppio clic)
   async function remove(a) {
+    if (removing.has(a.id)) return;
     dialogOpen = true;
     syncFab();
     let ok;
@@ -294,12 +296,13 @@ export async function mount(root, { navigate, signal }) {
       syncFab();
     }
     if (!ok || !alive) return;
+    removing.add(a.id);
     try {
       await api.del(`/albums/${a.id}`);
       albums = albums.filter((x) => x.id !== a.id);
       render();
       showSnackbar(`Album “${a.name}” eliminato.`);
-    } catch (e) { fail(e); }
+    } catch (e) { fail(e); } finally { removing.delete(a.id); }
   }
 
   async function load() {
@@ -441,6 +444,7 @@ export async function mount(root, { navigate, signal }) {
       sheetShift = e.shiftKey;
       sheetCtrl = e.ctrlKey || e.metaKey;
     }, true);
+    gridEl.addEventListener('keydown', (e) => { sheetShift = e.shiftKey; sheetCtrl = e.ctrlKey || e.metaKey; }, true);
     gridEl.addEventListener('pointerdown', (e) => {
       sheetDrag = null;
       if (e.pointerType === 'mouse' && e.button === 0 && (e.ctrlKey || e.metaKey)) {
@@ -514,7 +518,7 @@ export async function mount(root, { navigate, signal }) {
 
     async function trashSelectedInSheet() {
       const ids = [...sheetSel.ids];
-      if (!ids.length) return;
+      if (!ids.length || trashBtn.disabled) return;
       const ok = await confirmDialog({
         title: `Spostare ${plural(ids.length, 'elemento', 'elementi')} nel Cestino?`,
         message: 'I file selezionati verranno spostati nel Cestino di Windows e rimossi dal catalogo. Potrai sempre recuperarli dal Cestino.',
@@ -526,15 +530,25 @@ export async function mount(root, { navigate, signal }) {
       try {
         const res = await api.post('/cleanup/trash', { file_ids: ids, confirm: true });
         if (done) return;
-        const trashedSet = new Set(ids);
+        // Solo i file davvero spostati escono dall'anteprima: quelli in errore restano (e restano selezionati).
+        const failedIds = new Set((res.errors || []).map((e) => e.id));
+        const okIds = ids.filter((id) => !failedIds.has(id));
+        const trashedSet = new Set(okIds);
         loadedItems = loadedItems.filter((f) => !trashedSet.has(f.id));
-        totalCount = Math.max(loadedItems.length, totalCount - (res.trashed || ids.length));
-        for (const id of ids) {
+        totalCount = Math.max(loadedItems.length, totalCount - (res.trashed ?? okIds.length));
+        for (const id of okIds) {
           gridEl.querySelector(`.photo-tile[data-id="${id}"]`)?.remove();
         }
-        sheetSel.clear();
+        if (failedIds.size) {
+          sheetSel.selectAll([...failedIds]);
+          showSnackbar(`${plural(failedIds.size, 'file non spostato', 'file non spostati')}.`, { error: true });
+        } else {
+          sheetSel.clear();
+        }
         updateCounter();
-        showSnackbar(`${plural(res.trashed || ids.length, 'elemento spostato', 'elementi spostati')} nel Cestino (${formatBytes(res.freed_bytes || 0)} liberati).`);
+        const nOk = res.trashed ?? okIds.length;
+        if (res.missing) showSnackbar(missingNote(res.missing));
+        if (nOk > 0) showSnackbar(`${plural(nOk, 'elemento spostato', 'elementi spostati')} nel Cestino (${formatBytes(res.freed_bytes || 0)} liberati).`);
         onLoaded?.({ total: totalCount, items: loadedItems });
       } catch (e) {
         if (!done) showSnackbar(e.message || 'Impossibile spostare nel Cestino.', { error: true });

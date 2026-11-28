@@ -4,7 +4,9 @@ REGOLA: la cartella sorgente non viene mai modificata. L'unica scrittura e' in o
 """
 from __future__ import annotations
 
+import errno
 import logging
+import math
 import os
 import re
 import shutil
@@ -32,8 +34,28 @@ _MODIF = re.compile(r"^(?P<base>.+?)[-_ ](modificato|modificata)$", re.IGNORECAS
 _EPOCH = datetime(1970, 1, 1)
 
 
+_RESERVED_WIN = re.compile(r"^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])$", re.IGNORECASE)
+MAX_COMPONENT = 120  # lunghezza massima di un nome di file o di cartella (percorsi Windows a 260 caratteri)
+
+
+def _clip(name: str, limit: int) -> str:
+    """Accorcia il nome a `limit` caratteri senza perdere l'estensione (se ragionevole)."""
+    if len(name) <= limit:
+        return name
+    stem, ext = os.path.splitext(name)
+    if len(ext) > 16:  # non e' una vera estensione
+        stem, ext = name, ""
+    return (stem[:max(1, limit - len(ext))].rstrip(". ") or "_") + ext
+
+
 def safe_name(s: str) -> str:
-    s = _BAD.sub("_", s).strip().rstrip(".")
+    """Nome valido su Windows/Linux/NAS: caratteri vietati -> '_', niente punti/spazi finali, nomi riservati
+    (CON, NUL, COM1... anche con estensione) con '_' dopo il nome, lunghezza limitata."""
+    s = _BAD.sub("_", s).strip().rstrip(". ")
+    head, dot, tail = s.partition(".")
+    if _RESERVED_WIN.match(head.rstrip()):
+        s = head + "_" + dot + tail
+    s = _clip(s, MAX_COMPONENT)
     return s or "_"
 
 
@@ -570,8 +592,11 @@ def build_plan(conn: sqlite3.Connection, cfg: Config, embedder: Embedder | None 
         peak = max(_count_days(ev).values())
         return peak >= ratio * typical.get(f"{ev[0][0].year:04d}", 1)
 
+    # coordinate non valide (NaN, fuori scala per EXIF/sidecar corrotti) ignorate: farebbero fallire l'intero piano
     pos_of = {f["id"]: (f["lat"], f["lon"]) for f in files
-              if f["lat"] is not None and f["lon"] is not None and not (f["lat"] == 0 and f["lon"] == 0)}
+              if f["lat"] is not None and f["lon"] is not None and not (f["lat"] == 0 and f["lon"] == 0)
+              and math.isfinite(f["lat"]) and math.isfinite(f["lon"])
+              and -90 <= f["lat"] <= 90 and -180 <= f["lon"] <= 180}
     home = None
     if descr and pos_of:
         votes: dict[str, int] = defaultdict(int)
@@ -604,6 +629,12 @@ def build_plan(conn: sqlite3.Connection, cfg: Config, embedder: Embedder | None 
             rows[fid]["folder"] = folder
     for folder in ctx_members:
         kind_of.setdefault(folder, "context")
+
+    # --- scambi master/duplicato non piu' validi (gruppo cambiato): si tolgono gli override che avevano scritto,
+    # altrimenti il file scelto dall'utente come master resterebbe in _Duplicati con ruolo "originale"
+    from .server.routes_duplicates import release_stale  # import locale: il server dipende da questo modulo
+
+    release_stale(conn, {fid: (int(r["is_dup"]), r["dup_of"]) for fid, r in rows.items()})
 
     # --- override utente (rinomina gruppi / spostamenti singoli)
     rename = {r["old"]: r["new"] for r in conn.execute("SELECT old,new FROM rename_map")}
@@ -698,15 +729,87 @@ def _inside(child: Path, parent: Path) -> bool:
     return False
 
 
+TMP_SUFFIX = ".fotoscan-tmp"
+_MAX_PATH_WIN = 250  # MAX_PATH di Windows (260) con un po' di margine
+
+
 def _copy_atomic(src: str, dest: Path) -> None:
-    """Copia in un file temporaneo e poi rinomina: un'interruzione non lascia mai una copia parziale col nome finale."""
-    tmp = dest.with_name(dest.name + ".fotoscan-tmp")
+    """Copia in un file temporaneo e poi rinomina: un'interruzione non lascia mai una copia parziale col nome finale.
+    Non sovrascrive mai una destinazione comparsa nel frattempo."""
+    tmp = dest.with_name(dest.name + TMP_SUFFIX)
     try:
         shutil.copy2(src, tmp)
+        if os.path.lexists(dest):
+            raise FileExistsError(errno.EEXIST, "la destinazione esiste gia'", str(dest))
         os.replace(tmp, dest)
     except BaseException:  # errore o annullamento: niente residui parziali
         tmp.unlink(missing_ok=True)
         raise
+
+
+def clean_stale_tmp(out: Path) -> int:
+    """Rimuove i *.fotoscan-tmp lasciati da un'interruzione brusca (processo terminato a meta' copia)."""
+    n = 0
+    try:
+        for root, _dirs, names in os.walk(out):
+            for name in names:
+                if name.endswith(TMP_SUFFIX):
+                    try:
+                        os.unlink(os.path.join(root, name))
+                        n += 1
+                    except OSError:
+                        pass
+    except OSError:
+        pass
+    return n
+
+
+def can_hardlink(src_file: str | None, directory: Path) -> bool:
+    """Prova reale: il disco di `directory` accetta un hard link a `src_file`? (FAT32/exFAT/SMB: no, anche a parita'
+    di unita'). Crea e rimuove subito un collegamento di prova. Senza file di prova si presume di si'."""
+    if not src_file or not os.path.exists(src_file) or not directory.is_dir():
+        return True
+    probe = directory / f".fotoscan-link-test-{os.getpid()}"
+    try:
+        os.link(src_file, probe)
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            os.unlink(probe)
+        except OSError:
+            pass
+
+
+def _alt_names(name: str, fid: int, maxlen: int):
+    """Nome finale e poi 'nome_<id>', 'nome_<id>_2', ... (il suffisso non viene mai tagliato)."""
+    base = _clip(safe_name(name), maxlen)
+    yield base
+    stem, ext = os.path.splitext(base)
+    for n in range(0, 1000):
+        tag = f"_{fid}" if n == 0 else f"_{fid}_{n + 1}"
+        yield safe_name(stem[:max(1, maxlen - len(ext) - len(tag))] + tag + ext)
+
+
+def _resolve_dest(dest_dir: Path, r, used: set[str], deep: bool) -> tuple[Path | None, bool]:
+    """Percorso finale del file. Ritorna (destinazione, gia_presente). Prova nome originale, poi nome_<id>...:
+    un candidato occupato da un file DIVERSO (contenuto) non viene mai considerato 'gia' presente'."""
+    maxlen = MAX_COMPONENT
+    if os.name == "nt":
+        maxlen = max(24, min(MAX_COMPONENT, _MAX_PATH_WIN - len(str(dest_dir)) - 1))
+    for name in _alt_names(r["name"], r["file_id"], maxlen):
+        cand = dest_dir / name
+        key = str(cand).lower()
+        if key in used:
+            continue
+        if not cand.exists():
+            used.add(key)
+            return cand, False
+        if _is_same_content(Path(r["path"]), cand, r["size"], r["hash"], deep=deep):
+            used.add(key)
+            return cand, True
+    return None, False
 
 
 def apply_plan(conn: sqlite3.Connection, cfg: Config, apply: bool = False,
@@ -714,20 +817,23 @@ def apply_plan(conn: sqlite3.Connection, cfg: Config, apply: bool = False,
                result: dict[str, int] | None = None) -> dict[str, int]:
     """apply=False: solo simulazione. apply=True: crea l'albero in output_dir (link, fallback copia).
     progress(stage, fatti, totale) viene chiamato PRIMA di ogni file: puo' sollevare eccezioni (annullamento).
-    result: dizionario da riempire in tempo reale (contatori live); se None ne viene creato uno nuovo."""
+    result: dizionario da riempire in tempo reale (contatori live); se None ne viene creato uno nuovo.
+    result['byte_nuovi'] = byte dei file che verrebbero scritti (con hard link non occupano spazio)."""
     src, out = _check_dirs(cfg, need_output=apply)
     rows = conn.execute(
         "SELECT p.file_id, p.folder, f.path, f.name, f.size, f.hash FROM plan p JOIN files f ON f.id=p.file_id "
-        "WHERE p.folder IS NOT NULL ORDER BY p.folder, f.name"
+        "WHERE p.folder IS NOT NULL ORDER BY p.folder, f.name, p.file_id"
     ).fetchall()
     res = result if result is not None else {}
-    res.update({"totale": len(rows), "link": 0, "copie": 0, "gia_presenti": 0, "errori": 0})
+    res.update({"totale": len(rows), "link": 0, "copie": 0, "gia_presenti": 0, "errori": 0, "byte_nuovi": 0})
     used: set[str] = set()
     log_file = None
     if apply:
         out.mkdir(parents=True, exist_ok=True)
+        clean_stale_tmp(out)
         log_file = open(out / "_fotoscan_apply.log", "a", encoding="utf-8")
         log_file.write(f"\n=== {datetime.now().isoformat(timespec='seconds')} apply, {len(rows)} file ===\n")
+    no_space = 0  # errori "disco pieno" consecutivi: dopo alcuni si smette, inutile ritentare ogni file
     try:
         for i, r in enumerate(rows):
             if apply and progress:
@@ -736,20 +842,21 @@ def apply_plan(conn: sqlite3.Connection, cfg: Config, apply: bool = False,
                 res["link" if cfg.link_mode == "hardlink" else "copie"] += 1
                 continue
             dest_dir = out / safe_folder(r["folder"])
-            dest = dest_dir / safe_name(r["name"])
-            key = str(dest).lower()
             # anteprima: niente hash (su 60 GB sarebbe lentissimo); esecuzione: confronto di contenuto
             # apply_verify="full" (predefinito): hash del file gia' presente. "fast" (avanzata): solo dimensione,
             # niente rilettura dell'archivio, ma un file danneggiato di stessa dimensione non viene rilevato.
             deep = apply and getattr(cfg, "apply_verify", "full") != "fast"
-            already = dest.exists() and _is_same_content(Path(r["path"]), dest, r["size"], r["hash"], deep=deep)
-            if key in used or (dest.exists() and not already):
-                dest = dest_dir / safe_name(f"{Path(r['name']).stem}_{r['file_id']}{Path(r['name']).suffix}")
-                key = str(dest).lower()
-            used.add(key)
-            if dest.exists():
+            dest, already = _resolve_dest(dest_dir, r, used, deep)
+            if dest is None:  # nomi alternativi tutti occupati da file diversi: non si sovrascrive nulla
+                res["errori"] += 1
+                if log_file:
+                    log_file.write(f"ERRORE\t{r['path']}\t{dest_dir / r['name']}\tnessun nome libero\n")
+                    log_file.flush()
+                continue
+            if already:
                 res["gia_presenti"] += 1
                 continue
+            res["byte_nuovi"] += int(r["size"] or 0)
             if not apply:
                 res["link" if cfg.link_mode == "hardlink" else "copie"] += 1
                 continue
@@ -760,17 +867,25 @@ def apply_plan(conn: sqlite3.Connection, cfg: Config, apply: bool = False,
                     try:
                         os.link(r["path"], dest)
                         method = "hardlink"
+                    except FileExistsError:
+                        raise  # comparso nel frattempo: mai sovrascrivere
                     except OSError:
                         _copy_atomic(r["path"], dest)
                 else:
                     _copy_atomic(r["path"], dest)
                 res["link" if method == "hardlink" else "copie"] += 1
+                no_space = 0
                 log_file.write(f"{method}\t{r['path']}\t{dest}\n")
             except Exception as e:
                 res["errori"] += 1
                 log_file.write(f"ERRORE\t{r['path']}\t{dest}\t{e}\n")
+                no_space = no_space + 1 if getattr(e, "errno", None) == errno.ENOSPC else 0
+                if no_space >= 3:
+                    res["spazio_esaurito"] = 1
+                    log_file.write("Disco pieno: applicazione interrotta, libera spazio e riapplica.\n")
+                    break
             log_file.flush()
-        if apply and progress:
+        if apply and progress and not res.get("spazio_esaurito"):
             progress("applicazione", len(rows), len(rows))
     finally:
         if log_file:
@@ -788,17 +903,18 @@ def _same_file(a: Path, b: Path) -> bool:
 
 def _is_same_content(src: Path, dest: Path, size: int | None, hash_: str | None, deep: bool = True) -> bool:
     """True se dest e' gia' il file sorgente (hard link) o ne ha lo stesso contenuto.
-    deep=True (esecuzione): confronto dell'hash, la sola dimensione non basta.
+    deep=True (esecuzione): confronto dell'hash, la sola dimensione non basta. Se il catalogo non ha l'hash
+    (file modificato dopo l'indicizzazione) si confrontano sorgente e destinazione.
     deep=False (anteprima): basta la dimensione, per non rileggere tutto l'archivio."""
     if _same_file(src, dest):
         return True
     try:
-        if dest.stat().st_size != size or not hash_:
+        if dest.stat().st_size != size:
             return False
         if not deep:
             return True
         from .scanner_metadata import file_hash
 
-        return file_hash(str(dest)) == hash_
+        return file_hash(str(dest)) == (hash_ or file_hash(str(src)))
     except OSError:
         return False

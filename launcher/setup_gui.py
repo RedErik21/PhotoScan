@@ -22,17 +22,14 @@ from typing import Any
 from setup_photoscan import (
     MODELS,
     RUNTIME_GB,
-    create_desktop_shortcut,
     detect_hardware,
-    download_parts,
-    extract,
+    install,
     installed_state,
-    latest_release,
-    package_parts,
+    list_releases,
     recommend,
+    resolve_exe,
     space_warning,
-    write_config,
-    write_install_marker,
+    version_key,
 )
 
 MODEL_DESC = {
@@ -64,14 +61,7 @@ def _find_asset(*rel_candidates: str) -> Path | None:
     return None
 
 
-def _resolve_exe(app_dir: Path) -> Path:
-    direct = app_dir / "PhotoScan.exe"
-    if direct.exists():
-        return direct
-    nested = app_dir / "PhotoScan" / "PhotoScan.exe"
-    if nested.exists():
-        return nested
-    return direct
+_resolve_exe = resolve_exe
 
 
 def _set_titlebar_theme(window: Any, dark: bool) -> None:
@@ -666,6 +656,7 @@ const S = {{
   data: null,
   runtime: 'cpu',
   model: 'base',
+  version: '',
   warn: null,
   install: {{ running: false, frac: 0, text: 'Preparazione…', done: false, error: null }},
   pollTimer: 0,
@@ -828,6 +819,14 @@ function renderChoose() {{
     </div>`;
   }}).join('');
 
+  const versions = S.data.versions || [];
+  const verHtml = versions.length ? `<p class="sec-label">Versione di PhotoScan</p>
+    <select id="ver-sel" class="choice" style="width:100%;font:inherit;color:inherit">
+      <option value="" ${{S.version ? '' : 'selected'}}>La più recente (consigliata)</option>
+      ${{versions.map((v) => `<option value="${{esc(v.version)}}" ${{S.version === v.version ? 'selected' : ''}}>${{esc(v.version)}}${{v.prerelease ? ' (di prova)' : ''}}${{v.date ? ' · ' + esc(v.date) : ''}}</option>`).join('')}}
+    </select>
+    <p class="choice__desc">Una versione più vecchia di quella installata può non leggere un catalogo creato da una più nuova.</p>` : '';
+
   const modHtml = models.map((m) => {{
     const sel = S.model === m.id ? 'is-selected' : '';
     const bRec = m.id === rec_model ? `<span class="pill pill--ok">Consigliato</span>` : '';
@@ -851,8 +850,11 @@ function renderChoose() {{
     <div class="choices">${{rtHtml}}</div>
     <p class="sec-label">Modello di riconoscimento AI</p>
     <div class="choices">${{modHtml}}</div>
+    ${{verHtml}}
     <div id="space-warn"></div>
   </div>`;
+  const verSel = body.querySelector('#ver-sel');
+  if (verSel) verSel.addEventListener('change', () => {{ S.version = verSel.value; }});
 
   body.querySelectorAll('[data-rt]').forEach((el) => el.addEventListener('click', () => {{
     S.runtime = el.dataset.rt;
@@ -876,7 +878,7 @@ function renderChoose() {{
 async function startInstall() {{
   S.install = {{ running: true, frac: 0.02, text: 'Preparazione dell’installazione…', done: false, error: null }};
   goStep(2);
-  await window.pywebview.api.start_install(S.runtime, S.model);
+  await window.pywebview.api.start_install(S.runtime, S.model, S.version);
   clearInterval(S.pollTimer);
   S.pollTimer = setInterval(pollInstall, 150);
 }}
@@ -952,6 +954,7 @@ async function boot() {{
     S.data = d;
     S.runtime = d.rec_runtime;
     S.model = d.rec_model;
+    S.version = d.want_version || '';
     if (S.step === 0) renderScan();
   }} catch (e) {{
     document.getElementById('body').innerHTML = `<div class="callout callout--err"><span class="callout__ic">${{IC.err}}</span>
@@ -970,7 +973,8 @@ window.addEventListener('pywebviewready', boot);
 # ==============================================================================
 
 class _SetupBridge:
-    def __init__(self, root_dir: Path) -> None:
+    def __init__(self, root_dir: Path, want_version: str | None = None) -> None:
+        self.want_version = want_version or ""
         self.root_dir = root_dir
         self.root_dir.mkdir(parents=True, exist_ok=True)
         self.window: Any = None
@@ -1007,21 +1011,32 @@ class _SetupBridge:
                 {"id": k, "label": v["label"], "download_gb": v["download_gb"], "desc": MODEL_DESC.get(k, "")}
                 for k, v in MODELS.items()
             ],
+            "versions": self._versions(),
+            "want_version": self.want_version,
             "dest_drive": self.root_dir.drive or str(self.root_dir),
             "dest_app": str(self.root_dir / "app"),
         }
+
+    def _versions(self) -> list[dict[str, Any]]:
+        """Elenco delle versioni installabili (vuoto se GitHub non risponde: resta «la più recente»)."""
+        try:
+            rels = sorted(list_releases(), key=lambda r: version_key(r["tag_name"]), reverse=True)
+        except Exception:
+            return []
+        return [{"version": r["tag_name"].lstrip("vV"), "prerelease": bool(r.get("prerelease")),
+                 "date": (r.get("published_at") or "")[:10]} for r in rels]
 
     def check_space(self, runtime: str, model: str) -> str | None:
         if self.hw is None:
             return None
         return space_warning(self.hw, runtime, model)
 
-    def start_install(self, runtime: str, model: str) -> bool:
+    def start_install(self, runtime: str, model: str, version: str = "") -> bool:
         with self._lock:
             if self._install["running"]:
                 return False
             self._install = {"running": True, "frac": 0.02, "text": "Controllo la versione più recente…", "done": False, "error": None}
-        threading.Thread(target=self._run_install, args=(runtime, model), daemon=True).start()
+        threading.Thread(target=self._run_install, args=(runtime, model, version or None), daemon=True).start()
         return True
 
     def poll_install(self) -> dict[str, Any]:
@@ -1033,29 +1048,9 @@ class _SetupBridge:
             self._install["frac"] = float(frac)
             self._install["text"] = text
 
-    def _run_install(self, runtime: str, model: str) -> None:
+    def _run_install(self, runtime: str, model: str, version: str | None = None) -> None:
         try:
-            self._set_prog(0.03, "Controllo la versione più recente…")
-            release = latest_release()
-            version = release["tag_name"].lstrip("vV")
-            app_dir = self.root_dir / "app"
-            same = (self.state and self.state.get("version") == version and self.state.get("runtime") == runtime
-                    and _resolve_exe(app_dir).exists())  # install.json da solo non basta: l'app deve esserci
-            if not same:
-                parts = package_parts(release.get("assets", []), version, runtime)
-                if not parts:
-                    raise RuntimeError(f"La Release {release['tag_name']} non contiene il pacchetto «{runtime}».")
-                dl = self.root_dir / "download"
-                zip_path = download_parts(parts, dl, self._set_prog)
-                self._set_prog(0.95, "Estrazione dei file…")
-                extract(zip_path, app_dir, self._set_prog)
-                shutil.rmtree(dl, ignore_errors=True)
-            else:
-                self._set_prog(0.85, "Versione già presente, aggiorno la configurazione…")
-            write_config(self.root_dir / "config.json", MODELS[model]["id"])
-            write_install_marker(self.root_dir, version, runtime, model)
-            exe = _resolve_exe(app_dir)
-            create_desktop_shortcut(exe)
+            exe = install(self.root_dir, runtime, model, version, progress=self._set_prog)
             self.state = installed_state(self.root_dir)
             self._exe = exe
             with self._lock:
@@ -1075,7 +1070,7 @@ class _SetupBridge:
             self.window.destroy()
 
 
-def _run_webview(root_dir: Path) -> bool:
+def _run_webview(root_dir: Path, want_version: str | None = None) -> bool:
     try:
         import webview
     except ImportError:
@@ -1086,7 +1081,7 @@ def _run_webview(root_dir: Path) -> bool:
                 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("PhotoScan.Setup")
             except Exception:
                 pass
-        bridge = _SetupBridge(root_dir)
+        bridge = _SetupBridge(root_dir, want_version)
         window = webview.create_window(
             "PhotoScan — Installazione guidata",
             html=_build_html(),
@@ -1109,7 +1104,7 @@ def _run_webview(root_dir: Path) -> bool:
 #  Ripiego Tkinter (usato solo se pywebview / WebView2 non è disponibile)
 # ==============================================================================
 
-def _run_tk_fallback(root_dir: Path) -> int:
+def _run_tk_fallback(root_dir: Path, want_version: str | None = None) -> int:
     import tkinter as tk
     from tkinter import messagebox, ttk
 
@@ -1161,22 +1156,8 @@ def _run_tk_fallback(root_dir: Path) -> int:
     def _job() -> None:
         try:
             rt, mod = rt_var.get(), mod_var.get()
-            win.after(0, lambda: status.config(text="Controllo la versione più recente…"))
-            rel = latest_release()
-            ver = rel["tag_name"].lstrip("vV")
-            app_dir = root_dir / "app"
-            if not (state and state.get("version") == ver and state.get("runtime") == rt and _resolve_exe(app_dir).exists()):
-                parts = package_parts(rel.get("assets", []), ver, rt)
-                if not parts:
-                    raise RuntimeError(f"La Release {rel['tag_name']} non ha il pacchetto «{rt}».")
-                dl = root_dir / "download"
-                zp = download_parts(parts, dl, lambda f, t: win.after(0, lambda: (bar.config(value=f * 100), status.config(text=t))))
-                extract(zp, app_dir, lambda f, t: win.after(0, lambda: (bar.config(value=f * 100), status.config(text=t))))
-                shutil.rmtree(dl, ignore_errors=True)
-            write_config(root_dir / "config.json", MODELS[mod]["id"])
-            write_install_marker(root_dir, ver, rt, mod)
-            exe = _resolve_exe(app_dir)
-            create_desktop_shortcut(exe)
+            exe = install(root_dir, rt, mod, want_version,
+                          progress=lambda f, text: win.after(0, lambda: (bar.config(value=f * 100), status.config(text=text))))
             win.after(0, lambda: (bar.config(value=100), status.config(text="Installazione completata."),
                                   launch_btn.config(state="normal", command=lambda: (subprocess.Popen([str(exe)], cwd=str(exe.parent)), win.destroy()))))
         except Exception as e:
@@ -1187,8 +1168,8 @@ def _run_tk_fallback(root_dir: Path) -> int:
     return 0
 
 
-def run_gui() -> int:
+def run_gui(want_version: str | None = None) -> int:
     root_dir = data_root()
-    if _run_webview(root_dir):
+    if _run_webview(root_dir, want_version):
         return 0
-    return _run_tk_fallback(root_dir)
+    return _run_tk_fallback(root_dir, want_version)

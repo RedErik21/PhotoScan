@@ -276,6 +276,118 @@ def test_concurrent_same_file_shared_generation():
     assert c.get(url, params=fresh).status_code == 200
 
 
+# ------------------------------------------------- broken / file particolari
+def _broken(fid: int) -> str | None:
+    conn = dbm.connect(deps.get_cfg().db_path)
+    try:
+        row = conn.execute("SELECT reason FROM broken WHERE file_id=?", (fid,)).fetchone()
+        return row["reason"] if row else None
+    finally:
+        conn.close()
+
+
+def _add_file(name: str, path: Path, kind: str = "image") -> int:
+    conn = dbm.connect(deps.get_cfg().db_path)
+    cur = conn.execute("INSERT INTO files(path,name,kind,size,mtime,date_taken,date_source,status) "
+                       "VALUES(?,?,?,?,?,?,?,?)", (str(path), name, kind, 0, 0.0, "2020-01-01T00:00:00", "exif", "embedded"))
+    conn.commit()
+    conn.close()
+    return cur.lastrowid
+
+
+def test_corrupt_marks_illeggibile_then_recovers():
+    p = SRC / "recupero.jpg"
+    p.write_bytes(b"non e' un jpeg" * 50)
+    fid = _add_file("recupero.jpg", p)
+    c = _client()
+    assert c.get(f"/api/files/{fid}/thumb?size=128").status_code == 200  # segnaposto
+    assert _broken(fid) == "illeggibile"
+    p.write_bytes(_jpeg_bytes(300, 200))  # file sostituito: nuova versione, ora si legge
+    r = c.get(f"/api/files/{fid}/thumb?size=128")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    assert _broken(fid) is None, "miniatura riuscita: il segno 'illeggibile' va tolto"
+
+
+def test_missing_marks_and_return_clears():
+    p = SRC / "va_e_torna.jpg"
+    fid = _add_file("va_e_torna.jpg", p)
+    c = _client()
+    c.get(f"/api/files/{fid}/thumb?size=128")
+    assert _broken(fid) == "mancante"
+    p.write_bytes(_jpeg_bytes(200, 200))
+    assert c.get(f"/api/files/{fid}/thumb?size=128").headers["content-type"] == "image/jpeg"
+    assert _broken(fid) is None
+
+
+def test_offline_volume_not_marked_missing():
+    if os.name != "nt":
+        return  # su Linux la radice esiste sempre: il caso (unita' scollegata) e' solo Windows
+    import string
+    libera = next((d for d in reversed(string.ascii_uppercase) if not Path(f"{d}:\\").exists()), None)
+    if libera is None:
+        return
+    fid = _add_file("offline.jpg", Path(f"{libera}:/foto/offline.jpg"))
+    assert _client().get(f"/api/files/{fid}/thumb?size=128").status_code == 200
+    assert _broken(fid) is None, "disco non raggiungibile: il file non e' 'mancante'"
+
+
+def test_oversized_image_not_marked_broken():
+    from fotoscan.server import routes_media
+
+    p = SRC / "grande.png"
+    Image.new("RGB", (64, 64), (10, 200, 10)).save(p)
+    fid = _add_file("grande.png", p)
+    old = routes_media.MAX_PIXELS
+    routes_media.MAX_PIXELS = 100
+    try:
+        c = _client()
+        assert c.get(f"/api/files/{fid}/thumb?size=128").status_code == 200
+        assert _broken(fid) is None
+        assert c.get(f"/api/files/{fid}/display").status_code == 404
+    finally:
+        routes_media.MAX_PIXELS = old
+
+
+def test_16bit_gray_png_not_white():
+    arr = (np.tile(np.linspace(0, 65535, 200), (200, 1))).astype(np.uint16)
+    p = SRC / "grigio16.png"
+    Image.fromarray(arr).save(p)
+    fid = _add_file("grigio16.png", p)
+    r = _client().get(f"/api/files/{fid}/thumb?size=128")
+    assert r.status_code == 200
+    im = np.asarray(Image.open(io.BytesIO(r.content)).convert("L"))
+    assert 60 < im.mean() < 200 and im[:, :10].mean() < 60 < 150 < im[:, -10:].mean()
+
+
+def test_empty_file_and_ranges():
+    p = SRC / "vuoto.mp4"
+    p.write_bytes(b"")
+    fid = _add_file("vuoto.mp4", p, "video")
+    c = _client()
+    r = c.get(f"/api/files/{fid}/media", headers={"Range": "bytes=0-"})
+    assert r.status_code == 200 and r.content == b""
+    q = SRC / "dieci.bin"
+    q.write_bytes(bytes(range(10)))
+    fid2 = _add_file("dieci.mp4", q, "video")
+    assert c.get(f"/api/files/{fid2}/media", headers={"Range": "bytes=20-"}).status_code == 416
+    r = c.get(f"/api/files/{fid2}/media", headers={"Range": "bytes=8-99"})
+    assert r.status_code == 206 and r.content == bytes([8, 9])
+    r = c.get(f"/api/files/{fid2}/media", headers={"Range": "bytes=0-1,4-5"})  # multiplo: si serve tutto
+    assert r.status_code == 200 and len(r.content) == 10
+
+
+def test_huge_id_is_404_not_500():
+    c = _client()
+    for path in ("thumb", "display", "media", "frames"):
+        assert c.get(f"/api/files/{2**70}/{path}").status_code == 404, path
+
+
+def test_binary_responses_not_gzipped():
+    c = _client()
+    r = c.get(f"/api/files/{IDS['jpeg']}/display", headers={"Accept-Encoding": "gzip"})
+    assert r.status_code == 200 and "content-encoding" not in r.headers
+
+
 if __name__ == "__main__":
     setup_module()
     failed = 0

@@ -22,6 +22,12 @@ def _write(p: Path, data: bytes) -> None:
     p.write_bytes(data)
 
 
+def _place_all(staging: Path, dest: Path, res) -> None:
+    """Piazza tutti i file dello staging (come fa copy_folders, un file alla volta)."""
+    for src in sorted(p for p in staging.rglob("*") if p.is_file()):
+        phone_mtp._place(src, staging, dest, res)
+
+
 def test_move_into_dest_rules() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="phone_test_"))
     staging = tmp / "staging"
@@ -30,9 +36,12 @@ def test_move_into_dest_rules() -> None:
 
     # nuovo file con struttura
     _write(staging / "DCIM" / "Camera" / "IMG_1.jpg", b"aaaa")
-    # gia' presente, stessa dimensione -> saltato
+    # stesso nome e STESSO contenuto -> duplicato, saltato
     _write(staging / "DCIM" / "Camera" / "IMG_2.jpg", b"bbbb")
-    _write(dest / "DCIM" / "Camera" / "IMG_2.jpg", b"xxxx")
+    _write(dest / "DCIM" / "Camera" / "IMG_2.jpg", b"bbbb")
+    # stesso nome e stessa dimensione ma contenuto DIVERSO -> foto diversa: tenuta, rinominata
+    _write(staging / "DCIM" / "Camera" / "IMG_4.jpg", b"dddd")
+    _write(dest / "DCIM" / "Camera" / "IMG_4.jpg", b"xxxx")
     # stesso nome, dimensione diversa -> rinominato
     _write(staging / "DCIM" / "Camera" / "IMG_3.jpg", b"cccccc")
     _write(dest / "DCIM" / "Camera" / "IMG_3.jpg", b"c")
@@ -40,15 +49,191 @@ def test_move_into_dest_rules() -> None:
     _write(staging / "DCIM" / "Camera" / "note.txt", b"x")
 
     res = phone_mtp.ImportResult()
-    phone_mtp._move_into_dest(staging, dest, res)
+    _place_all(staging, dest, res)
 
-    assert res.new_files == 2, res
+    assert res.new_files == 3, res
     assert res.skipped_existing == 1, res
     assert (dest / "DCIM" / "Camera" / "IMG_1.jpg").read_bytes() == b"aaaa"
     assert (dest / "DCIM" / "Camera" / "IMG_3_2.jpg").read_bytes() == b"cccccc"
     assert (dest / "DCIM" / "Camera" / "IMG_3.jpg").read_bytes() == b"c"  # originale intatto
-    assert (dest / "DCIM" / "Camera" / "IMG_2.jpg").read_bytes() == b"xxxx"  # mai sovrascritto
+    assert (dest / "DCIM" / "Camera" / "IMG_4.jpg").read_bytes() == b"xxxx"  # mai sovrascritto
+    assert (dest / "DCIM" / "Camera" / "IMG_4_2.jpg").read_bytes() == b"dddd"  # la foto diversa non va persa
     assert not (dest / "DCIM" / "Camera" / "note.txt").exists()
+    assert not list(dest.rglob("*" + phone_mtp.TMP_SUFFIX)), "file temporaneo lasciato"
+
+
+def test_reimport_of_renamed_variant_is_not_duplicated() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="phone_var_"))
+    staging, dest = tmp / "staging", tmp / "dest"
+    _write(dest / "IMG.jpg", b"prima")
+    _write(dest / "IMG_2.jpg", b"seconda")   # importata la volta scorsa con un numero nel nome
+    _write(staging / "IMG.jpg", b"seconda")   # stessa foto, riportata dal telefono
+    res = phone_mtp.ImportResult()
+    _place_all(staging, dest, res)
+    assert res.new_files == 0 and res.skipped_existing == 1, res
+    assert sorted(p.name for p in dest.iterdir()) == ["IMG.jpg", "IMG_2.jpg"]
+
+
+def _fake_run(messages, staging_files):
+    """Sostituisce phone_mtp._run: scrive i file nello staging e restituisce i messaggi dello script."""
+    def run(args, timeout=None, cancelled=None):
+        staging = Path(args["staging"])
+        for rel, data in staging_files.items():
+            _write(staging / rel, data)
+        for m in messages:
+            if isinstance(m, Exception):
+                raise m
+            yield m
+    return run
+
+
+def _copy_with(messages, staging_files, cancelled=None):
+    tmp = Path(tempfile.mkdtemp(prefix="phone_copy_"))
+    dest = tmp / "dest"
+    orig = phone_mtp._run
+    phone_mtp._run = _fake_run(messages, staging_files)
+    try:
+        res = phone_mtp.copy_folders("P", "S", [["DCIM"]], dest, cancelled=cancelled)
+    finally:
+        phone_mtp._run = orig
+    return dest, res
+
+
+def test_partial_files_never_reach_destination() -> None:
+    msgs = [
+        {"type": "total", "n": 3, "bytes": 12, "skipped": 0},
+        {"type": "file", "i": 1, "rel": "DCIM/ok.jpg", "ok": True, "bytes": 4, "size": 4},
+        # timeout: lo script riporta l'errore ma il file a meta' e' rimasto nello staging
+        {"type": "file", "i": 2, "rel": "DCIM/meta.mp4", "ok": False, "bytes": 0, "size": 8, "error": "timeout nella copia"},
+        # dichiarato ok ma piu' corto di quanto atteso
+        {"type": "file", "i": 3, "rel": "DCIM/corto.jpg", "ok": True, "bytes": 2, "size": 6},
+        {"type": "done"},
+    ]
+    files = {"DCIM/ok.jpg": b"1234", "DCIM/meta.mp4": b"12", "DCIM/corto.jpg": b"12"}
+    dest, res = _copy_with(msgs, files)
+    assert sorted(p.name for p in dest.rglob("*") if p.is_file()) == ["ok.jpg"], list(dest.rglob("*"))
+    assert res.copied == 1 and res.new_files == 1 and len(res.errors) == 2, res
+    assert not (dest / phone_mtp.STAGING_NAME).exists()
+
+
+def test_cancel_discards_file_in_flight() -> None:
+    msgs = [
+        {"type": "total", "n": 2, "bytes": 8, "skipped": 0},
+        {"type": "file", "i": 1, "rel": "DCIM/a.jpg", "ok": True, "bytes": 4, "size": 4},
+        {"type": "file", "i": 2, "rel": "DCIM/b.jpg", "ok": True, "bytes": 4, "size": 4},
+    ]
+    files = {"DCIM/a.jpg": b"1234", "DCIM/b.jpg": b"5678", "DCIM/c.mp4": b"12"}  # c: copia in corso, non dichiarata
+    seen = {"n": 0}
+
+    def cancelled():
+        seen["n"] += 1
+        return seen["n"] > 2   # annullato dopo il primo file
+
+    dest, res = _copy_with(msgs, files, cancelled=cancelled)
+    names = sorted(p.name for p in dest.rglob("*") if p.is_file())
+    assert names == ["a.jpg"], names
+
+
+def test_phone_unplugged_midway_keeps_done_files_and_reports() -> None:
+    msgs = [
+        {"type": "total", "n": 2, "bytes": 8, "skipped": 0},
+        {"type": "file", "i": 1, "rel": "DCIM/a.jpg", "ok": True, "bytes": 4, "size": 4},
+        phone_mtp.PhoneError("Telefono scollegato o bloccato: importazione interrotta."),
+    ]
+    dest, res = _copy_with(msgs, {"DCIM/a.jpg": b"1234", "DCIM/b.jpg": b"56"})
+    assert sorted(p.name for p in dest.rglob("*") if p.is_file()) == ["a.jpg"]
+    assert "scollegato" in res.aborted and res.new_files == 1, res
+
+
+def test_args_go_through_a_file_not_the_environment() -> None:
+    """Su Windows una variabile d'ambiente e' limitata a 32 KB: la lista dei file da saltare puo' essere piu' lunga."""
+    import io
+    import json as _json
+
+    if sys.platform != "win32":
+        return
+    captured = {}
+
+    class FakeProc:
+        stdout, stderr = io.StringIO(""), io.StringIO("")
+
+        def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
+            return 0
+
+        def kill(self):
+            pass
+
+    def fake_popen(cmd, **kw):
+        env = kw["env"]
+        captured["file"] = env.get("FOTOSCAN_PHONE_ARGS_FILE")
+        captured["no_env"] = "FOTOSCAN_PHONE_ARGS" not in env
+        captured["data"] = _json.loads(Path(captured["file"]).read_text(encoding="utf-8"))
+        return FakeProc()
+
+    skip = [f"DCIM/Camera/IMG_{i:06d}_con_nome_lungo.jpg" for i in range(1500)]   # circa 70 KB di JSON
+    orig = phone_mtp.subprocess.Popen
+    phone_mtp.subprocess.Popen = fake_popen
+    try:
+        list(phone_mtp._run({"action": "copy", "skip": skip}))
+    finally:
+        phone_mtp.subprocess.Popen = orig
+    assert captured["no_env"] and captured["data"]["skip"] == skip
+    assert not Path(captured["file"]).exists(), "file degli argomenti non rimosso"
+
+
+def test_run_times_out_on_silent_phone() -> None:
+    import io
+
+    if sys.platform != "win32":
+        return
+
+    class Hang(io.StringIO):
+        def __iter__(self):
+            import time
+            time.sleep(5)
+            return iter(())
+
+    class FakeProc:
+        stdout, stderr = Hang(""), io.StringIO("")
+
+        def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            pass
+
+    orig = phone_mtp.subprocess.Popen
+    phone_mtp.subprocess.Popen = lambda *a, **k: FakeProc()
+    try:
+        try:
+            list(phone_mtp._run({"action": "list"}, timeout=1.0))
+        except phone_mtp.PhoneError as e:
+            assert "non risponde" in str(e)
+        else:
+            raise AssertionError("nessun timeout")
+    finally:
+        phone_mtp.subprocess.Popen = orig
+
+
+def test_dest_must_be_absolute() -> None:
+    from fastapi import HTTPException
+
+    from fotoscan.server import routes_phone as rp
+
+    for bad in ("foto/telefono", "relativo"):
+        try:
+            rp._check_dest(bad)
+        except HTTPException as e:
+            assert e.status_code == 400
+        else:
+            raise AssertionError(f"destinazione relativa accettata: {bad}")
+    assert rp._check_dest(str(Path(tempfile.mkdtemp(prefix="phone_dest_")) / "x"))
 
 
 def test_classify_nome_e_dimensione() -> None:
@@ -142,6 +327,13 @@ def test_anteprima_lista_completa() -> None:
 
 if __name__ == "__main__":
     test_move_into_dest_rules()
+    test_reimport_of_renamed_variant_is_not_duplicated()
+    test_partial_files_never_reach_destination()
+    test_cancel_discards_file_in_flight()
+    test_phone_unplugged_midway_keeps_done_files_and_reports()
+    test_args_go_through_a_file_not_the_environment()
+    test_run_times_out_on_silent_phone()
+    test_dest_must_be_absolute()
     test_classify_nome_e_dimensione()
     test_storico_importazioni()
     test_scelta_cartelle_senza_duplicati()

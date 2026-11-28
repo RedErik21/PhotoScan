@@ -13,7 +13,7 @@ import { createSelection, selectionBar, useRangeSelect } from '../ui/selection.j
 import { createTile, updateTile } from '../ui/photo-tile.js';
 import { VirtualGrid } from '../ui/virtual-grid.js';
 import { createScrubber } from '../ui/scrubber.js';
-import { formatBytes, formatDay, formatMonth, formatNumber, plural, mesiNomi } from '../ui/format.js';
+import { formatBytes, formatDay, formatMonth, formatNumber, plural, mesiNomi, missingNote } from '../ui/format.js';
 import { openViewer } from './viewer.js';
 
 const FILTERS = [
@@ -139,7 +139,11 @@ export async function mount(root, ctx) {
   dupHintEl.hidden = state.filter !== 'duplicates';
   // File non utilizzabili (mancanti sul disco o illeggibili): spunta per nasconderli + rimozione dal catalogo.
   const BROKEN_KEY = 'fs.gallery.hideBroken';
-  let hideBroken = localStorage.getItem(BROKEN_KEY) !== '0';   // predefinito: nascosti
+  // Storage sempre in try/catch: puo' essere bloccato o pieno.
+  const store = (area) => { try { return globalThis[area]; } catch { return null; } };
+  const readKey = (area, k) => { try { return store(area)?.getItem(k) ?? null; } catch { return null; } };
+  const writeKey = (area, k, v) => { try { store(area)?.setItem(k, v); } catch { /* ignora */ } };
+  let hideBroken = readKey('localStorage', BROKEN_KEY) !== '0';   // predefinito: nascosti
   const brokenCheck = h('md-checkbox', { 'touch-target': 'wrapper', 'aria-label': 'Nascondi i file danneggiati' });
   brokenCheck.checked = hideBroken;
   const brokenLabel = h('span', { class: 'gallery-broken__label' }, 'Nascondi danneggiati');
@@ -154,7 +158,7 @@ export async function mount(root, ctx) {
   brokenWrap.hidden = true;
   brokenCheck.addEventListener('change', () => {
     hideBroken = brokenCheck.checked;
-    localStorage.setItem(BROKEN_KEY, hideBroken ? '1' : '0');
+    writeKey('localStorage', BROKEN_KEY, hideBroken ? '1' : '0');
     selection.clear();
     load();
   });
@@ -256,6 +260,9 @@ export async function mount(root, ctx) {
     if (fav) scheduleFavSync(fav.closest('.photo-tile'));
   };
   const onCaptureKey = (e) => {
+    // L'apertura da tastiera non e' un click: lo stato dei modificatori non deve restare quello dell'ultimo clic.
+    lastShift = e.shiftKey;
+    lastCtrl = e.ctrlKey || e.metaKey;
     if (e.key === 'f' || e.key === 'F') scheduleFavSync(e.target.closest?.('.photo-tile'));
     if (e.key === 'Delete' && selection.count > 0) { e.preventDefault(); trashSelection(); }
   };
@@ -397,7 +404,7 @@ export async function mount(root, ctx) {
   let brokenCount = 0;
   async function refreshBroken({ check = false } = {}) {
     try {
-      const doCheck = check || !sessionStorage.getItem('fs.brokenChecked');
+      const doCheck = check || !readKey('sessionStorage', 'fs.brokenChecked');
       let r;
       if (doCheck) {
         const job = await waitJob(await api.post('/library/broken/check'));
@@ -405,7 +412,7 @@ export async function mount(root, ctx) {
       } else {
         r = await api.get('/library/broken');
       }
-      if (doCheck) sessionStorage.setItem('fs.brokenChecked', '1');
+      if (doCheck) writeKey('sessionStorage', 'fs.brokenChecked', '1');
       if (destroyed) return;
       const before = brokenCount;
       brokenCount = r.total || 0;
@@ -773,9 +780,19 @@ export async function mount(root, ctx) {
     }
   }
 
+  let trashing = false;   // evita una seconda richiesta (tasto Canc/pulsante) mentre la prima e' in corso
   async function trashSelection() {
     const ids = [...selection.ids];
-    if (!ids.length) return;
+    if (!ids.length || trashing) return;
+    trashing = true;
+    try {
+      await trashSelectionNow(ids);
+    } finally {
+      trashing = false;
+    }
+  }
+
+  async function trashSelectionNow(ids) {
     const ok = await confirmDialog({
       title: `Spostare ${plural(ids.length, 'elemento', 'elementi')} nel Cestino?`,
       message: 'I file selezionati verranno spostati nel Cestino di Windows e rimossi dal catalogo. Potrai sempre recuperarli dal Cestino.',
@@ -788,6 +805,7 @@ export async function mount(root, ctx) {
       if (destroyed) return;
       selection.clear();
       showSnackbar(`${plural(res.trashed || ids.length, 'elemento spostato', 'elementi spostati')} nel Cestino (${formatBytes(res.freed_bytes || 0)} liberati).`);
+      if (res.missing) showSnackbar(missingNote(res.missing));
       load({ keep: firstVisible, silent: true });
     } catch (err) {
       if (!destroyed) showSnackbar(err?.message || 'Impossibile spostare nel Cestino', { error: true });

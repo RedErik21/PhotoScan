@@ -58,3 +58,11 @@ export function formatEtaEnd(sec) {
   const day = today ? '' : `${end.toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric', month: 'short' })} `;
   return `${eta} · fine verso le ${day}${hm}`;
 }
+
+/** Nota per i file gia' spariti dal disco (campo `missing` di /cleanup/trash): tolti dal catalogo, non cestinati. */
+export function missingNote(n) {
+  if (!n) return '';
+  return n === 1
+    ? '1 file non c’era più sul disco: è stato tolto dal catalogo (non è finito nel Cestino).'
+    : `${formatNumber(n)} file non c’erano più sul disco: sono stati tolti dal catalogo (non sono finiti nel Cestino).`;
+}

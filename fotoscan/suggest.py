@@ -56,6 +56,9 @@ def assign_visual(conn: sqlite3.Connection, ids: np.ndarray, mat: np.ndarray, ta
     labels = visual_labels(conn)
     if not labels or len(ids) == 0:
         return {}
+    labels = [l for l in labels if l["vec"].shape[0] == mat.shape[1]]  # etichette di un altro modello: ignorate
+    if not labels:
+        return {}
     V = np.stack([l["vec"] for l in labels])
     thr = np.array([l["thr"] for l in labels], dtype=np.float32)
     sims = mat @ V.T
@@ -136,6 +139,8 @@ def _discover(conn, cfg, embedder, ids, mat, say) -> list[dict]:
     Tv = label_vectors(conn, [_prompt(n) for n in names], embedder, cfg)
     known = [from_blob(r["vec"]) for r in conn.execute("SELECT vec FROM visual_labels")]
     known += [from_blob(r["vec"]) for r in conn.execute("SELECT vec FROM label_dismissed")]
+    # vettori salvati con un altro modello (dimensione diversa, es. "ignorati" dopo un cambio modello): non confrontabili
+    known = [v for v in known if v.shape[0] == mat.shape[1]]
     K = np.stack(known) if known else None
 
     out = []

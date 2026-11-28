@@ -9,10 +9,11 @@ import os
 import re
 import sqlite3
 import subprocess
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -36,7 +37,9 @@ try:
 except Exception:  # pragma: no cover
     xxhash = None
 
-Image.MAX_IMAGE_PIXELS = None  # niente falsi allarmi su panorami enormi
+# Limite finito: un'immagine da miliardi di pixel (o una decompression bomb) decodificata da piu' thread insieme
+# esaurirebbe la RAM. 500 Mpx lascia passare qualunque panorama reale; oltre il doppio PIL rifiuta il file.
+Image.MAX_IMAGE_PIXELS = 500_000_000
 
 _NO_WINDOW = 0x08000000 if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
 
@@ -61,6 +64,40 @@ def _unfs(path: str) -> str:
     if path.startswith("\\\\?\\"):
         return path[4:]
     return path
+
+
+class SourceUnavailable(FileNotFoundError):
+    """La cartella sorgente (disco rimovibile, NAS) e' sparita durante l'indicizzazione: i file non letti
+    restano da elaborare (niente errori permanenti) e l'indicizzazione si ferma."""
+
+
+def source_gone(cfg: Config, exc: BaseException) -> bool:
+    """True se un OSError su un file dipende dal fatto che la sorgente non risponde piu' (disco scollegato)."""
+    return isinstance(exc, OSError) and bool(cfg.source_dir) and not sourcefs.reachable(cfg.source_dir)
+
+
+def source_lost_error(cfg: Config) -> SourceUnavailable:
+    return SourceUnavailable(f"La cartella sorgente non risponde piu' ({cfg.source_dir}): disco scollegato o rete "
+                             "caduta. Il catalogo e' integro: ricollega il disco e riprendi l'analisi.")
+
+
+# Cartelle di servizio di NAS e sistemi operativi (miniature, cestini, indici): niente foto dell'utente.
+_SKIP_DIRS = {"_fotoscan_tmp_telefono", "@eadir", "@recycle", "@recently-snapshot", "#recycle", "#snapshot",
+              "$recycle.bin", "system volume information", ".spotlight-v100", ".fseventsd", ".appledouble",
+              ".thumbnails", ".synologyworkingdirectory"}
+
+
+def _skip_dir(name: str) -> bool:
+    n = name.lower()
+    return n in _SKIP_DIRS or n.startswith(".trash") or n.startswith("@syno")
+
+
+def _mtime_iso(mtime) -> str:
+    """Data da mtime senza eccezioni: un mtime negativo o enorme (exFAT, zip, orologio sbagliato) fa fallire fromtimestamp."""
+    try:
+        return datetime.fromtimestamp(float(mtime)).isoformat(timespec="seconds")
+    except (OSError, OverflowError, ValueError, TypeError):
+        return datetime(1970, 1, 1).isoformat(timespec="seconds")
 
 
 @dataclass
@@ -91,7 +128,7 @@ def list_media(source: str, cfg: Config, subdir: str | None = None) -> list[Path
     for dirpath, dirs, files in os.walk(_fs(str(root)), onerror=walk_errors.append):
         # cartella di appoggio dell'import dal telefono: i file vengono spostati altrove a fine copia,
         # indicizzarli lascerebbe voci orfane (miniature grigie) quando la cartella viene svuotata
-        dirs[:] = [d for d in dirs if d != "_fotoscan_tmp_telefono"]
+        dirs[:] = [d for d in dirs if not _skip_dir(d)]
         for name in files:
             if name.startswith("._"):
                 continue
@@ -114,6 +151,7 @@ def scan_into_db(conn: sqlite3.Connection, cfg: Config, limit: int | None = None
     # Cache dei JSON per cartella: va svuotata a ogni scansione, altrimenti i sidecar aggiunti dopo
     # il primo scan (nello stesso processo server) non vengono trovati.
     _json_dir_cache.clear()
+    _json_exact_cache.clear()
     root = sourcefs.norm_root(cfg.source_dir)
     # stessa cartella con un altro nome di accesso (lettera, UNC, mount): riallinea il catalogo
     # prima di confrontare i file, cosi' non si reindicizza tutto
@@ -134,32 +172,56 @@ def scan_into_db(conn: sqlite3.Connection, cfg: Config, limit: int | None = None
     total = len(paths)
     if progress:
         progress("scansione", 0, total)
+    # Le stat (lente su NAS) avvengono fuori da qualunque transazione: le scritture del blocco si fanno tutte
+    # insieme subito prima del commit, cosi' il lock di scrittura del catalogo dura millisecondi.
+    ops: list[tuple] = []
+
+    def apply_ops() -> None:
+        for op in ops:
+            if op[0] == "reset":
+                _reset_changed(conn, cfg, op[1], op[2])
+            else:
+                conn.execute("INSERT OR IGNORE INTO files(path,name,kind,size,mtime) VALUES(?,?,?,?,?)", op[1])
+        ops.clear()
+        conn.commit()
+
     for i, p in enumerate(paths):
         sp = str(p)
         row = known.get(sp)
         try:
-            st = p.stat()
+            st = os.stat(_fs(sp))  # _fs: percorsi >260 caratteri su Windows
         except OSError:
             continue
         if row is not None:
             # gia' nel catalogo: se e' cambiato (size o mtime) va rielaborato da capo
-            if row["size"] != st.st_size or row["mtime"] is None or abs(row["mtime"] - st.st_mtime) >= 1:
-                _reset_changed(conn, cfg, row["id"], st)
+            if row["size"] != st.st_size or _mtime_changed(row["mtime"], st.st_mtime):
+                ops.append(("reset", row["id"], st))
                 new += 1
         else:
             kind = "video" if p.suffix.lower() in VIDEO_EXT else "image"
-            conn.execute("INSERT OR IGNORE INTO files(path,name,kind,size,mtime) VALUES(?,?,?,?,?)",
-                         (sp, p.name, kind, st.st_size, st.st_mtime))
+            ops.append(("new", (sp, p.name, kind, st.st_size, st.st_mtime)))
             new += 1
         if (i + 1) % 500 == 0:  # progresso anche quando i file sono gia' noti (scansioni lunghe)
-            conn.commit()
+            apply_ops()
             if progress:
                 progress("scansione", i + 1, total)
-    conn.commit()
+    apply_ops()
     dbm.set_meta(conn, "catalog_root", root)  # percorsi del catalogo registrati sotto questa radice
     if progress:
         progress("scansione", total, total)
     return new
+
+
+def _mtime_changed(old: float | None, new: float) -> bool:
+    """mtime diverso (>= 1 s). Una differenza di ore intere (<= 14 h) con stessa dimensione e' il cambio ora legale
+    o il fuso di un filesystem FAT: non e' una modifica (altrimenti due volte l'anno si rifarebbe tutto)."""
+    if old is None:
+        return True
+    d = abs(old - new)
+    if d < 1:
+        return False
+    hours = round(d / 3600)
+    return not (1 <= hours <= 14 and abs(d - hours * 3600) < 2.5)
 
 
 def _reset_changed(conn: sqlite3.Connection, cfg: Config, fid: int, st: os.stat_result) -> None:
@@ -170,8 +232,14 @@ def _reset_changed(conn: sqlite3.Connection, cfg: Config, fid: int, st: os.stat_
     conn.execute("DELETE FROM embeddings WHERE file_id=?", (fid,))
     conn.execute("DELETE FROM faces WHERE file_id=?", (fid,))
     conn.execute("DELETE FROM faces_done WHERE file_id=?", (fid,))
-    for f in cfg.frames_dir.glob(f"{fid}_*.jpg"):
-        f.unlink(missing_ok=True)
+    try:
+        for f in cfg.frames_dir.glob(f"{fid}_*.jpg"):
+            try:
+                f.unlink(missing_ok=True)
+            except OSError:  # file aperto da un'altra app (Windows): il fotogramma si rigenera comunque
+                pass
+    except OSError:
+        pass
 
 
 # -------------------------------------------------------------------- hash
@@ -209,7 +277,7 @@ def _parse_exif_date(val) -> str | None:
         return None
     s = str(val).strip().replace("\x00", "")
     # alcuni software scrivono doppi spazi o spazi finali: tollerati
-    m = re.match(r"(\d{4})[:\-](\d{2})[:\-](\d{2})\s+(\d{2}):(\d{2}):(\d{2})", s)
+    m = re.match(r"(\d{4})[:\-](\d{2})[:\-](\d{2})[T\s]+(\d{2}):(\d{2}):(\d{2})", s)
     if not m:
         return None
     try:
@@ -217,6 +285,38 @@ def _parse_exif_date(val) -> str | None:
     except ValueError:
         return None
     if dt.year < 1990 or dt.year > datetime.now().year + 1:
+        return None
+    return dt.isoformat(timespec="seconds")
+
+
+_VIDEO_DATE = re.compile(r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:[.,]\d+)?\s*(Z|[+-]\d{2}(?::?\d{2})?)?$")
+
+
+def parse_video_date(val) -> str | None:
+    """creation_time di ffprobe ('2021-05-01T10:00:00.000000Z') -> ora locale ISO senza fuso, come le date EXIF.
+    L'orario dei contenitori MP4/MOV e' UTC: senza conversione i video serali finirebbero nel giorno sbagliato."""
+    if not val:
+        return None
+    m = _VIDEO_DATE.match(str(val).strip())
+    if not m:
+        return None
+    try:
+        dt = datetime(*map(int, m.groups()[:6]))
+    except ValueError:
+        return None
+    tz = m.group(7)
+    if tz:
+        if tz == "Z":
+            off = timedelta(0)
+        else:
+            sign = -1 if tz[0] == "-" else 1
+            digits = tz[1:].replace(":", "")
+            off = sign * timedelta(hours=int(digits[:2]), minutes=int(digits[2:4] or 0))
+        try:
+            dt = dt.replace(tzinfo=timezone(off)).astimezone().replace(tzinfo=None)  # fuso del PC
+        except (OSError, OverflowError, ValueError):
+            dt = dt - off  # conversione di sistema impossibile: si lascia in UTC
+    if dt.year < 1990 or dt.year > datetime.now().year + 1:  # 1904/1970 = orologio non impostato
         return None
     return dt.isoformat(timespec="seconds")
 
@@ -254,18 +354,23 @@ def read_image_meta(path: str, data: bytes | None = None) -> Meta:
     src = io.BytesIO(data) if data is not None else _fs(path)
     with Image.open(src) as im:
         meta.width, meta.height = im.size
-        exif = im.getexif()
-        if exif:
-            sub = exif.get_ifd(0x8769) if hasattr(exif, "get_ifd") else {}
-            for tag, src in ((36867, sub), (36868, sub), (306, exif)):  # DateTimeOriginal, CreateDate, DateTime
-                d = _parse_exif_date(src.get(tag))
-                if d:
-                    meta.date, meta.date_source = d, "exif"
-                    break
-            gps = exif.get_ifd(0x8825) if hasattr(exif, "get_ifd") else {}
-            if gps and 2 in gps and 4 in gps:
-                meta.lat = _gps_to_deg(gps[2], gps.get(1))
-                meta.lon = _gps_to_deg(gps[4], gps.get(3))
+        try:  # EXIF corrotto: dimensioni gia' lette restano, la data si cerca altrove
+            exif = im.getexif()
+            if exif:
+                sub = exif.get_ifd(0x8769) if hasattr(exif, "get_ifd") else {}
+                for tag, tags in ((36867, sub), (36868, sub), (306, exif)):  # DateTimeOriginal, CreateDate, DateTime
+                    d = _parse_exif_date(tags.get(tag))
+                    if d:
+                        meta.date, meta.date_source = d, "exif"
+                        break
+                gps = exif.get_ifd(0x8825) if hasattr(exif, "get_ifd") else {}
+                if gps and 2 in gps and 4 in gps:
+                    lat = _gps_to_deg(gps[2], gps.get(1))
+                    lon = _gps_to_deg(gps[4], gps.get(3))
+                    if lat is not None and lon is not None and abs(lat) <= 90 and abs(lon) <= 180 and lat == lat and lon == lon:
+                        meta.lat, meta.lon = lat, lon
+        except Exception as e:  # noqa: BLE001
+            log.debug("EXIF illeggibile in %s: %s", path, e)
     return meta
 
 
@@ -285,16 +390,22 @@ def probe_video(path: str, ffprobe: str | None) -> Meta:
         if s.get("codec_type") == "video":
             meta.width, meta.height = s.get("width"), s.get("height")
             break
-    ct = (fmt.get("tags") or {}).get("creation_time")
-    if ct:
-        d = _parse_exif_date(ct.replace("Z", "")[:19])
-        if d and not d.startswith("1970") and not d.startswith("1904"):
-            meta.date, meta.date_source = d, "video"
+    tags = fmt.get("tags") or {}
+    ct = tags.get("creation_time")
+    if not ct:  # alcuni muxer scrivono il tag solo sullo stream video
+        for s in data.get("streams", []):
+            ct = (s.get("tags") or {}).get("creation_time")
+            if ct:
+                break
+    d = parse_video_date(ct)
+    if d:
+        meta.date, meta.date_source = d, "video"
     return meta
 
 
 _SIDECAR_SUFFIX = ".supplemental-metadata"
 _json_dir_cache: dict[str, list[tuple[str, str]]] = {}
+_json_exact_cache: dict[str, dict[str, str]] = {}  # per cartella: nome (minuscolo, senza .json) -> percorso
 
 
 def find_sidecar(path: str) -> str | None:
@@ -308,8 +419,10 @@ def find_sidecar(path: str) -> str | None:
         except OSError:
             entries = []
         _json_dir_cache[d] = entries
+        _json_exact_cache[d] = {s: p for s, p in entries}
     if not entries:
         return None
+    exact = _json_exact_cache.get(d) or {}
     stem, ext = os.path.splitext(name)
     bases = [name]
     core, k = stem, None
@@ -329,6 +442,10 @@ def find_sidecar(path: str) -> str | None:
     for base in bases:
         b = base.lower()
         full = b + _SIDECAR_SUFFIX
+        # corsia veloce (caso comune): nome esatto, senza scorrere tutti i JSON della cartella (Takeout: migliaia)
+        hit = exact.get(full) or exact.get(b)
+        if hit:
+            return hit
         best = None
         for s, p in entries:
             # esatto | con suffisso (anche troncato) | nome lungo troncato da Google (~46 caratteri)
@@ -383,7 +500,11 @@ def read_sidecar(path: str) -> tuple[str | None, float | None, float | None]:
 
 def extract_metadata(path: str, kind: str, name: str, mtime: float, ffprobe: str | None,
                      data: bytes | None = None) -> Meta:
-    meta = read_image_meta(path, data) if kind == "image" else probe_video(path, ffprobe)
+    try:
+        meta = read_image_meta(path, data) if kind == "image" else probe_video(path, ffprobe)
+    except Exception as e:  # file/EXIF/ffprobe illeggibile: la data si ricava da sidecar, nome o mtime
+        log.warning("metadati non leggibili %s: %s", path, e)
+        meta = Meta()
     if meta.date_source != "exif":
         try:
             sdate, slat, slon = read_sidecar(path)
@@ -399,46 +520,60 @@ def extract_metadata(path: str, kind: str, name: str, mtime: float, ffprobe: str
         if d:
             meta.date, meta.date_source = d, "filename"
     if not meta.date:
-        meta.date = datetime.fromtimestamp(mtime).isoformat(timespec="seconds")
+        meta.date = _mtime_iso(mtime)
         meta.date_source = "mtime"
         meta.data_incerta = True
     return meta
 
 
+_LOST = "sorgente-persa"  # segnaposto: file non letto perche' il disco e' sparito (resta 'new', niente errore)
+
+
 def process_metadata(conn: sqlite3.Connection, cfg: Config,
                      progress: Callable[[str, int, int], None] | None = None) -> int:
-    """status new -> meta (oppure error). Riprendibile: elabora solo status='new'."""
+    """status new -> meta (oppure error). Riprendibile: elabora solo status='new'.
+
+    Se la sorgente sparisce (disco USB scollegato, NAS caduto) i file non letti restano 'new' e alla fine
+    viene sollevata SourceUnavailable: nessun errore permanente da ripulire a mano."""
     _, ffprobe = cfg.find_ffmpeg()
     rows = conn.execute("SELECT id,path,kind,name,mtime FROM files WHERE status='new' ORDER BY id").fetchall()
     total, done = len(rows), 0
+    lost = threading.Event()
     if progress:  # fase sempre dichiarata, anche senza righe: la UI non resta sulla fase precedente
         progress("metadati", 0, total)
 
     def work(r):
+        if lost.is_set():
+            return r["id"], None, None, _LOST
         try:
             if r["kind"] == "image":
                 h, data = hash_and_bytes(r["path"])  # una lettura sola per hash ed EXIF
             else:
                 h, data = file_hash(r["path"]), None
         except Exception as e:  # file illeggibile
+            if source_gone(cfg, e):
+                lost.set()
+                return r["id"], None, None, _LOST
             return r["id"], None, None, f"hash: {e}"
         try:
             m = extract_metadata(r["path"], r["kind"], r["name"], r["mtime"], ffprobe, data)
-        except Exception as e:  # EXIF corrotto / video non leggibile: data da nome/mtime, non e' fatale
+        except Exception as e:  # difesa ulteriore: la data si ricava da nome/mtime, non e' fatale
             log.warning("metadati non leggibili %s: %s", r["path"], e)
             m = Meta()
             d = date_from_filename(r["name"])
             if d:
                 m.date, m.date_source = d, "filename"
             else:
-                m.date = datetime.fromtimestamp(r["mtime"]).isoformat(timespec="seconds")
-                m.date_source, m.data_incerta = "mtime", True
+                m.date, m.date_source, m.data_incerta = _mtime_iso(r["mtime"]), "mtime", True
         return r["id"], h, m, None
 
     with ThreadPoolExecutor(max_workers=cfg.workers) as ex:
         for batch_start in range(0, total, 400):
             batch = rows[batch_start:batch_start + 400]
-            for fid, h, m, err in ex.map(work, batch):
+            results = list(ex.map(work, batch))  # lettura dei file fuori da ogni transazione
+            for fid, h, m, err in results:  # scritture tutte insieme: il lock del catalogo dura millisecondi
+                if err == _LOST:
+                    continue
                 if err:
                     conn.execute("UPDATE files SET status='error', error=? WHERE id=?", (err, fid))
                 else:
@@ -450,6 +585,65 @@ def process_metadata(conn: sqlite3.Connection, cfg: Config,
             conn.commit()
             if progress:
                 progress("metadati", done, total)
+            if lost.is_set():
+                raise source_lost_error(cfg)
+    return done
+
+
+# Revisione del ricalcolo dei metadati dei video gia' indicizzati (data 'creation_time' ignorata per un bug,
+# durata mancante perche' ffprobe non c'era). Cambiare il numero per rifare il passaggio una volta sola.
+VIDEO_REFRESH_REV = "1"
+_VIDEO_REFRESH_KEY = "video_refresh_rev"
+
+
+def refresh_video_metadata(conn: sqlite3.Connection, cfg: Config,
+                           progress: Callable[[str, int, int], None] | None = None) -> int:
+    """Una tantum: riprova ffprobe sui video gia' indicizzati con data da mtime/nome file o senza durata.
+
+    Aggiorna SOLO data (se la data del contenitore e' valida), durata e dimensioni mancanti: embedding, volti,
+    stato e hash non vengono toccati. Senza ffprobe non fa nulla (e non segna il passaggio come fatto)."""
+    if dbm.get_meta(conn, _VIDEO_REFRESH_KEY) == VIDEO_REFRESH_REV:
+        return 0
+    _, ffprobe = cfg.find_ffmpeg()
+    if not ffprobe:
+        return 0
+    rows = conn.execute(
+        "SELECT id,path,date_source,duration,width,height FROM files WHERE kind='video' "
+        "AND status IN ('meta','embedded') AND (duration IS NULL OR date_source IN ('mtime','filename'))"
+    ).fetchall()
+    total, done, failed = len(rows), 0, 0
+
+    def probe(r):
+        try:
+            return r["id"], probe_video(r["path"], ffprobe)
+        except Exception as e:  # noqa: BLE001 - file sparito, video corrotto, timeout
+            log.debug("ricalcolo metadati video %s: %s", r["path"], e)
+            return r["id"], None
+
+    by_id = {r["id"]: r for r in rows}
+    if rows and progress:
+        progress("metadati", 0, total)
+    with ThreadPoolExecutor(max_workers=max(1, cfg.workers)) as ex:
+        for start in range(0, total, 200):
+            results = list(ex.map(probe, rows[start:start + 200]))
+            for fid, m in results:
+                if m is None:
+                    failed += 1
+                    continue
+                r = by_id[fid]
+                if m.date and r["date_source"] in ("mtime", "filename"):
+                    conn.execute("UPDATE files SET date_taken=?, date_source='video', data_incerta=0 WHERE id=?",
+                                 (m.date, fid))
+                    done += 1
+                if m.duration is not None or m.width is not None or m.height is not None:
+                    conn.execute("UPDATE files SET duration=COALESCE(duration,?), width=COALESCE(width,?), "
+                                 "height=COALESCE(height,?) WHERE id=?", (m.duration, m.width, m.height, fid))
+            conn.commit()
+            if progress:
+                progress("metadati", min(start + 200, total), total)
+    if failed and cfg.source_dir and not sourcefs.reachable(cfg.source_dir):
+        return done  # sorgente non raggiungibile: passaggio incompleto, si ripete al prossimo avvio
+    dbm.set_meta(conn, _VIDEO_REFRESH_KEY, VIDEO_REFRESH_REV)
     return done
 
 

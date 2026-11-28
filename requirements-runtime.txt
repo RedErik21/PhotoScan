@@ -1,0 +1,13 @@
+# Componente di calcolo (runtime) di PhotoScan: i pacchetti pesanti che escono dall'app di Windows e
+# vengono scaricati a parte (PhotoScan-runtime-<versione>-windows[-cpu].zip), solo quando cambiano.
+# Le versioni sono esatte e devono coincidere con quelle di requirements.txt.
+# PyTorch si installa dall'indice giusto: --index-url https://download.pytorch.org/whl/cu126 (GPU) oppure /whl/cpu.
+#
+# Se modifichi QUESTO file, alza RUNTIME_VERSION in fotoscan/runtime_version.py e aggiorna REQUIREMENTS_SHA256
+# (il test tests/test_updater.py lo controlla): senza una nuova versione i PC non scaricherebbero il nuovo runtime.
+torch==2.14.1
+torchvision==0.29.1
+transformers==5.24.0
+accelerate==1.16.0
+sentencepiece==0.2.3
+protobuf==7.36.2

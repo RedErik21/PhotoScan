@@ -73,9 +73,16 @@ def _pid_alive(pid: int) -> bool:
     if os.name != "nt":
         try:
             os.kill(pid, 0)
-            return True
+        except PermissionError:
+            return True  # esiste ma e' di un altro utente
         except OSError:
             return False
+        try:  # un figlio terminato e non ancora raccolto (zombie) risponde a kill(pid, 0): non e' vivo
+            with open(f"/proc/{pid}/stat", "rb") as f:
+                state = f.read().rsplit(b")", 1)[1].split()[0]
+            return state != b"Z"
+        except (OSError, IndexError):
+            return True
     alive = _pid_alive_win(pid)
     if alive is not None:
         return alive
@@ -118,6 +125,78 @@ def _pid_alive_win(pid: int) -> bool | None:
         return None
 
 
+def _proc_start_time(pid: int) -> float | None:
+    """Istante di avvio del processo (epoch) o None se non determinabile."""
+    try:
+        import psutil
+
+        return float(psutil.Process(pid).create_time())
+    except ImportError:
+        pass
+    except Exception:  # noqa: BLE001 - processo inesistente / accesso negato
+        return None
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            k32 = ctypes.windll.kernel32
+            k32.OpenProcess.restype = wintypes.HANDLE
+            h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+            if not h:
+                return None
+            try:
+                c, e, k, u = (wintypes.FILETIME() for _ in range(4))
+                if not k32.GetProcessTimes(h, ctypes.byref(c), ctypes.byref(e), ctypes.byref(k), ctypes.byref(u)):
+                    return None
+                ticks = (c.dwHighDateTime << 32) | c.dwLowDateTime  # 100 ns dal 1601
+                return ticks / 1e7 - 11644473600
+            finally:
+                k32.CloseHandle(h)
+        except Exception:  # noqa: BLE001
+            return None
+    try:  # Linux: starttime in tick dal boot (campo 22 di /proc/<pid>/stat)
+        with open(f"/proc/{pid}/stat", "rb") as f:
+            fields = f.read().rsplit(b")", 1)[1].split()
+        with open("/proc/stat", "rb") as f:
+            btime = next(int(l.split()[1]) for l in f if l.startswith(b"btime"))
+        return btime + int(fields[19]) / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError, StopIteration):
+        return None
+
+
+def _pid_is_ours(pid: int, started: float) -> bool:
+    """Il pid del file e' davvero l'indicizzazione avviata a `started`, non un processo che ha riusato il numero
+    dopo un crash/riavvio del PC? L'indicizzazione parte subito dopo `started`; se non si riesce a leggere
+    l'orario di avvio del processo si resta sul controllo di sola esistenza."""
+    ct = _proc_start_time(pid)
+    if ct is None:
+        return True
+    return started - 5 <= ct <= started + 120
+
+
+def _kill_tree(pid: int, force: bool) -> None:
+    """Ferma il processo e i suoi figli. Windows: taskkill /T /F. POSIX: il gruppo di processi (l'indicizzazione
+    parte in una sessione propria), prima SIGTERM poi, se serve, SIGKILL."""
+    if os.name == "nt":
+        try:
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return
+    import signal
+
+    sig = signal.SIGKILL if force else signal.SIGTERM
+    try:
+        pgid = os.getpgid(pid)
+        if pgid == pid:  # leader del proprio gruppo (lo abbiamo avviato noi): si ferma tutto l'albero
+            os.killpg(pgid, sig)
+        else:
+            os.kill(pid, sig)
+    except OSError:
+        pass
+
+
 def _pid_file(cache_dir: str) -> Path:
     return Path(cache_dir) / "index.pid"
 
@@ -153,7 +232,7 @@ def _ensure_orphan_locked() -> None:
     except (OSError, ValueError):
         _remove_pid(cache_dir)
         return
-    if not _pid_alive(pid):
+    if not _pid_alive(pid) or not _pid_is_ours(pid, started):  # morto, o pid riusato da un altro processo
         _remove_pid(cache_dir)
         return
     _current = _Run(pid, started)
@@ -258,11 +337,33 @@ def _source_state(source: str) -> tuple[bool, bool | None]:
         c = _slow.get("source")
         if c and c[0] == source and now - c[1] < SLOW_TTL_S:
             return c[2], c[3]
-    net = sourcefs.is_network(source)
-    reach = sourcefs.reachable(source)
+        start = not _slow.get("source_busy")
+        if start:
+            _slow["source_busy"] = True
+    if start:
+        # Il controllo puo' bloccarsi a lungo su un NAS spento: gira in un thread a parte, e chi chiede (richieste
+        # di stato, monitor SSE) aspetta al massimo un attimo e riceve l'ultimo valore noto.
+        t = threading.Thread(target=_probe_source, args=(source,), daemon=True, name="index-source-probe")
+        t.start()
+        t.join(1.5)
     with _slow_lock:
-        _slow["source"] = (source, now, net, reach)
-    return net, reach
+        c = _slow.get("source")
+        if c and c[0] == source:
+            return c[2], c[3]
+    return False, None
+
+
+def _probe_source(source: str) -> None:
+    try:
+        net = sourcefs.is_network(source)
+        reach = sourcefs.reachable(source)
+        with _slow_lock:
+            _slow["source"] = (source, time.monotonic(), net, reach)
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        with _slow_lock:
+            _slow["source_busy"] = False
 
 
 def _snapshot(run: _Run | None, running: bool) -> dict:
@@ -370,36 +471,55 @@ def index_start(body: Optional[dict] = Body(None)):
         raise HTTPException(400, "Il limite di file deve essere un numero intero positivo")
     if subdir is not None and not isinstance(subdir, str):
         raise HTTPException(400, "La sottocartella deve essere un testo")
+    if _current_run() is not None:  # risposta rapida, senza toccare disco/rete
+        raise HTTPException(409, "Indicizzazione gia' in corso")
+    cfg = deps.get_cfg()
+    # Controlli che toccano disco e rete (un NAS spento puo' bloccarli a lungo) FUORI da _lock: altrimenti
+    # le richieste di stato/stop che aspettano il lock si fermerebbero con lui.
+    conn = deps.open_db()
+    try:
+        source = _resolve_source(conn)
+        other = _catalog_model_conflict(conn, cfg)
+    finally:
+        conn.close()
+    if other:
+        raise HTTPException(409, f"Il catalogo contiene embedding del modello {other}, ma il modello impostato e' "
+                                 f"{cfg.model_name}: azzera gli embedding (Impostazioni > Modello) oppure rimetti {other}.")
+    face_job = _face_job_running()
+    if face_job:
+        raise HTTPException(409, "Il riconoscimento dei volti e' in corso: attendi che finisca prima di indicizzare.")
+    args = [sys.executable, "-m", "fotoscan", "index", "--source", source]
+    if subdir:
+        raw = subdir.strip()
+        if not raw or raw[0] in "\\/" or os.path.splitdrive(raw)[0]:
+            raise HTTPException(400, "Sottocartella non valida")
+        parts = [p for p in re.split(r"[\\/]+", raw) if p]
+        if not parts or ".." in parts:
+            raise HTTPException(400, "Sottocartella non valida")
+        sub = os.sep.join(parts)  # separatori del sistema in uso (su Linux '\\' non e' un separatore)
+        if not (Path(source) / sub).is_dir():
+            raise HTTPException(400, f"La sottocartella non esiste: {sub}")
+        args += ["--subdir", sub]
+    if limit:
+        args += ["--limit", str(limit)]
+
     with _lock:
         _ensure_orphan_locked()
-        if _current is not None and _current.alive():
+        if _current is not None and _current.alive():  # un'altra richiesta e' arrivata nel frattempo
             raise HTTPException(409, "Indicizzazione gia' in corso")
-        cfg = deps.get_cfg()
-        conn = deps.open_db()
-        try:
-            source = _resolve_source(conn)
-        finally:
-            conn.close()
-        args = [sys.executable, "-m", "fotoscan", "index", "--source", source]
-        if subdir:
-            sub = subdir.strip().replace("/", "\\")
-            if not sub or Path(sub).is_absolute() or ".." in Path(sub).parts:
-                raise HTTPException(400, "Sottocartella non valida")
-            if not (Path(source) / sub).is_dir():
-                raise HTTPException(400, f"La sottocartella non esiste: {sub}")
-            args += ["--subdir", sub]
-        if limit:
-            args += ["--limit", str(limit)]
-
         Path(cfg.cache_dir).mkdir(parents=True, exist_ok=True)
         env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
         started = time.time()
+        _rotate_log(cfg.cache_dir)
+        popen_kw: dict = {"creationflags": NO_WINDOW}
+        if os.name != "nt":
+            popen_kw["start_new_session"] = True  # gruppo proprio: index_stop ferma anche i figli (ffmpeg)
         with open(_log_file(cfg.cache_dir), "a", encoding="utf-8") as log:
             log.write(f"\n--- avvio indicizzazione {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
             log.flush()
             try:
                 proc = subprocess.Popen(args, cwd=str(ROOT), env=env, stdin=subprocess.DEVNULL,
-                                        stdout=log, stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
+                                        stdout=log, stderr=subprocess.STDOUT, **popen_kw)
             except OSError as e:
                 raise HTTPException(500, f"Impossibile avviare l'indicizzazione: {e}")
         _write_pid(cfg.cache_dir, proc.pid, started)
@@ -409,16 +529,53 @@ def index_start(body: Optional[dict] = Body(None)):
     return {"started": True}
 
 
+LOG_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _rotate_log(cache_dir: str) -> None:
+    """index.log non cresce all'infinito: oltre LOG_MAX_BYTES il vecchio diventa index.log.1 (uno solo)."""
+    lf = _log_file(cache_dir)
+    try:
+        if lf.stat().st_size > LOG_MAX_BYTES:
+            os.replace(lf, lf.with_name(lf.name + ".1"))
+    except OSError:
+        pass
+
+
+def _catalog_model_conflict(conn, cfg) -> str | None:
+    try:
+        from ..embedder import catalog_model_conflict
+
+        return catalog_model_conflict(conn, cfg)
+    except ImportError:  # senza numpy/PIL non si potra' indicizzare comunque
+        return None
+
+
+def _face_job_running():
+    """Job volti in corso (nomi definiti in routes_people): scritture concorrenti sullo stesso catalogo."""
+    try:
+        from . import routes_people
+
+        return routes_people._active_face_job()
+    except Exception:  # noqa: BLE001 - modulo non importabile: ripiego sui nomi dei job
+        return next((j for n in ("volti_scan", "volti_cluster", "volti_modelli") if (j := jobs.running_job(n))), None)
+
+
 @router.post("/index/stop")
 def index_stop():
     run = _current_run()
     if run is None:
         return {"stopped": False}
-    # /T: l'albero intero (il launcher venv + il python reale); riprendibile al prossimo avvio
-    subprocess.run(["taskkill", "/PID", str(run.pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
+    # l'albero intero (launcher + processo reale + ffmpeg); riprendibile al prossimo avvio
+    _kill_tree(run.pid, force=os.name == "nt")
     deadline = time.time() + 5
     while run.alive() and time.time() < deadline:
         time.sleep(0.2)
+    if run.alive():  # POSIX: SIGTERM ignorato o lento, si forza
+        _kill_tree(run.pid, force=True)
+        deadline = time.time() + 3
+        while run.alive() and time.time() < deadline:
+            time.sleep(0.2)
     return {"stopped": not run.alive()}
 
 
@@ -435,16 +592,18 @@ def index_errors(limit: int = 200):
 
 @router.post("/index/retry-errors")
 def index_retry_errors():
-    if _current_run() is not None:
-        raise HTTPException(409, "Riprova gli errori quando l'indicizzazione e' ferma")
-    conn = deps.open_db()
-    try:
-        with conn:
-            a = conn.execute("UPDATE files SET status='meta', error=NULL WHERE status='error' AND hash IS NOT NULL")
-            b = conn.execute("UPDATE files SET status='new', error=NULL WHERE status='error' AND hash IS NULL")
-        return {"retried": a.rowcount + b.rowcount}
-    finally:
-        conn.close()
+    with _lock:  # sotto lock: un /index/start concorrente non puo' partire a meta' della modifica
+        _ensure_orphan_locked()
+        if _current is not None and _current.alive():
+            raise HTTPException(409, "Riprova gli errori quando l'indicizzazione e' ferma")
+        conn = deps.open_db()
+        try:
+            with conn:
+                a = conn.execute("UPDATE files SET status='meta', error=NULL WHERE status='error' AND hash IS NOT NULL")
+                b = conn.execute("UPDATE files SET status='new', error=NULL WHERE status='error' AND hash IS NULL")
+            return {"retried": a.rowcount + b.rowcount}
+        finally:
+            conn.close()
 
 
 @router.post("/index/reset-embeddings")
@@ -452,20 +611,24 @@ def index_reset_embeddings(body: dict = Body(default={})):
     """Svuota solo gli embedding per re-indicizzare con un nuovo modello (preserva foto, metadati, album e preferiti)."""
     if not body.get("confirm"):
         raise HTTPException(400, "Serve conferma esplicita per azzerare gli embedding.")
-    if _current_run() is not None:
-        raise HTTPException(409, "Ferma prima l'indicizzazione in corso.")
-    conn = deps.open_db()
-    try:
-        with conn:
-            conn.execute("DELETE FROM embeddings")
-            conn.execute("DELETE FROM label_cache")
-            conn.execute("DELETE FROM label_suggestions")
-            conn.execute("DELETE FROM visual_labels")
-            conn.execute("DELETE FROM meta WHERE key='embedding_model' OR key LIKE 'ctx_cache:%'")
-            cur = conn.execute("UPDATE files SET status='meta' WHERE status='embedded'")
-        from . import routes_search  # import locale per evitare cicli
+    with _lock:  # sotto lock: un /index/start concorrente non puo' partire a meta' dell'azzeramento
+        _ensure_orphan_locked()
+        if _current is not None and _current.alive():
+            raise HTTPException(409, "Ferma prima l'indicizzazione in corso.")
+        conn = deps.open_db()
+        try:
+            with conn:
+                conn.execute("DELETE FROM embeddings")
+                conn.execute("DELETE FROM label_cache")
+                conn.execute("DELETE FROM label_suggestions")
+                conn.execute("DELETE FROM visual_labels")
+                conn.execute("DELETE FROM label_dismissed")  # vettori del modello vecchio: dimensione diversa
+                conn.execute("DELETE FROM meta WHERE key='embedding_model' OR key LIKE 'ctx_cache:%'")
+                cur = conn.execute("UPDATE files SET status='meta' WHERE status='embedded'")
+            n = int(cur.rowcount)
+        finally:
+            conn.close()
+    from . import routes_search  # import locale per evitare cicli
 
-        routes_search.reset_model()
-        return {"reset": int(cur.rowcount)}
-    finally:
-        conn.close()
+    routes_search.reset_model()
+    return {"reset": n}

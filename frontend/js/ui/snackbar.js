@@ -29,7 +29,8 @@ function next() {
 }
 
 async function mount(item) {
-  const Swal = await swalReady();
+  let Swal;
+  try { Swal = await swalReady(); } catch { next(); return; }   // libreria assente: niente toast, ma la coda non si blocca
   // Un modale (conferma) e' aperto: Swal ne ammette uno solo, riprova dopo.
   if (Swal.isVisible() && !Swal.getPopup()?.classList.contains('swal2-toast')) {
     setTimeout(() => mount(item), 400);
@@ -44,7 +45,7 @@ async function mount(item) {
     position: 'top-end',
     icon: item.error ? 'error' : 'success',
     iconHtml: `<span class="material-symbols-outlined fs-swal-toast-ic" aria-hidden="true">${iconName}</span>`,
-    title: item.message,
+    titleText: item.message,   // testo, non HTML: i messaggi possono contenere nomi scelti dall'utente
     showConfirmButton: hasAction,
     confirmButtonText: item.actionLabel,
     showCloseButton: item.duration <= 0 || item.error,

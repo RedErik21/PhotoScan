@@ -5,7 +5,7 @@ import re
 import sqlite3
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from .. import db as dbm
@@ -87,8 +87,11 @@ def _one_group(conn: sqlite3.Connection, folder: str) -> dict:
 
 
 def _is_protected(folder: str) -> bool:
-    """Gruppi gestiti dall'algoritmo dei duplicati: non rinominabili, non bersaglio di spostamenti."""
-    return folder == organizer.DUP_FOLDER or folder.startswith(organizer.DUP_FOLDER + "/")
+    """Gruppi gestiti dall'algoritmo dei duplicati: non rinominabili, non bersaglio di spostamenti.
+    Confronto senza distinguere maiuscole: su Windows "_duplicati" e' la stessa cartella."""
+    f = folder.replace("\\", "/").strip().casefold()
+    d = organizer.DUP_FOLDER.casefold()
+    return f == d or f.startswith(d + "/")
 
 
 def _clean_folder(raw: str) -> str:
@@ -98,6 +101,8 @@ def _clean_folder(raw: str) -> str:
     if not parts:
         raise HTTPException(400, "Il nome della cartella non puo' essere vuoto.")
     for p in parts:
+        if len(p) > organizer.MAX_COMPONENT:
+            raise HTTPException(400, f"Ogni nome di cartella puo' avere al massimo {organizer.MAX_COMPONENT} caratteri.")
         if p in (".", ".."):
             raise HTTPException(400, "Il nome non puo' contenere '..'.")
         if _FORBIDDEN.search(p):
@@ -107,6 +112,8 @@ def _clean_folder(raw: str) -> str:
         if _RESERVED.match(p.split(".")[0]):
             raise HTTPException(400, f"\"{p}\" e' un nome riservato di Windows.")
     out = "/".join(parts)
+    if organizer.safe_folder(out) != out:  # il piano userebbe un nome diverso: due gruppi finirebbero fusi
+        raise HTTPException(400, "Il nome contiene caratteri o parole non utilizzabili come nome di cartella.")
     if len(out) > MAX_FOLDER_LEN:
         raise HTTPException(400, f"Il nome e' troppo lungo (massimo {MAX_FOLDER_LEN} caratteri).")
     if _is_protected(out):
@@ -117,6 +124,11 @@ def _clean_folder(raw: str) -> str:
 def _ensure_idle() -> None:
     if jobs.running_job(JOB) is not None:
         raise HTTPException(409, "Il piano e' in ricalcolo: riprova tra un momento.")
+
+
+def _ensure_not_applying() -> None:
+    if jobs.running_job("apply") is not None:
+        raise HTTPException(409, "La creazione delle cartelle e' in corso: ricalcola il piano al termine.")
 
 
 def _needs_text_model(conn: sqlite3.Connection, cfg) -> bool:
@@ -155,8 +167,11 @@ def _run_rebuild(job):
 
 
 def _launch_rebuild() -> dict:
-    _ensure_idle()
-    job = jobs.start_job(JOB, _run_rebuild)
+    """Atomico (doppio clic / richieste parallele): non parte se c'e' gia' un ricalcolo o un'applicazione."""
+    _ensure_not_applying()
+    job, created = jobs.start_job_unique(JOB, _run_rebuild, conflicts=("apply",))
+    if not created:
+        raise HTTPException(409, "Il piano e' in ricalcolo: riprova tra un momento.")
     return {"job_id": job.id}
 
 
@@ -236,8 +251,12 @@ def plan_move(body: MoveBody, conn: sqlite3.Connection = Depends(deps.get_db)):
 
 
 @router.post("/plan/reset-overrides")
-def plan_reset_overrides(conn: sqlite3.Connection = Depends(deps.get_db)):
+def plan_reset_overrides(body: dict | None = Body(default=None), conn: sqlite3.Connection = Depends(deps.get_db)):
+    """Azzera rinomine, spostamenti e master scelti a mano, poi ricalcola il piano. Irreversibile: serve confirm."""
+    if not isinstance(body, dict) or body.get("confirm") is not True:
+        raise HTTPException(400, 'Conferma richiesta: invia {"confirm": true} per azzerare le modifiche manuali.')
     _ensure_idle()
+    _ensure_not_applying()
     conn.execute("DELETE FROM rename_map")
     conn.execute("DELETE FROM file_override")
     routes_duplicates._ensure(conn)

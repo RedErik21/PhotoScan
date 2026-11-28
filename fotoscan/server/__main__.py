@@ -29,6 +29,9 @@ def main() -> None:
               "(127.0.0.1, ::1, localhost).", file=sys.stderr)
         sys.exit(2)
     os.environ["FOTOSCAN_HOST"] = args.host  # mostrato in Impostazioni > Rete
+    from .. import runtime
+
+    runtime.activate()  # PyTorch dal runtime a parte (gia' fatto da photoscan.py nell'exe; idempotente)
     from .routes_update import startup_check
 
     startup_check()  # ricerca aggiornamenti in background, se attiva nelle impostazioni

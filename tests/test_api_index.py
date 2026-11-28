@@ -223,7 +223,8 @@ def test_orphan_detected_from_pid_file():
         alive["v"] = False  # il processo orfano viene terminato
         return mock.Mock(returncode=0, stdout="")
 
-    with mock.patch.object(ri, "_pid_alive", side_effect=lambda pid: alive["v"]):
+    with mock.patch.object(ri, "_pid_alive", side_effect=lambda pid: alive["v"]), \
+            mock.patch.object(ri, "_pid_is_ours", return_value=True):
         st = ri.index_status()
         assert st["running"] is True
         code, _ = _status_code(_start_fake)
@@ -295,6 +296,94 @@ def test_zero_size_phase_is_declared_without_percent():
     assert st["percent"] is None and st["eta_seconds"] is None
     FAKE_PROCS[0].returncode = 0
     assert _wait_idle()
+
+
+def test_pid_riusato_da_un_altro_processo_non_e_seguito():
+    _reset()
+    cache = Path(os.environ["FOTOSCAN_CACHE"])
+    (cache / "index.pid").write_text(f"999\n{time.time():.3f}", encoding="utf-8")
+    with mock.patch.object(ri, "_pid_alive", return_value=True), \
+            mock.patch.object(ri, "_proc_start_time", return_value=time.time() - 86400):  # avviato ieri: non e' il nostro
+        assert ri.index_status()["running"] is False
+    assert not (cache / "index.pid").exists()
+    # stesso pid ma avviato subito dopo `started`: e' il nostro
+    started = time.time()
+    with mock.patch.object(ri, "_proc_start_time", return_value=started + 1.5):
+        assert ri._pid_is_ours(1, started) is True
+    with mock.patch.object(ri, "_proc_start_time", return_value=None):  # non determinabile: resta il controllo di esistenza
+        assert ri._pid_is_ours(1, started) is True
+
+
+def test_start_rifiutato_se_modello_diverso_dagli_embedding():
+    _reset()
+    conn = dbm.connect(os.environ["FOTOSCAN_DB"])
+    conn.execute("INSERT INTO embeddings(file_id, vec) VALUES(3, x'00000000')")
+    dbm.set_meta(conn, "embedding_model", "google/siglip2-so400m-patch14-384")
+    conn.commit()
+    conn.close()
+    deps.get_cfg().model_name = "google/siglip2-base-patch16-224"
+    code, detail = _status_code(_start_fake)
+    assert code == 409 and "so400m" in detail and not FAKE_PROCS
+    deps.get_cfg().model_name = "google/siglip2-so400m-patch14-384"
+    assert _start_fake() == {"started": True}
+    FAKE_PROCS[0].returncode = 0
+    assert _wait_idle()
+    deps.get_cfg().model_name = "google/siglip2-base-patch16-224"
+
+
+def test_start_rifiutato_con_job_volti_in_corso():
+    _reset()
+    with mock.patch.object(ri, "_face_job_running", return_value=object()):
+        code, detail = _status_code(_start_fake)
+    assert code == 409 and "volti" in detail and not FAKE_PROCS
+
+
+def test_sottocartella_annidata_con_entrambi_i_separatori():
+    _reset()
+    (SOURCE / "sub" / "inner").mkdir(parents=True, exist_ok=True)
+    for raw in ("sub/inner", "sub\\inner"):
+        assert _start_fake({"subdir": raw}) == {"started": True}
+        assert FAKE_PROCS[-1].args[-2:] == ["--subdir", os.sep.join(["sub", "inner"])]
+        FAKE_PROCS[-1].returncode = 0
+        assert _wait_idle()
+    for bad in ("/etc", "\\x", "C:\\x", "sub/../..", "  "):
+        code, _ = _status_code(_start_fake, {"subdir": bad})
+        assert code == 400, bad
+
+
+def test_stop_senza_taskkill_su_posix_usa_i_segnali():
+    _reset()
+    _start_fake()
+    sent = []
+
+    def fake_kill(pid, force):
+        sent.append((pid, force))
+        FAKE_PROCS[0].returncode = -15
+
+    with mock.patch.object(ri, "_kill_tree", side_effect=fake_kill):
+        assert ri.index_stop() == {"stopped": True}
+    assert sent and sent[0][0] == FAKE_PROCS[0].pid
+    assert _wait_idle()
+
+
+def test_log_ruotato_se_troppo_grande():
+    _reset()
+    cache = Path(os.environ["FOTOSCAN_CACHE"])
+    lf = cache / "index.log"
+    lf.write_bytes(b"x" * (ri.LOG_MAX_BYTES + 10))
+    ri._rotate_log(str(cache))
+    assert not lf.exists() and (cache / "index.log.1").stat().st_size > ri.LOG_MAX_BYTES
+    (cache / "index.log.1").unlink()
+
+
+def test_retry_errors_e_reset_sotto_lock_rifiutati_con_indicizzazione_attiva():
+    _reset()
+    _start_fake()
+    code, _ = _status_code(ri.index_reset_embeddings, {"confirm": True})
+    assert code == 409
+    FAKE_PROCS[0].returncode = 0
+    assert _wait_idle()
+    assert ri.index_reset_embeddings({"confirm": True})["reset"] == 1  # c.jpg era 'embedded'
 
 
 if __name__ == "__main__":

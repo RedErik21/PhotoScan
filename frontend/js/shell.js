@@ -9,6 +9,7 @@ import { createWordmark } from './ui/brand.js';
 import { formatNumber } from './ui/format.js';
 import { openSupportDialog } from './ui/support.js';
 import { showSnackbar } from './ui/snackbar.js';
+import { confirmDialog } from './ui/dialog.js';
 
 const MQ_MEDIUM = matchMedia('(min-width: 600px)');
 const MQ_EXPANDED = matchMedia('(min-width: 1024px)');
@@ -222,7 +223,7 @@ function buildTopbar() {
     if (e.key !== 'Enter') return;
     e.preventDefault();
     const q = searchField.value.trim();
-    if (q) navigate('/search', { q });
+    if (q) guardedNavigate('/search', { q });
   });
   const search = h('label', { class: 'topbar-search' },
     icon('search'), searchField, h('span', { class: 'kbd topbar-search-kbd', 'aria-hidden': 'true' }, '/'));
@@ -281,7 +282,7 @@ function syncStatusChipVisibility() {
   const navMode = shell?.dataset.nav || 'bottom';
   const path = currentRoute().path;
   if (ixRun) {
-    chip.hidden = path === '/index' || navMode === 'drawer';
+    chip.hidden = path === '/index' || location.hash.startsWith('#/organize?tab=index') || navMode === 'drawer';
   } else if (fjRun) {
     chip.hidden = path === '/people' || navMode === 'drawer';
   } else {
@@ -439,6 +440,21 @@ function setActive(path) {
   }
 }
 
+/** Navigazione da scorciatoia/ricerca: con modifiche non salvate in Impostazioni chiede conferma (le bozze andrebbero perse). */
+async function guardedNavigate(path, query) {
+  if (store.get('settingsDirty', false)) {
+    const ok = await confirmDialog({
+      title: 'Modifiche non salvate',
+      message: 'Se lasci questa pagina le modifiche non salvate andranno perse.',
+      confirmLabel: 'Lascia la pagina',
+      cancelLabel: 'Resta qui',
+      danger: true,
+    });
+    if (!ok) return;
+  }
+  navigate(path, query);
+}
+
 function isTyping(t) {
   return !!t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
 }
@@ -448,6 +464,8 @@ function bindShortcuts() {
   addEventListener('keydown', (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (isTyping(e.composedPath()[0])) return;
+    // Visualizzatore o finestra di dialogo aperti: le scorciatoie globali non devono navigare dietro di loro.
+    if (document.querySelector('.viewer-overlay:not(.is-closing), .swal2-container, md-dialog[open]')) return;
     const k = e.key.toLowerCase();
     if (e.key === '/') {
       e.preventDefault();
@@ -456,14 +474,14 @@ function bindShortcuts() {
       } else if (searchField && searchField.offsetParent !== null) {
         searchField.focus();
       } else {
-        navigate('/search');
+        guardedNavigate('/search');
       }
       return;
     }
-    if (e.key === '?') { e.preventDefault(); navigate('/help'); return; }
+    if (e.key === '?') { e.preventDefault(); guardedNavigate('/help'); return; }
     if (gPending && Date.now() - gPending < 1200) {
       gPending = 0;
-      if (dest[k]) { e.preventDefault(); navigate(dest[k]); }
+      if (dest[k]) { e.preventDefault(); guardedNavigate(dest[k]); }
       return;
     }
     gPending = k === 'g' ? Date.now() : 0;

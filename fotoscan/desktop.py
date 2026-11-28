@@ -16,6 +16,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 import webbrowser
@@ -33,7 +34,13 @@ WINDOW_SIZE = "1400,900"
 APP_NAME = "PhotoScan"
 APP_ICON = CODE_ROOT / "fotoscan" / "photoscan.ico"
 APP_USER_MODEL_ID = "FotoScan.App"       # identità nella barra delle applicazioni (raggruppa e mostra il nome)
-START_TIMEOUT = 120  # secondi: il primo avvio puo' importare torch
+START_TIMEOUT = 120  # secondi: il primo avvio puo' importare torch (si estende finche' il log avanza, fino a 300 s)
+START_HARD_LIMIT = 300
+LOCK = CACHE / "desktop.lock"            # un solo avvio alla volta: il secondo aspetta e poi riusa il server del primo
+LAUNCHERS = CACHE / "launchers"          # un file per finestra aperta: l'ultima che si chiude spegne il server
+LAST_PORT = CACHE / "last_port.txt"      # stessa porta a ogni avvio: l'origine (e il localStorage) non cambia
+WEBVIEW_STORAGE = CACHE / "webview"      # profilo persistente di WebView2 (preferenze, «Più tardi» del banner)
+PORT_RANGE = range(PREFERRED_PORT, PREFERRED_PORT + 20)
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 MB_OK, MB_ICONERROR, MB_ICONINFO, MB_TOPMOST = 0x0, 0x10, 0x40, 0x40000
@@ -51,37 +58,51 @@ JOB_LABELS = {
 
 
 # ------------------------------------------------------------------ utilita'
+def _external_env() -> dict:
+    """Ambiente per i programmi di sistema (browser, zenity). L'AppImage/PyInstaller imposta LD_LIBRARY_PATH sulle
+    proprie librerie: Chromium e zenity di sistema, con quelle, possono non partire."""
+    env = dict(os.environ)
+    if sys.platform != "win32" and FROZEN:
+        orig = env.pop("LD_LIBRARY_PATH_ORIG", None)
+        if orig is not None:
+            env["LD_LIBRARY_PATH"] = orig
+        else:
+            env.pop("LD_LIBRARY_PATH", None)
+    return env
+
+
 def _zenity(args: list[str]) -> int | None:
     """Finestra di dialogo di GNOME/KDE tramite zenity. None = zenity non disponibile."""
-    import shutil
     if not shutil.which("zenity"):
         return None
-    return subprocess.run(["zenity", *args], capture_output=True).returncode
+    return subprocess.run(["zenity", *args], capture_output=True, env=_external_env()).returncode
 
 
-def _message(title: str, text: str, error: bool = False) -> None:
-    """Finestra di dialogo nativa (funziona anche con pythonw, senza console)."""
+def _message(title: str, text: str, error: bool = False) -> bool:
+    """Finestra di dialogo nativa (funziona anche con pythonw, senza console). False = nessun modo di mostrarla."""
     if sys.platform != "win32":
         kind = "--error" if error else "--info"
         if _zenity([kind, f"--title={title}", f"--text={text}", "--width=480"]) is None:
             _log_line(f"{title}: {text}")
             print(f"{title}: {text}", file=sys.stderr)
-        return
+            return False
+        return True
     flags = (MB_ICONERROR if error else MB_ICONINFO) | MB_TOPMOST | MB_OK
     ctypes.windll.user32.MessageBoxW(0, text, title, flags)
+    return True
 
 
 def _busy_notice(title: str, text: str):
     """Avviso non bloccante durante un'attesa lunga (es. pip install). Ritorna la funzione che lo chiude."""
     if sys.platform != "win32":
-        import shutil
         if not shutil.which("zenity"):
             _log_line(f"{title}: {text}")
             return lambda: None
         try:
             proc = subprocess.Popen(["zenity", "--progress", "--pulsate", "--no-cancel", "--auto-close",
                                      f"--title={title}", f"--text={text}", "--width=480"],
-                                    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    env=_external_env())
         except OSError:
             return lambda: None
 
@@ -92,8 +113,6 @@ def _busy_notice(title: str, text: str):
             except (OSError, subprocess.TimeoutExpired):
                 pass
         return close_linux
-
-    import threading
 
     threading.Thread(target=lambda: ctypes.windll.user32.MessageBoxW(0, text, title, MB_ICONINFO | MB_TOPMOST | MB_OK),
                      daemon=True, name="busy-notice").start()
@@ -137,22 +156,36 @@ def _fail(motivo: str) -> int:
     return 1
 
 
-def free_port(preferred: int = PREFERRED_PORT) -> int:
-    """Porta preferita se libera, altrimenti una porta qualsiasi libera."""
-    for port in (preferred, 0):
-        with socket.socket() as s:
-            try:
-                s.bind(("127.0.0.1", port))
-                return s.getsockname()[1]
-            except OSError:
-                continue
+def _can_bind(port: int) -> int | None:
+    with socket.socket() as s:
+        try:
+            s.bind(("127.0.0.1", port))
+            return s.getsockname()[1]
+        except OSError:
+            return None
+
+
+def free_port(preferred: int = PREFERRED_PORT, exclude: tuple[int, ...] = ()) -> int:
+    """Porta libera: l'ultima usata (l'origine resta la stessa a ogni avvio), poi la preferita, poi 8766-8784,
+    infine una qualsiasi."""
+    order: list[int] = []
+    try:
+        order.append(int(LAST_PORT.read_text(encoding="utf-8").strip()))
+    except (OSError, ValueError):
+        pass
+    order += [preferred, *[p for p in PORT_RANGE if p != preferred], 0]
+    for port in order:
+        if port in exclude:
+            continue
+        got = _can_bind(port)
+        if got is not None and got not in exclude:
+            return got
     raise RuntimeError("nessuna porta libera")
 
 
 def find_browser() -> str | None:
     """Edge, poi Chrome. None = usare il browser predefinito."""
     if sys.platform != "win32":
-        import shutil
         for name in ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable",
                      "microsoft-edge", "microsoft-edge-stable", "brave-browser"):
             found = shutil.which(name)
@@ -169,6 +202,18 @@ def find_browser() -> str | None:
     return None
 
 
+def _profile_for(browser: str) -> Path:
+    """Profilo dedicato del browser. Chromium installato come snap non puo' usare le cartelle nascoste della home."""
+    if sys.platform != "win32":
+        try:
+            resolved = str(Path(browser).resolve())
+        except OSError:
+            resolved = browser
+        if "/snap/" in browser or "/snap/" in resolved:
+            return Path.home() / "snap" / "chromium" / "common" / "PhotoScan" / "webprofile"
+    return PROFILE
+
+
 def _health(port: int) -> bool:
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=1.5) as r:
@@ -177,15 +222,33 @@ def _health(port: int) -> bool:
         return False
 
 
-def _wait_healthy(port: int, proc: subprocess.Popen, timeout: float = START_TIMEOUT) -> bool:
-    end = time.time() + timeout
-    while time.time() < end:
-        if proc.poll() is not None:
-            return False
-        if _health(port):
-            return True
-        time.sleep(0.5)
-    return False
+def _wait_healthy(port: int, proc: subprocess.Popen, timeout: float = START_TIMEOUT, notice_after: float = 6.0) -> bool:
+    """Attende il server. Dopo `timeout` continua solo se il log avanza (primo avvio lento: antivirus, disco),
+    fino a START_HARD_LIMIT. Dopo qualche secondo mostra un avviso, cosi' l'utente non riclicca l'icona."""
+    start = time.time()
+    close_notice = None
+    try:
+        while True:
+            now = time.time()
+            if proc.poll() is not None:
+                return False
+            if _health(port):
+                return True
+            if close_notice is None and now - start > notice_after:
+                close_notice = _busy_notice("PhotoScan - avvio", "PhotoScan si sta avviando...\n\n"
+                                            "Al primo avvio o con l'antivirus può servire qualche minuto: "
+                                            "la finestra si apre da sola.")
+            if now - start > timeout:
+                try:
+                    alive = now - LOG.stat().st_mtime < 30
+                except OSError:
+                    alive = False
+                if not alive or now - start > START_HARD_LIMIT:
+                    return False
+            time.sleep(0.5)
+    finally:
+        if close_notice is not None:
+            close_notice()
 
 
 def _kill_tree(pid: int) -> None:
@@ -200,6 +263,39 @@ def _kill_tree(pid: int) -> None:
     subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
 
 
+def _proc_ctime(pid: int) -> int | None:
+    """Istante di creazione del processo (identifica il processo: un pid puo' essere riciclato). None = non esiste."""
+    try:
+        if sys.platform == "win32":
+            from ctypes import wintypes
+
+            k32 = ctypes.windll.kernel32
+            k32.OpenProcess.restype = wintypes.HANDLE
+            k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            k32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+            k32.CloseHandle.argtypes = [wintypes.HANDLE]
+            h = k32.OpenProcess(0x1000, False, pid)
+            if not h:
+                return None
+            try:
+                c, e, k, u = (wintypes.FILETIME() for _ in range(4))
+                if not k32.GetProcessTimes(h, ctypes.byref(c), ctypes.byref(e), ctypes.byref(k), ctypes.byref(u)):
+                    return None
+                return (c.dwHighDateTime << 32) | c.dwLowDateTime
+            finally:
+                k32.CloseHandle(h)
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+        return int(stat.rsplit(")", 1)[1].split()[19])   # campo 22: istante di avvio in tick
+    except (OSError, ValueError, IndexError, AttributeError):
+        return None
+
+
+def _state_pid_valid(state: dict) -> bool:
+    """Il pid dello stato e' ancora il server avviato da PhotoScan? Senza `ctime` (stato vecchio) non si puo' dire."""
+    ctime = state.get("ctime")
+    return bool(ctime) and _proc_ctime(int(state.get("pid") or 0)) == ctime
+
+
 def _read_state() -> dict | None:
     try:
         return json.loads(STATE.read_text(encoding="utf-8"))
@@ -209,7 +305,92 @@ def _read_state() -> dict | None:
 
 def _write_state(port: int, pid: int) -> None:
     CACHE.mkdir(parents=True, exist_ok=True)
-    STATE.write_text(json.dumps({"port": port, "pid": pid}), encoding="utf-8")
+    STATE.write_text(json.dumps({"port": port, "pid": pid, "ctime": _proc_ctime(pid)}), encoding="utf-8")
+    try:
+        LAST_PORT.write_text(str(port), encoding="utf-8")
+    except OSError:
+        pass
+
+
+class _StartupLock:
+    """Blocco su file: due avvii ravvicinati non lanciano due server sullo stesso catalogo (il secondo aspetta
+    che il primo abbia finito e poi riusa il suo server)."""
+
+    def __init__(self, timeout: float = START_HARD_LIMIT + 60) -> None:
+        self.timeout, self.fh = timeout, None
+
+    def __enter__(self):
+        CACHE.mkdir(parents=True, exist_ok=True)
+        try:
+            self.fh = open(LOCK, "a+b")
+            self.fh.seek(0, os.SEEK_END)
+            if self.fh.tell() == 0:
+                self.fh.write(b"0")
+                self.fh.flush()
+        except OSError:
+            self.fh = None
+            return self
+        end = time.time() + self.timeout
+        while True:
+            try:
+                self.fh.seek(0)
+                if sys.platform == "win32":
+                    import msvcrt
+                    msvcrt.locking(self.fh.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except OSError:
+                if time.time() > end:       # blocco incastrato: si procede comunque, meglio di non partire
+                    _log_line("blocco di avvio non ottenuto: proseguo senza")
+                    return self
+                time.sleep(0.3)
+
+    def __exit__(self, *exc) -> None:
+        if self.fh is None:
+            return
+        try:
+            self.fh.seek(0)
+            if sys.platform == "win32":
+                import msvcrt
+                msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        finally:
+            self.fh.close()
+
+
+def _register_launcher() -> Path:
+    """Segna questa finestra come aperta (un file per processo, con l'istante di creazione per riconoscerlo)."""
+    LAUNCHERS.mkdir(parents=True, exist_ok=True)
+    f = LAUNCHERS / f"{os.getpid()}.json"
+    f.write_text(json.dumps({"pid": os.getpid(), "ctime": _proc_ctime(os.getpid())}), encoding="utf-8")
+    return f
+
+
+def _other_launchers() -> list[int]:
+    """Altre finestre di PhotoScan ancora aperte (i file di processi morti o riciclati si ripuliscono)."""
+    alive = []
+    if not LAUNCHERS.is_dir():
+        return alive
+    for f in LAUNCHERS.glob("*.json"):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            pid = int(data["pid"])
+        except (OSError, ValueError, KeyError):
+            f.unlink(missing_ok=True)
+            continue
+        if pid == os.getpid():
+            continue
+        if data.get("ctime") and _proc_ctime(pid) == data["ctime"]:
+            alive.append(pid)
+        else:
+            f.unlink(missing_ok=True)
+    return alive
 
 
 def _clear_state() -> None:
@@ -249,6 +430,26 @@ def _start_server(port: int) -> subprocess.Popen:
         return subprocess.Popen([_python(), "-m", "fotoscan.server", "--port", str(port)], cwd=str(ROOT),
                                 env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                 **extra)
+
+
+def _spawn_and_wait(first_port: int | None = None) -> tuple[subprocess.Popen | None, int]:
+    """Avvia il server e attende che risponda. Se la porta e' stata presa nel frattempo riprova con un'altra."""
+    port = first_port or free_port()
+    tried: list[int] = []
+    for attempt in range(2):
+        proc = _start_server(port)
+        if _wait_healthy(port, proc):
+            return proc, port
+        _kill_tree(proc.pid)
+        tried.append(port)
+        if attempt == 0 and proc.poll() is not None:
+            try:
+                port = free_port(exclude=tuple(tried))
+            except RuntimeError:
+                break
+            continue
+        break
+    return None, port
 
 
 def _log_line(text: str) -> None:
@@ -295,23 +496,84 @@ def _install_pending_update() -> None:
 
 
 def _install_exe_on_exit() -> bool:
-    """PhotoScan.exe: installa l'eseguibile approvato a programma chiuso. True = lo script e' partito."""
+    """PhotoScan.exe / AppImage: installa il pacchetto approvato (o, con l'installazione automatica, scaricato) a
+    programma chiuso. True = installazione avviata (Windows: lo script riapre PhotoScan)."""
     try:
         from . import updater
         from .config import load_config
 
-        return updater.start_exe_update(load_config().cache_dir, Path(sys.executable).parent)
+        cfg = load_config()
+        return updater.start_exe_update(cfg.cache_dir, Path(sys.executable).parent, force=cfg.update_auto_install)
     except Exception as e:  # noqa: BLE001 - la chiusura non si blocca per un aggiornamento
         _log_line(f"aggiornamento non installato: {e}")
         return False
 
 
+def _ensure_runtime() -> None:
+    """PhotoScan.exe leggero: il runtime (PyTorch, ...) sta a parte. Se manca o ha la versione sbagliata lo si scarica
+    (dopo conferma: sono GB). Senza, l'app si apre ma l'analisi delle foto non puo' partire."""
+    if not FROZEN:
+        return
+    try:
+        from . import runtime, updater
+        from .config import load_config
+
+        st = runtime.status()
+        if st.get("ok"):
+            return
+        _log_line(f"runtime non pronto: {st.get('reason')}")
+        text = ("PhotoScan ha bisogno del componente di calcolo (PyTorch, versione "
+                f"{st['required']}) che non è ancora su questo PC: {st.get('reason') or 'non trovato'}.\n\n"
+                "Scaricarlo ora da GitHub? Sono alcuni GB e serve una volta sola per versione.")
+        if sys.platform == "win32":
+            if ctypes.windll.user32.MessageBoxW(0, text, "PhotoScan", MB_YESNO | MB_ICONINFO | MB_TOPMOST) != IDYES:
+                return
+        elif _zenity(["--question", "--title=PhotoScan", f"--text={text}", "--width=480"]) not in (0,):
+            return
+        close = _busy_notice("PhotoScan - componente di calcolo",
+                             "Sto scaricando il componente di calcolo: può richiedere diversi minuti.\n"
+                             "La finestra di PhotoScan si apre da sola appena finito.")
+        try:
+            updater.ensure_runtime(load_config().cache_dir)
+        finally:
+            close()
+    except Exception as e:  # noqa: BLE001
+        _log_line(f"runtime non installato: {e}")
+        _message("PhotoScan - componente di calcolo",
+                 f"Non sono riuscito a scaricare il componente di calcolo:\n{e}\n\n"
+                 "PhotoScan si apre lo stesso, ma l'analisi delle foto non funzionerà finché non viene installato "
+                 "(riavvia PhotoScan per riprovare, oppure reinstallalo con PhotoScan-Setup).", error=True)
+
+
+def _prune_runtime() -> None:
+    """Dopo un avvio riuscito si tolgono i runtime che non servono piu' (quello vecchio resta finche' il nuovo non ha
+    funzionato). Si tiene anche quello richiesto da un aggiornamento gia' scaricato e non ancora installato."""
+    try:
+        from . import runtime, updater
+        from .config import load_config
+
+        keep = {runtime.required_version()}
+        pending = updater.read_pending(load_config().cache_dir)
+        if pending and pending.get("runtime_version"):
+            keep.add(str(pending["runtime_version"]))
+        removed = runtime.prune(keep)
+        if removed:
+            _log_line(f"runtime vecchi rimossi: {', '.join(removed)}")
+    except Exception as e:  # noqa: BLE001
+        _log_line(f"pulizia runtime non riuscita: {e}")
+
+
 def _relaunch() -> None:
     """Nuova istanza del launcher (dopo «Installa e riavvia»): installa l'aggiornamento e riapre la finestra."""
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    cmd = [sys.executable] if FROZEN else [sys.executable, "-m", "fotoscan.desktop"]
-    subprocess.Popen(cmd, cwd=str(ROOT), stdin=subprocess.DEVNULL,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags, close_fds=True)
+    appimage = os.environ.get("APPIMAGE")      # Linux: sys.executable sta nel mount dell'AppImage, che sparisce all'uscita
+    if FROZEN:
+        cmd = [appimage] if appimage and sys.platform != "win32" else [sys.executable]
+    else:
+        cmd = [sys.executable, "-m", "fotoscan.desktop"]
+    extra = {"start_new_session": True} if sys.platform != "win32" else {"creationflags": flags}
+    subprocess.Popen(cmd, cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, close_fds=True, env=_external_env() if appimage else None, **extra)
 
 
 def _busy_description(base: str) -> str | None:
@@ -564,15 +826,42 @@ def _set_app_identity() -> None:
         pass  # non Windows o shell non disponibile: nessun effetto
 
 
+def _webview2_installed() -> bool:
+    """Windows: runtime WebView2 presente (Edge aggiornato lo porta con se')."""
+    if sys.platform != "win32":
+        return True
+    try:
+        import winreg
+
+        guid = r"{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+        for hive, path in ((winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{guid}"),
+                           (winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\Microsoft\EdgeUpdate\Clients\{guid}"),
+                           (winreg.HKEY_CURRENT_USER, rf"Software\Microsoft\EdgeUpdate\Clients\{guid}")):
+            try:
+                with winreg.OpenKey(hive, path) as k:
+                    pv, _ = winreg.QueryValueEx(k, "pv")
+                    if pv and pv != "0.0.0.0":
+                        return True
+            except OSError:
+                continue
+    except Exception:  # noqa: BLE001
+        return True      # non si riesce a verificare: si prova comunque
+    return False
+
+
 def _open_app_window(url: str, restart: dict | None = None) -> bool:
-    """Finestra senza bordi con pywebview (WebView2 di Edge). True = finestra aperta e poi chiusa.
-    False = pywebview non disponibile o non partito: si ripiega su Edge/Chrome in modalita' app.
+    """Finestra con pywebview (WebView2 di Edge). True = finestra aperta e poi chiusa.
+    False = pywebview/WebView2 non disponibili o non partiti: si ripiega su Edge/Chrome in modalita' app.
     restart["requested"] = True se la finestra e' stata chiusa con «Installa e riavvia»."""
     try:
         import webview
     except ImportError:
         return False
+    if not _webview2_installed():
+        _log_line("WebView2 non installato: apro Edge/Chrome in modalità app")
+        return False
     _set_app_identity()
+    t0 = time.time()
     try:
         dark = _windows_prefers_dark()
         geom = _load_window_state()
@@ -604,10 +893,16 @@ def _open_app_window(url: str, restart: dict | None = None) -> bool:
 
         window.events.shown += on_shown
         window.events.closing += on_closing
-        webview.start(icon=str(APP_ICON))
+        WEBVIEW_STORAGE.mkdir(parents=True, exist_ok=True)
+        # edgechromium esplicito: senza, pywebview puo' ripiegare in silenzio sul vecchio motore di Internet Explorer.
+        # private_mode=False: preferenze e localStorage restano tra un avvio e l'altro.
+        webview.start(icon=str(APP_ICON), gui="edgechromium" if sys.platform == "win32" else None,
+                      private_mode=False, storage_path=str(WEBVIEW_STORAGE))
     except Exception as e:  # runtime WebView2 mancante, ecc.
-        with open(LOG, "a", encoding="utf-8") as log:
-            log.write(f"pywebview non disponibile: {e}\n")
+        _log_line(f"pywebview non disponibile: {e}")
+        return False
+    if time.time() - t0 < 1.5:       # nessuna finestra e' rimasta aperta cosi' poco: il motore non e' partito
+        _log_line("la finestra pywebview si è chiusa subito: ripiego su Edge/Chrome")
         return False
     return True
 
@@ -623,24 +918,17 @@ def _window_open(profile: Path) -> bool:
             except OSError:
                 continue
         return False
-    ps =("@(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and "
-          "$_.CommandLine.Contains($env:FS_PROFILE) }).Count")
-    out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-                         env=dict(os.environ, FS_PROFILE=str(profile)), capture_output=True, text=True,
-                         creationflags=NO_WINDOW)
-    try:
-        return int(out.stdout.strip() or 0) > 0
-    except ValueError:
-        return False
+    return bool(_profile_pids(profile))
 
 
 def _profile_pids(profile: Path) -> list[int]:
-    """Windows: pid dei processi del browser che usano il profilo dedicato (una sola chiamata PowerShell)."""
+    """Windows: pid dei processi del browser che usano il profilo dedicato (una sola chiamata PowerShell).
+    Solleva OSError se PowerShell non e' utilizzabile."""
     ps = ("Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and "
           "$_.CommandLine.Contains($env:FS_PROFILE) } | ForEach-Object { $_.ProcessId }")
     out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
                          env=dict(os.environ, FS_PROFILE=str(profile)), capture_output=True, text=True,
-                         creationflags=NO_WINDOW)
+                         creationflags=NO_WINDOW, timeout=60)
     return [int(x) for x in out.stdout.split() if x.strip().isdigit()]
 
 
@@ -660,11 +948,12 @@ def _pid_running(pid: int) -> bool:
         k32.CloseHandle(h)
 
 
-def _wait_window(profile: Path, appear_timeout: float = 20) -> bool:
+def _wait_window(profile: Path, bproc: subprocess.Popen | None = None, appear_timeout: float = 20) -> bool:
     """Attende che la finestra compaia e poi che venga chiusa. False se non e' mai comparsa.
 
     Windows: PowerShell solo per scoprire i pid del profilo (all'apertura e una conferma alla fine);
-    durante la sessione si controllano quei pid via API, senza lanciare processi ogni secondo."""
+    durante la sessione si controllano quei pid via API, senza lanciare processi ogni secondo.
+    Se PowerShell/WMI non sono utilizzabili (criteri aziendali) si aspetta il processo del browser."""
     end = time.time() + appear_timeout
     if sys.platform != "win32":
         while not _window_open(profile):
@@ -674,17 +963,24 @@ def _wait_window(profile: Path, appear_timeout: float = 20) -> bool:
         while _window_open(profile):
             time.sleep(2.0)
         return True
-    pids = _profile_pids(profile)
-    while not pids:
-        if time.time() > end:
-            return False
-        time.sleep(1.0)
+    try:
         pids = _profile_pids(profile)
-    while pids:
-        while any(_pid_running(p) for p in pids):
-            time.sleep(1.5)
-        pids = _profile_pids(profile)  # conferma: il browser puo' aver riavviato i suoi processi
-    return True
+        while not pids:
+            if time.time() > end:
+                return False
+            time.sleep(1.0)
+            pids = _profile_pids(profile)
+        while pids:
+            while any(_pid_running(p) for p in pids):
+                time.sleep(1.5)
+            pids = _profile_pids(profile)  # conferma: il browser puo' aver riavviato i suoi processi
+        return True
+    except (OSError, subprocess.SubprocessError) as e:
+        _log_line(f"controllo della finestra via PowerShell non riuscito ({e}): attendo il browser")
+        if bproc is None:
+            return False
+        bproc.wait()
+        return True
 
 
 def _install_linux_launcher() -> None:
@@ -722,66 +1018,122 @@ def _install_linux_launcher() -> None:
 
 
 # ------------------------------------------------------------------ main
-def main() -> int:
-    state = _read_state()
-    owner_proc: subprocess.Popen | None = None
-    restart = {"requested": False}
-    if state and _health(state["port"]):
-        port = state["port"]          # seconda istanza: il server c'e' gia', non lo tocchiamo
-    else:
-        try:
-            LOG.write_text("", encoding="utf-8")   # log riscritto a ogni avvio
-        except OSError:
-            pass
-        _install_pending_update()     # server spento: i file del programma si possono sostituire
-        port = free_port()
-        owner_proc = _start_server(port)
-        if not _wait_healthy(port, owner_proc):
-            _kill_tree(owner_proc.pid)
-            return _fail("Il server di PhotoScan non è partito.")
-        _write_state(port, owner_proc.pid)
+def _stop_server(owner_proc: subprocess.Popen | None, state: dict | None, port: int) -> bool:
+    """Spegne il server: quello avviato da questo processo, oppure quello dello stato (solo se il pid e' ancora
+    il server di PhotoScan: un pid riciclato da un altro programma non si tocca). True = spento."""
+    if owner_proc is not None:
+        _kill_tree(owner_proc.pid)
+        return _server_stopped(owner_proc, port)
+    st = _read_state() or state
+    if not st:
+        return True
+    if _state_pid_valid(st):
+        _kill_tree(int(st["pid"]))
+        return _server_stopped(None, int(st["port"]))
+    if not _health(int(st["port"])):
+        return True            # il server non c'e' piu': solo lo stato da pulire
+    _log_line(f"pid {st.get('pid')} non verificabile: il server non viene terminato")
+    return False
 
-    url = f"http://127.0.0.1:{port}/"
+
+def _no_browser_wait(url: str) -> None:
+    """Nessun browser e nessuna finestra di dialogo (Linux senza zenity): il server resta acceso finche' il processo
+    non viene interrotto (Ctrl+C), altrimenti la pagina si aprirebbe su un server gia' spento."""
+    print(f"PhotoScan e' attivo su {url} - premi Ctrl+C per chiuderlo.", file=sys.stderr)
+    _log_line(f"nessun browser ne' zenity: server attivo su {url}")
     try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        pass
+
+
+def main() -> int:
+    CACHE.mkdir(parents=True, exist_ok=True)
+    restart = {"requested": False}
+    my_file = _register_launcher()
+    owner_proc: subprocess.Popen | None = None
+    state: dict | None = None
+    port = 0
+    try:
+        with _StartupLock():
+            state = _read_state()
+            if state and _health(state["port"]) and (_state_pid_valid(state) or not state.get("ctime")):
+                port = state["port"]          # un altro avvio ha gia' il server pronto: lo riusiamo, non lo tocchiamo
+            else:
+                if state:
+                    _clear_state()            # stato di un server morto o di un altro programma sulla porta
+                    state = None
+                try:
+                    LOG.write_text("", encoding="utf-8")   # log riscritto a ogni avvio
+                except OSError:
+                    pass
+                _ensure_runtime()             # PhotoScan.exe leggero: serve il runtime (PyTorch) a parte
+                _install_pending_update()     # server spento: i file del programma si possono sostituire
+                try:
+                    owner_proc, port = _spawn_and_wait()
+                except Exception as e:  # noqa: BLE001
+                    _log_line(f"avvio del server fallito: {e}")
+                    return _fail(f"Il server di PhotoScan non è partito ({e}).")
+                if owner_proc is None:
+                    return _fail("Il server di PhotoScan non è partito.")
+                _write_state(port, owner_proc.pid)
+                state = _read_state()
+                threading.Thread(target=_prune_runtime, daemon=True, name="runtime-prune").start()
+
+        url = f"http://127.0.0.1:{port}/"
         # Windows: finestra WebView2 (pywebview). Linux: browser in modalita' app (niente GTK/Qt nel pacchetto).
         if sys.platform == "win32" and _open_app_window(url, restart):
             return 0
         browser = find_browser()
         if browser:
-            PROFILE.mkdir(parents=True, exist_ok=True)
+            profile = _profile_for(browser)
+            profile.mkdir(parents=True, exist_ok=True)
             extra = [] if sys.platform == "win32" else ["--class=PhotoScan"]  # WM_CLASS = StartupWMClass del .desktop
             if sys.platform != "win32":
                 _install_linux_launcher()
-            bproc = subprocess.Popen([browser, f"--app={url}", f"--user-data-dir={PROFILE}", *extra,
+            bproc = subprocess.Popen([browser, f"--app={url}", f"--user-data-dir={profile}", *extra,
                                       f"--window-size={WINDOW_SIZE}", "--no-first-run", "--no-default-browser-check",
-                                      "--disable-session-crashed-bubble"])
-            import threading
+                                      "--disable-session-crashed-bubble"], env=_external_env())
             # il lanciatore del browser spesso esce subito (passa la finestra a un'istanza gia' aperta):
             # wait() in un thread lo raccoglie, senza lasciare un processo zombie su Linux
             threading.Thread(target=bproc.wait, daemon=True, name="browser-reaper").start()
-            if not _wait_window(PROFILE):
+            if not _wait_window(profile, bproc):
                 return _fail(f"La finestra di PhotoScan non si è aperta ({browser}).")
         else:
             # nessun Edge/Chrome: browser predefinito; non sappiamo quando la scheda si chiude,
             # quindi il server resta acceso finche' non si preme OK.
             webbrowser.open(url)
-            _message("PhotoScan",
-                     "Edge e Chrome non sono stati trovati: PhotoScan è aperto nel browser predefinito.\n\n"
-                     "Premi OK qui quando hai finito, per spegnere il server.")
+            shown = _message("PhotoScan",
+                             "Edge e Chrome non sono stati trovati: PhotoScan è aperto nel browser predefinito.\n\n"
+                             "Premi OK qui quando hai finito, per spegnere il server.")
+            if not shown:
+                _no_browser_wait(url)
         return 0
     finally:
-        if owner_proc is not None:
-            _kill_tree(owner_proc.pid)
-            if _server_stopped(owner_proc, port):
+        my_file.unlink(missing_ok=True)
+        others = _other_launchers()
+        # il server si spegne con l'ultima finestra (o su «Installa e riavvia»): chiudere la prima di due finestre
+        # non deve lasciare l'altra senza server
+        if not others or restart["requested"]:
+            stopped = _stop_server(owner_proc, state, port)
+            if stopped:
                 _clear_state()
-        elif restart["requested"] and state:
-            _kill_tree(state["pid"])    # seconda istanza: il riavvio spegne anche il server condiviso
-            if _server_stopped(None, state["port"]):
-                _clear_state()
-        if FROZEN and _install_exe_on_exit():
-            pass                      # lo script installa e riapre PhotoScan
-        elif restart["requested"]:
-            _relaunch()
+                try:        # disinstallazione richiesta dall'app (Linux): a server spento si puo' togliere tutto
+                    from . import uninstall
+                    from .config import load_config
+
+                    done = uninstall.finish_pending(load_config().cache_dir, ROOT, _log_line)
+                    if done:
+                        _log_line("disinstallazione: " + ", ".join(done))
+                        return 0
+                except Exception as e:  # noqa: BLE001
+                    _log_line(f"disinstallazione non completata: {e}")
+            installed = FROZEN and stopped and _install_exe_on_exit()
+            if installed and sys.platform == "win32":
+                pass                  # lo script installa e riapre PhotoScan
+            elif restart["requested"]:
+                _relaunch()           # Linux: l'AppImage e' gia' stato sostituito, si riapre qui
 
 
 if __name__ == "__main__":

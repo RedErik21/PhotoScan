@@ -1,6 +1,7 @@
 # PhotoScan - accesso al telefono via Shell di Windows (Android, MTP) e via WPD diretto (iPhone).
 # Sola lettura sul telefono: enumera cartelle e copia file in una cartella di staging.
-# Input: variabile d'ambiente FOTOSCAN_PHONE_ARGS (JSON). Output: una riga JSON per messaggio su stdout.
+# Input: file JSON indicato da FOTOSCAN_PHONE_ARGS_FILE (una variabile d'ambiente e' limitata a 32 KB, le liste di
+# file da saltare possono essere piu' lunghe). Output: una riga JSON per messaggio su stdout.
 # iPhone: Shell non espone il contenuto della memoria, quindi si usa WPD (IPortableDevice) direttamente.
 # Su iPhone si importa solo la cartella DCIM.
 # Script solo ASCII (PowerShell 5.1 legge i file senza BOM come ANSI).
@@ -8,7 +9,11 @@
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-$cfg = $env:FOTOSCAN_PHONE_ARGS | ConvertFrom-Json
+if ($env:FOTOSCAN_PHONE_ARGS_FILE) {
+    $cfg = Get-Content -LiteralPath $env:FOTOSCAN_PHONE_ARGS_FILE -Raw -Encoding UTF8 | ConvertFrom-Json
+} else {
+    $cfg = $env:FOTOSCAN_PHONE_ARGS | ConvertFrom-Json
+}
 $action = $cfg.action
 $MEDIA_EXT = @('.jpg', '.jpeg', '.png', '.heic', '.heif', '.webp', '.gif', '.dng', '.mp4', '.mov', '.3gp', '.m4v')
 $SKIP_TOP = @('Android', '.trash-storage')
@@ -280,6 +285,45 @@ function Emit($obj) {
     [Console]::Out.Flush()
 }
 
+function Test-FileFree([string]$path) {
+    # Il file e' completo solo quando nessuno lo sta piu' scrivendo (la copia di Explorer e' asincrona).
+    try {
+        $fs = [System.IO.File]::Open($path, 'Open', 'Read', 'None')
+        $fs.Close()
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Wait-CopyDone([string]$path, [long]$expected) {
+    # Attende la fine della copia. Fallisce se per 60 s la dimensione non cresce (telefono scollegato o bloccato)
+    # o dopo 1 ora in tutto. Con dimensione attesa sconosciuta chiede una dimensione stabile per 3 s e file libero.
+    $start = Get-Date
+    $lastGrow = Get-Date
+    $last = -1
+    $stable = 0
+    while (((Get-Date) - $lastGrow).TotalSeconds -lt 60 -and ((Get-Date) - $start).TotalSeconds -lt 3600) {
+        if (Test-Path -LiteralPath $path) {
+            $len = (Get-Item -LiteralPath $path).Length
+            if ($len -ne $last) { $lastGrow = Get-Date; $stable = 0 } else { $stable++ }
+            $last = $len
+            if ($expected -ge 0) {
+                if ($len -eq $expected -and (Test-FileFree $path)) { return $true }
+            } elseif ($len -gt 0 -and $stable -ge 8 -and (Test-FileFree $path)) {
+                return $true
+            }
+        }
+        Start-Sleep -Milliseconds 400
+    }
+    return $false
+}
+
+function Assert-PhoneStillThere([int]$fails) {
+    # Dopo 3 copie fallite di fila il telefono quasi certamente non c'e' piu': inutile aspettare i file restanti.
+    if ($fails -ge 3) { throw 'Telefono scollegato o bloccato: importazione interrotta. Sbloccalo, ricollega il cavo e riprova.' }
+}
+
 function Is-Media($item) {
     $ext = [System.IO.Path]::GetExtension($item.Name).ToLowerInvariant()
     return $MEDIA_EXT -contains $ext
@@ -434,6 +478,7 @@ function Invoke-WpdAction([string]$wpdId) {
 
         $staging = $cfg.staging
         $idx = 0
+        $fails = 0
         foreach ($entry in $kept) {
             $idx++
             $rel = @($entry.rel)
@@ -452,7 +497,8 @@ function Invoke-WpdAction([string]$wpdId) {
             if (-not $ok) { Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue }
             $bytes = 0
             if ($ok) { $bytes = (Get-Item -LiteralPath $target).Length }
-            Emit @{ type = 'file'; i = $idx; rel = ($rel -join '/'); ok = $ok; bytes = $bytes; error = $err }
+            Emit @{ type = 'file'; i = $idx; rel = ($rel -join '/'); ok = $ok; bytes = $bytes; size = $entry.size; error = $err }
+            if ($ok) { $fails = 0 } else { $fails++; Assert-PhoneStillThere $fails }
         }
         Emit @{ type = 'done' }
     } finally {
@@ -575,6 +621,7 @@ if ($action -eq 'copy') {
 
     $staging = $cfg.staging
     $idx = 0
+    $fails = 0
     foreach ($entry in $list) {
         $idx++
         $rel = $entry.rel
@@ -589,25 +636,17 @@ if ($action -eq 'copy') {
         $err = $null
         try {
             $shell.Namespace($relDir).CopyHere($item, 1028)   # 4 = niente progresso, 1024 = niente finestre
-            $deadline = (Get-Date).AddSeconds(300)
-            $last = -1
-            while ((Get-Date) -lt $deadline) {
-                if (Test-Path -LiteralPath $target) {
-                    $len = (Get-Item -LiteralPath $target).Length
-                    if (($expected -ge 0 -and $len -eq $expected) -or ($expected -lt 0 -and $len -gt 0 -and $len -eq $last)) {
-                        $ok = $true; break
-                    }
-                    $last = $len
-                }
-                Start-Sleep -Milliseconds 400
-            }
-            if (-not $ok) { $err = 'timeout nella copia' }
+            $ok = Wait-CopyDone $target $expected
+            if (-not $ok) { $err = 'timeout nella copia (telefono fermo o scollegato)' }
         } catch {
             $err = $_.Exception.Message
         }
+        # un file non completo non deve restare nello staging
+        if (-not $ok) { Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue }
         $bytes = 0
         if ($ok) { $bytes = (Get-Item -LiteralPath $target).Length }
-        Emit @{ type = 'file'; i = $idx; rel = $relPath; ok = $ok; bytes = $bytes; error = $err }
+        Emit @{ type = 'file'; i = $idx; rel = $relPath; ok = $ok; bytes = $bytes; size = $expected; error = $err }
+        if ($ok) { $fails = 0 } else { $fails++; Assert-PhoneStillThere $fails }
     }
     Emit @{ type = 'done' }
     exit 0

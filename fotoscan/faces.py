@@ -97,12 +97,16 @@ def models_present(cfg: Config | None = None) -> bool:
     return det.is_file() and det.stat().st_size > 1_000_000 and rec.is_file() and rec.stat().st_size > 10_000_000
 
 
+# Impostato quando CUDA risulta dichiarata ma inutilizzabile (driver/CUDA/cuDNN mancanti): da li' si usa la CPU.
+_CUDA_FAILED = False
+
+
 def active_provider() -> str | None:
     try:
         import onnxruntime as ort
 
         provs = ort.get_available_providers()
-        if "CUDAExecutionProvider" in provs:
+        if "CUDAExecutionProvider" in provs and not _CUDA_FAILED:
             return "CUDAExecutionProvider"
         if "CPUExecutionProvider" in provs:
             return "CPUExecutionProvider"
@@ -184,7 +188,9 @@ def ensure_models(cfg: Config | None = None, progress: Callable[[str], None] | N
                 pass
     d.mkdir(parents=True, exist_ok=True)
     say("Scarico i modelli volti buffalo_l (~280 MB, una sola volta)…")
-    tmp_zip = Path(tempfile.mkstemp(prefix="fs_buffalo_", suffix=".zip", dir=str(d))[1])
+    fd, tmp_name = tempfile.mkstemp(prefix="fs_buffalo_", suffix=".zip", dir=str(d))
+    os.close(fd)  # altrimenti su Windows il file resta bloccato e non si riesce a eliminarlo
+    tmp_zip = Path(tmp_name)
     try:
         req = urllib.request.Request(BUFFALO_URL, headers={"User-Agent": "PhotoScan/2.0"})
         with netguard.download_window("download modelli volti buffalo_l (GitHub)"):
@@ -217,10 +223,17 @@ def ensure_models(cfg: Config | None = None, progress: Callable[[str], None] | N
         say("Modelli volti pronti.")
         return det_path, rec_path
     finally:
-        try:
-            tmp_zip.unlink(missing_ok=True)
-        except OSError:
-            pass
+        for leftover in (tmp_zip, det_path.with_suffix(".onnx.tmp"), rec_path.with_suffix(".onnx.tmp")):
+            try:
+                leftover.unlink(missing_ok=True)
+            except OSError:
+                pass
+        # zip temporanei lasciati da download interrotti (anche di versioni precedenti)
+        for old in d.glob("fs_buffalo_*.zip"):
+            try:
+                old.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 # ------------------------------------------------------------ geometria e qualita'
@@ -317,20 +330,35 @@ class OnnxFaceEngine:
         netguard.quiet_onnxruntime(ort)
         self.cfg = cfg or load_config()
         self.det_size = int(det_size if det_size is not None else getattr(self.cfg, "faces_det_size", 640))
+        global _CUDA_FAILED
         det_path, rec_path = ensure_models(self.cfg)
-        provs = ["CUDAExecutionProvider", "CPUExecutionProvider"] if active_provider() == "CUDAExecutionProvider" else ["CPUExecutionProvider"]
-        opts = ort.SessionOptions()
-        opts.log_severity_level = 3
-        # thread di calcolo limitati ai core fisici (la decodifica delle foto gira in parallelo nei worker)
-        opts.intra_op_num_threads = _physical_cores()
-        opts.inter_op_num_threads = 1
-        self.det = ort.InferenceSession(str(det_path), sess_options=opts, providers=provs)
-        self.rec = ort.InferenceSession(str(rec_path), sess_options=opts, providers=provs)
-        self.provider = self.det.get_providers()[0]
-        log.info("motore volti ONNX pronto su %s (det_size=%d)", self.provider, self.det_size)
-        self._det_in = self.det.get_inputs()[0].name
-        self._rec_in = self.rec.get_inputs()[0].name
         self._anchor_cache: dict[tuple[int, int, int], np.ndarray] = {}
+
+        def _build(provs: list[str]) -> None:
+            opts = ort.SessionOptions()
+            opts.log_severity_level = 3
+            # thread di calcolo limitati ai core fisici (la decodifica delle foto gira in parallelo nei worker)
+            opts.intra_op_num_threads = _physical_cores()
+            opts.inter_op_num_threads = 1
+            self.det = ort.InferenceSession(str(det_path), sess_options=opts, providers=provs)
+            self.rec = ort.InferenceSession(str(rec_path), sess_options=opts, providers=provs)
+            self.provider = self.det.get_providers()[0]
+            self._det_in = self.det.get_inputs()[0].name
+            self._rec_in = self.rec.get_inputs()[0].name
+            # Prova a vuoto: CUDA puo' creare la sessione e poi fallire alla prima inferenza (cuDNN mancante, memoria)
+            self.detect_boxes(Image.new("RGB", (64, 64), (128, 128, 128)))
+            self.embed_crops([np.zeros((112, 112, 3), dtype=np.uint8)])
+
+        if active_provider() == "CUDAExecutionProvider":
+            try:
+                _build(["CUDAExecutionProvider", "CPUExecutionProvider"])
+            except Exception as exc:  # noqa: BLE001
+                log.warning("volti: GPU CUDA non utilizzabile (%s): uso la CPU", exc)
+                _CUDA_FAILED = True
+                _build(["CPUExecutionProvider"])
+        else:
+            _build(["CPUExecutionProvider"])
+        log.info("motore volti ONNX pronto su %s (det_size=%d)", self.provider, self.det_size)
 
     def _anchors(self, h: int, w: int, stride: int, num_anchors: int = 2) -> np.ndarray:
         key = (h, w, stride)
@@ -452,13 +480,47 @@ class OnnxFaceEngine:
 
 
 # ------------------------------------------------------------ pipeline di rilevamento
+MAX_IMAGE_PIXELS = 400_000_000  # oltre: troppo grande da decodificare in modo sicuro (errore permanente)
+
+
+class PermanentImageError(Exception):
+    """Immagine che non potra' mai essere letta (corrotta, formato sconosciuto, enorme): inutile ritentare."""
+
+
+def _fs_path(path: str) -> str:
+    """Percorso adatto alle API di sistema (prefisso \\\\?\\ per i percorsi lunghi su Windows)."""
+    try:
+        from .scanner_metadata import _fs
+
+        return _fs(path)
+    except Exception:  # noqa: BLE001
+        return path
+
+
 def _load_image_rgb(path: str, max_side: int = 1600) -> Image.Image:
-    with Image.open(path) as im:
-        if im.format == "JPEG":
-            im.draft("RGB", (max_side, max_side))
-        im = ImageOps.exif_transpose(im).convert("RGB")
-        im.thumbnail((max_side, max_side), Image.BILINEAR)
-        return im.copy()
+    """Apre l'immagine in RGB con orientamento EXIF applicato e lato massimo `max_side`.
+    Lo spazio di coordinate e' lo stesso usato dal rilevamento (e dal ritaglio in routes_people)."""
+    try:
+        with Image.open(_fs_path(path)) as im:
+            if im.width * im.height > MAX_IMAGE_PIXELS:
+                raise PermanentImageError("immagine troppo grande")
+            if im.format == "JPEG":
+                im.draft("RGB", (max_side, max_side))
+            if im.mode in ("I;16", "I;16L", "I;16B", "I"):  # 16 bit: porta a 8 bit prima della conversione
+                im = im.point(lambda i: i * (1 / 256)).convert("L")
+            im = ImageOps.exif_transpose(im).convert("RGB")
+            im.thumbnail((max_side, max_side), Image.BILINEAR)
+            return im.copy()
+    except PermanentImageError:
+        raise
+    except (Image.UnidentifiedImageError, Image.DecompressionBombError, Image.DecompressionBombWarning,
+            SyntaxError, ValueError, EOFError, FileNotFoundError, NotADirectoryError) as exc:
+        raise PermanentImageError(f"{type(exc).__name__}: {exc}") from exc
+    except OSError as exc:
+        # Pillow segnala i dati corrotti con OSError senza errno; errori di disco/rete/permessi (errno) sono transitori
+        if exc.errno is None:
+            raise PermanentImageError(f"{type(exc).__name__}: {exc}") from exc
+        raise
 
 
 def _box_iou(a: list[float], b: list[float]) -> float:
@@ -472,16 +534,45 @@ def _box_iou(a: list[float], b: list[float]) -> float:
     return inter / (area_a + area_b - inter + 1e-6)
 
 
+def _preserved_boxes(conn: sqlite3.Connection, fid: int) -> list[list[float]]:
+    """Riquadri dei volti locked/excluded gia' presenti su una foto (letti al momento dell'inserimento)."""
+    out: list[list[float]] = []
+    for pr in conn.execute(
+        "SELECT bbox FROM faces WHERE file_id=? AND (COALESCE(locked,0)=1 OR COALESCE(excluded,0)=1)", (fid,)
+    ):
+        if pr["bbox"]:
+            try:
+                box = json.loads(pr["bbox"])
+                if len(box) == 4:
+                    out.append([float(x) for x in box])
+            except Exception:  # noqa: BLE001
+                pass
+    return out
+
+
+def _finite_vec(v) -> bool:
+    try:
+        return bool(np.isfinite(np.asarray(v, dtype=np.float32)).all())
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _insert_photo_faces(
     conn: sqlite3.Connection,
     fid: int,
     found: list[DetectedFace],
-    existing_preserved: dict[int, list[list[float]]],
+    existing_preserved: dict[int, list[list[float]]] | None = None,
 ) -> int:
-    """Inserisce i volti di una foto evitando duplicati su volti locked/excluded gia' presenti (post reset-scan)."""
-    preserved = existing_preserved.get(fid)
+    """Inserisce i volti di una foto evitando duplicati su volti locked/excluded gia' presenti (post reset-scan).
+    Scarta embedding non finiti (NaN/inf)."""
+    if existing_preserved is not None:
+        preserved = existing_preserved.get(fid)
+    else:
+        preserved = _preserved_boxes(conn, fid)
     added = 0
     for f in found:
+        if not _finite_vec(f.emb):
+            continue
         if preserved and any(_box_iou(f.bbox, pb) > 0.5 for pb in preserved):
             continue
         conn.execute(
@@ -516,13 +607,22 @@ def detect_faces(
         with conn:
             conn.execute("DELETE FROM faces")
             conn.execute("DELETE FROM faces_done")
-            conn.execute("DELETE FROM persons")
+            # Gli embedding vecchi non sono confrontabili: le persone senza nome spariscono, quelle con nome restano
+            # (vuote) per non perdere il nome; le unioni annullabili e le copertine non hanno piu' senso.
+            conn.execute("DELETE FROM persons WHERE name IS NULL OR TRIM(name)=''")
+            conn.execute("UPDATE persons SET n=0, centroid=NULL, cover_face_id=NULL, cover_locked=0")
+            conn.execute("DELETE FROM merge_log")
+        clear_crop_cache(c)
     set_meta(conn, "faces_model", FACES_MODEL_ID)
+    # Residui di file eliminati dal catalogo (gli id possono essere riusati da file nuovi)
+    with conn:
+        conn.execute("DELETE FROM faces_done WHERE file_id NOT IN (SELECT id FROM files)")
 
     rows = conn.execute(
-        "SELECT id, path FROM files WHERE kind='image' AND status='embedded' "
+        "SELECT id, path, size, mtime FROM files WHERE kind='image' AND status='embedded' "
         "AND id NOT IN (SELECT file_id FROM faces_done) ORDER BY id"
     ).fetchall()
+    snapshot = {int(r["id"]): (r["size"], r["mtime"]) for r in rows}
     total = len(rows)
     if total == 0:
         if progress:
@@ -531,23 +631,15 @@ def detect_faces(
     if progress:
         progress("volti", 0, total)
 
-    # Eventuali volti bloccati/esclusi conservati da un reset-scan: evitiamo di reinserire lo stesso riquadro.
-    existing_preserved: dict[int, list[list[float]]] = {}
-    for pr in conn.execute("SELECT file_id, bbox FROM faces WHERE COALESCE(locked,0)=1 OR COALESCE(excluded,0)=1"):
-        if pr["bbox"]:
-            try:
-                box = json.loads(pr["bbox"])
-                if len(box) == 4:
-                    existing_preserved.setdefault(int(pr["file_id"]), []).append([float(x) for x in box])
-            except Exception:  # noqa: BLE001
-                pass
-
     engine = detector or OnnxFaceEngine(c, det_size=int(getattr(c, "faces_det_size", 640)))
     supports_batch = callable(getattr(engine, "detect_boxes", None)) and callable(getattr(engine, "embed_crops", None))
     workers = max(1, min(int(c.workers or 4), 8, _physical_cores()))
     window = max(16, workers * 4)
     inserted = 0
     processed = 0
+    skipped = 0           # foto NON segnate come analizzate (errore transitorio o file cambiato): ritentate al prossimo giro
+    engine_fail = 0       # errori consecutivi del motore ONNX
+    MAX_ENGINE_FAIL = 3
 
     def _open(r):
         fid, path = int(r["id"]), str(r["path"])
@@ -556,24 +648,53 @@ def detect_faces(
         except Exception as exc:  # noqa: BLE001
             return fid, path, None, exc
 
-    pending_photos: list[tuple[int, str, list[FaceCandidate]]] = []
+    def _unchanged(fid: int) -> bool:
+        """Il file e' ancora nel catalogo con le stesse size/mtime di quando e' stato letto (l'indicizzazione
+        puo' averlo modificato o eliminato nel frattempo: i volti calcolati sarebbero della versione vecchia)."""
+        row = conn.execute("SELECT size, mtime FROM files WHERE id=?", (fid,)).fetchone()
+        return row is not None and (row["size"], row["mtime"]) == snapshot.get(fid)
+
+    def _store(fid: int, found: list[DetectedFace]) -> None:
+        nonlocal inserted, processed, skipped
+        if not _unchanged(fid):
+            skipped += 1
+            return
+        inserted += _insert_photo_faces(conn, fid, found)
+        processed += 1
+
+    def _engine_error(what: str, path: str, exc: Exception) -> None:
+        nonlocal engine_fail
+        engine_fail += 1
+        log.warning("volti %s %s: %s", what, path, exc)
+
+    def _check_engine() -> None:
+        if engine_fail >= MAX_ENGINE_FAIL:
+            raise RuntimeError(
+                "Il motore di riconoscimento volti non funziona (errori ripetuti in inferenza): analisi interrotta. "
+                "Controlla driver GPU/CUDA oppure usa la versione CPU di onnxruntime."
+            )
+
+    # (fid, percorso, candidati, definitivo): definitivo=False -> non segnare la foto come analizzata
+    pending_photos: list[tuple[int, str, list[FaceCandidate], bool]] = []
     pending_crops: list[np.ndarray] = []
 
     def _flush_pending() -> None:
-        nonlocal inserted, processed
+        nonlocal skipped, engine_fail
         if not pending_photos:
             return
         embs = None
         if pending_crops:
             try:
                 embs = engine.embed_crops(pending_crops, batch_size=64)
+                engine_fail = 0
             except Exception as exc:  # noqa: BLE001
-                log.warning("volti batch ArcFace: %s", exc)
+                _engine_error("batch ArcFace", f"({len(pending_crops)} volti)", exc)
                 embs = None
         cursor = 0
         with conn:
-            for fid, _path, cands in pending_photos:
+            for fid, _path, cands, final in pending_photos:
                 found: list[DetectedFace] = []
+                ok = final
                 if cands and embs is not None:
                     for cand in cands:
                         found.append(
@@ -588,12 +709,17 @@ def detect_faces(
                         cursor += 1
                 else:
                     cursor += len(cands)
-                inserted += _insert_photo_faces(conn, fid, found, existing_preserved)
-                processed += 1
+                    if cands:
+                        ok = False  # embedding non calcolati: la foto va ritentata, non e' "senza volti"
+                if ok:
+                    _store(fid, found)
+                else:
+                    skipped += 1
         pending_photos.clear()
         pending_crops.clear()
         if progress:
             progress("volti", processed, total)
+        _check_engine()
 
     row_iter = iter(rows)
     in_flight: deque[Future] = deque()
@@ -618,41 +744,60 @@ def detect_faces(
             if should_stop and should_stop():
                 break
 
+            # Errore di lettura: permanente (file mancante/corrotto) -> "analizzata, nessun volto";
+            # transitorio (disco/rete/permessi) -> NON segnata, sara' ritentata.
+            load_failed = err is not None or im is None
+            permanent = isinstance(err, PermanentImageError)
+            if load_failed:
+                log.warning("volti %s: %s", path, err)
+
             if supports_batch:
-                if err is not None or im is None:
-                    log.warning("volti %s: %s", path, err)
-                    pending_photos.append((fid, path, []))
+                if load_failed:
+                    pending_photos.append((fid, path, [], permanent))
                 else:
                     try:
                         cands = engine.detect_boxes(im)
+                        engine_fail = 0
+                        pending_photos.append((fid, path, cands, True))
+                        for cand in cands:
+                            pending_crops.append(cand.crop)
                     except Exception as exc:  # noqa: BLE001
-                        log.warning("volti inferenza %s: %s", path, exc)
-                        cands = []
-                    pending_photos.append((fid, path, cands))
-                    for cand in cands:
-                        pending_crops.append(cand.crop)
-                if len(pending_crops) >= ARC_BATCH_TARGET or len(pending_photos) >= ARC_BATCH_MAX_PHOTOS:
+                        _engine_error("inferenza", path, exc)
+                        pending_photos.append((fid, path, [], False))
+                if (len(pending_crops) >= ARC_BATCH_TARGET or len(pending_photos) >= ARC_BATCH_MAX_PHOTOS
+                        or engine_fail >= MAX_ENGINE_FAIL):
                     _flush_pending()
+                    _check_engine()
             else:
                 found: list[DetectedFace] = []
-                if err is not None or im is None:
-                    log.warning("volti %s: %s", path, err)
+                final = True
+                if load_failed:
+                    final = permanent
                 else:
                     try:
                         found = engine.detect(im)
+                        engine_fail = 0
                     except Exception as exc:  # noqa: BLE001
-                        log.warning("volti inferenza %s: %s", path, exc)
+                        _engine_error("inferenza", path, exc)
+                        final = False
                 with conn:
-                    inserted += _insert_photo_faces(conn, fid, found, existing_preserved)
-                    processed += 1
+                    if final:
+                        _store(fid, found)
+                    else:
+                        skipped += 1
+                _check_engine()
                 if progress and (processed % 8 == 0 or processed == total):
                     progress("volti", processed, total)
 
         # Chiude eventuali foto accumulate nel batch e annulla i future residui se interrotto
-        _flush_pending()
-        for fut in in_flight:
-            fut.cancel()
+        try:
+            _flush_pending()
+        finally:
+            for fut in in_flight:
+                fut.cancel()
 
+    if skipped:
+        log.warning("volti: %d foto non analizzate (errori temporanei o file cambiati): verranno ritentate", skipped)
     if progress:
         progress("volti", processed, total)
     return inserted
@@ -682,17 +827,30 @@ def recompute_person(conn: sqlite3.Connection, person_id: int) -> None:
     vecs = []
     best_cover = rows[0]["id"]
     best_q = -1.0
+    best_rel_cover = None   # miglior copertina tra i volti affidabili (preferita)
+    best_rel_q = -1.0
     for r in rows:
         q = float(r["quality"]) if r["quality"] is not None else 0.5
         if q > best_q:
             best_q = q
             best_cover = r["id"]
-        if r["emb"] is not None:
+        reliable = True
+        try:
             bbox = json.loads(r["bbox"]) if r["bbox"] else None
-            if r["locked"] or is_reliable_face(r["det_score"], bbox, r["quality"]):
-                vecs.append(_norm_vec(from_blob(r["emb"])))
+        except Exception:  # noqa: BLE001
+            bbox = None
+        reliable = is_reliable_face(r["det_score"], bbox, r["quality"])
+        if reliable and q > best_rel_q:
+            best_rel_q = q
+            best_rel_cover = r["id"]
+        if r["emb"] is not None and (r["locked"] or reliable):
+            v = _norm_vec(from_blob(r["emb"]))
+            if _finite_vec(v):
+                vecs.append(v)
+    if best_rel_cover is not None:
+        best_cover = best_rel_cover
     if not vecs:
-        vecs = [_norm_vec(from_blob(r["emb"])) for r in rows if r["emb"] is not None]
+        vecs = [v for v in (_norm_vec(from_blob(r["emb"])) for r in rows if r["emb"] is not None) if _finite_vec(v)]
     centroid = to_blob(_norm_vec(np.mean(np.stack(vecs), axis=0))) if vecs else None
     # Preserva la foto profilo scelta manualmente finche' quel volto resta assegnato alla persona
     keep_locked = bool(p_info and p_info["cover_locked"] and p_info["cover_face_id"] in row_ids)
@@ -775,88 +933,119 @@ def cluster_faces(
     assign_thr = float(assign_threshold if assign_threshold is not None else getattr(c, "faces_assign_threshold", 0.52))
     min_n = max(1, int(min_photos if min_photos is not None else c.faces_min_photos))
 
+    # FASE 1 (scrittura breve): reset facoltativo, ricalcolo di centroidi/conteggi/copertine delle persone esistenti
     with conn:
         if reset_unlocked:
-            # Mantiene intatti i volti locked/excluded e tutte le persone con nome o con volti locked.
-            conn.execute("UPDATE faces SET person_id=NULL, cluster=NULL WHERE COALESCE(locked,0)=0 AND COALESCE(excluded,0)=0")
+            # Mantiene intatti i volti locked/excluded, quelli delle persone con nome e le persone con nome o con volti.
+            conn.execute(
+                "UPDATE faces SET person_id=NULL, cluster=NULL WHERE COALESCE(locked,0)=0 AND COALESCE(excluded,0)=0 "
+                "AND (person_id IS NULL OR person_id NOT IN (SELECT id FROM persons WHERE name IS NOT NULL AND TRIM(name)<>''))"
+            )
             conn.execute(
                 "DELETE FROM persons WHERE (name IS NULL OR TRIM(name)='') "
                 "AND id NOT IN (SELECT DISTINCT person_id FROM faces WHERE person_id IS NOT NULL)"
             )
-
-        # 1. Aggiorna i centroidi delle persone esistenti
-        existing_ids = [int(r[0]) for r in conn.execute("SELECT id FROM persons ORDER BY id")]
-        for pid in existing_ids:
+        # copertine che puntano a volti che non esistono piu' (file eliminati)
+        conn.execute(
+            "UPDATE persons SET cover_face_id=NULL, cover_locked=0 "
+            "WHERE cover_face_id IS NOT NULL AND cover_face_id NOT IN (SELECT id FROM faces)"
+        )
+        for pid in [int(r[0]) for r in conn.execute("SELECT id FROM persons ORDER BY id")]:
             recompute_person(conn, pid)
 
-        existing = conn.execute(
-            "SELECT id, centroid FROM persons WHERE centroid IS NOT NULL ORDER BY id"
-        ).fetchall()
-        ex_ids = [int(r["id"]) for r in existing]
-        ex_mat = np.stack([_norm_vec(from_blob(r["centroid"])) for r in existing]) if existing else None
+    # FASE 2 (sola lettura, nessun lock di scrittura): assegnazione e raggruppamento, anche di minuti su archivi grandi
+    existing = conn.execute("SELECT id, centroid FROM persons WHERE centroid IS NOT NULL ORDER BY id").fetchall()
+    ex_ids: list[int] = []
+    ex_vecs: list[np.ndarray] = []
+    for r in existing:
+        v = _norm_vec(from_blob(r["centroid"]))
+        if v.size > 0 and _finite_vec(v) and float(np.linalg.norm(v)) > 0:
+            ex_ids.append(int(r["id"]))
+            ex_vecs.append(v)
+    ex_mat = np.stack(ex_vecs) if ex_vecs else None
 
-        # 2. Carica i volti non assegnati, affidabili e non esclusi/bloccati
-        raw_unassigned = conn.execute(
-            "SELECT id, file_id, emb, det_score, quality, bbox FROM faces "
-            "WHERE person_id IS NULL AND COALESCE(excluded,0)=0 AND COALESCE(locked,0)=0 AND emb IS NOT NULL "
-            "ORDER BY id"
-        ).fetchall()
+    raw_unassigned = conn.execute(
+        "SELECT id, file_id, emb, det_score, quality, bbox FROM faces "
+        "WHERE person_id IS NULL AND COALESCE(excluded,0)=0 AND COALESCE(locked,0)=0 AND emb IS NOT NULL "
+        "ORDER BY id"
+    ).fetchall()
 
-        reliable: list[tuple[int, int, np.ndarray]] = []
-        for r in raw_unassigned:
+    reliable: list[tuple[int, int, np.ndarray]] = []
+    for r in raw_unassigned:
+        try:
             bbox = json.loads(r["bbox"]) if r["bbox"] else None
-            if is_reliable_face(r["det_score"], bbox, r["quality"]):
-                reliable.append((int(r["id"]), int(r["file_id"]), _norm_vec(from_blob(r["emb"]))))
+        except Exception:  # noqa: BLE001
+            bbox = None
+        if not is_reliable_face(r["det_score"], bbox, r["quality"]):
+            continue
+        v = _norm_vec(from_blob(r["emb"]))
+        if v.size == 0 or not _finite_vec(v) or float(np.linalg.norm(v)) <= 0:
+            continue
+        reliable.append((int(r["id"]), int(r["file_id"]), v))
 
-        # 3. Assegna prima alle persone esistenti (soglia conservativa)
-        remaining: list[tuple[int, int, np.ndarray]] = []
-        touched_persons: set[int] = set()
-        if reliable and ex_mat is not None:
-            rmat = np.stack([v for _, _, v in reliable])
-            sims = rmat @ ex_mat.T
-            best_j = np.argmax(sims, axis=1)
-            best_s = sims[np.arange(len(reliable)), best_j]
-            for idx, (fid_row, file_id, vec) in enumerate(reliable):
-                if float(best_s[idx]) >= assign_thr:
-                    pid = ex_ids[int(best_j[idx])]
-                    conn.execute("UPDATE faces SET person_id=?, cluster=? WHERE id=?", (pid, pid, fid_row))
-                    touched_persons.add(pid)
-                else:
-                    remaining.append((fid_row, file_id, vec))
-        else:
-            remaining = reliable
+    assignments: list[tuple[int, int]] = []        # (face_id, person_id) verso persone esistenti
+    remaining: list[tuple[int, int, np.ndarray]] = []
+    if reliable and ex_mat is not None:
+        rmat = np.stack([v for _, _, v in reliable])
+        sims = rmat @ ex_mat.T
+        best_j = np.argmax(sims, axis=1)
+        best_s = sims[np.arange(len(reliable)), best_j]
+        for idx, (fid_row, file_id, vec) in enumerate(reliable):
+            if float(best_s[idx]) >= assign_thr:
+                assignments.append((fid_row, ex_ids[int(best_j[idx])]))
+            else:
+                remaining.append((fid_row, file_id, vec))
+    else:
+        remaining = reliable
 
-        # 4. Raggruppa i volti rimasti in modo indipendente dall'ordine
-        if remaining:
-            mat = np.stack([v for _, _, v in remaining])
-            # 'exact' (predefinito) o 'approx' (avanzata, vedi faces_topk): stesso grafo, meno archi per blocco
-            topk = int(getattr(c, "faces_topk", 50)) if getattr(c, "faces_cluster_mode", "exact") == "approx" else 0
-            comps = _blockwise_components(mat, threshold=thr, topk=max(0, topk))
-            # Filtra membri ponte deboli nei componenti grandi e ordina deterministicamente
-            valid_clusters: list[tuple[int, int, list[int]]] = []
-            for comp in comps:
-                if len(comp) > 10:
-                    centroid = _norm_vec(mat[comp].mean(axis=0))
-                    comp = [i for i in comp if float(mat[i] @ centroid) >= thr - 0.05]
-                distinct_files = {remaining[i][1] for i in comp}
-                if len(distinct_files) >= min_n:
-                    min_file = min(distinct_files)
-                    valid_clusters.append((-len(distinct_files), min_file, comp))
-            valid_clusters.sort()
-
-            now = datetime.now().isoformat(timespec="seconds")
-            for _, _, comp in valid_clusters:
+    valid_clusters: list[tuple[int, int, list[int]]] = []
+    mat = None
+    if remaining:
+        mat = np.stack([v for _, _, v in remaining])
+        # 'exact' (predefinito) o 'approx' (avanzata, vedi faces_topk): stesso grafo, meno archi per blocco
+        topk = int(getattr(c, "faces_topk", 50)) if getattr(c, "faces_cluster_mode", "exact") == "approx" else 0
+        comps = _blockwise_components(mat, threshold=thr, topk=max(0, topk))
+        # Filtra membri ponte deboli nei componenti grandi e ordina deterministicamente
+        for comp in comps:
+            if len(comp) > 10:
                 centroid = _norm_vec(mat[comp].mean(axis=0))
-                cur = conn.execute(
-                    "INSERT INTO persons(name, created, centroid, n, hidden) VALUES(NULL, ?, ?, 0, 0)",
-                    (now, to_blob(centroid)),
-                )
-                pid = int(cur.lastrowid)
-                face_ids = [remaining[i][0] for i in comp]
-                conn.executemany("UPDATE faces SET person_id=?, cluster=? WHERE id=?", [(pid, pid, x) for x in face_ids])
-                touched_persons.add(pid)
+                comp = [i for i in comp if float(mat[i] @ centroid) >= thr - 0.05]
+            distinct_files = {remaining[i][1] for i in comp}
+            if len(distinct_files) >= min_n:
+                min_file = min(distinct_files)
+                valid_clusters.append((-len(distinct_files), min_file, comp))
+        valid_clusters.sort()
 
-        # 5. Ricalcola centroidi, conteggi e copertine di tutte le persone toccate
+    # FASE 3 (scrittura breve): applica il risultato. Le guardie evitano di sovrascrivere modifiche dell'utente
+    # (unione, assegnazione, esclusione) fatte mentre la fase 2 lavorava.
+    touched_persons: set[int] = set()
+    with conn:
+        for fid_row, pid in assignments:
+            cur = conn.execute(
+                "UPDATE faces SET person_id=?, cluster=? WHERE id=? AND person_id IS NULL "
+                "AND COALESCE(locked,0)=0 AND COALESCE(excluded,0)=0 "
+                "AND EXISTS (SELECT 1 FROM persons WHERE id=?)",
+                (pid, pid, fid_row, pid),
+            )
+            if cur.rowcount:
+                touched_persons.add(pid)
+        now = datetime.now().isoformat(timespec="seconds")
+        for _, _, comp in valid_clusters:
+            centroid = _norm_vec(mat[comp].mean(axis=0))
+            cur = conn.execute(
+                "INSERT INTO persons(name, created, centroid, n, hidden) VALUES(NULL, ?, ?, 0, 0)",
+                (now, to_blob(centroid)),
+            )
+            pid = int(cur.lastrowid)
+            face_ids = [remaining[i][0] for i in comp]
+            conn.executemany(
+                "UPDATE faces SET person_id=?, cluster=? WHERE id=? AND person_id IS NULL "
+                "AND COALESCE(locked,0)=0 AND COALESCE(excluded,0)=0",
+                [(pid, pid, x) for x in face_ids],
+            )
+            touched_persons.add(pid)
+
+        # Ricalcola centroidi, conteggi e copertine di tutte le persone toccate
         for pid in touched_persons:
             recompute_person(conn, pid)
 
@@ -909,7 +1098,30 @@ def merge_persons(conn: sqlite3.Connection, ids: list[int], into_id: int) -> dic
     ]
     all_hidden = all(int(p["hidden"] or 0) for p in into_before + deleted)
     now = datetime.now().isoformat(timespec="seconds")
-    payload = json.dumps({"into": into_id, "into_before": into_before, "deleted": deleted, "faces": faces_prev})
+    # Coppie «Diverse» che coinvolgono le persone assorbite: si perdono con ON DELETE CASCADE, quindi vanno salvate
+    # per l'annulla e trasferite sulla destinazione (le coppie con la destinazione stessa non hanno piu' senso).
+    ns_old = [
+        [int(r[0]), int(r[1]), r[2]]
+        for r in conn.execute(
+            f"SELECT a, b, created FROM persons_not_same WHERE a IN ({marks}) OR b IN ({marks})", [*others, *others]
+        )
+    ]
+    ns_existing = {(int(r[0]), int(r[1])) for r in conn.execute("SELECT a, b FROM persons_not_same")}
+    other_set = set(others)
+    ns_new: list[list] = []
+    for a, b, created in ns_old:
+        x = into_id if a in other_set else a
+        y = into_id if b in other_set else b
+        if x == y:
+            continue
+        key = (x, y) if x < y else (y, x)
+        if key in ns_existing or any(key == (n[0], n[1]) for n in ns_new):
+            continue
+        ns_new.append([key[0], key[1], created])
+    payload = json.dumps({
+        "into": into_id, "into_before": into_before, "deleted": deleted, "faces": faces_prev,
+        "not_same_old": ns_old, "not_same_added": ns_new,
+    })
 
     with conn:
         conn.execute(
@@ -917,6 +1129,8 @@ def merge_persons(conn: sqlite3.Connection, ids: list[int], into_id: int) -> dic
             [into_id, into_id, *others],
         )
         conn.execute(f"DELETE FROM persons WHERE id IN ({marks})", others)
+        for a, b, created in ns_new:
+            conn.execute("INSERT OR IGNORE INTO persons_not_same(a, b, created) VALUES(?, ?, ?)", (a, b, created))
         conn.execute("UPDATE persons SET hidden=? WHERE id=?", (1 if all_hidden else 0, into_id))
         recompute_person(conn, into_id)
         cur = conn.execute("INSERT INTO merge_log(created, payload, undone) VALUES(?, ?, 0)", (now, payload))
@@ -959,6 +1173,15 @@ def undo_merge(conn: sqlite3.Connection, log_id: int) -> dict:
             conn.execute(
                 "UPDATE persons SET name=?, created=?, centroid=?, n=?, cover_face_id=?, cover_locked=?, hidden=? WHERE id=?",
                 (p["name"], p["created"], cent, p["n"], p["cover_face_id"], p["cover_locked"], p["hidden"], into_id),
+            )
+        # coppie «Diverse»: toglie quelle trasferite dall'unione e rimette le originali (se le persone esistono ancora)
+        for a, b, _created in data.get("not_same_added", []):
+            conn.execute("DELETE FROM persons_not_same WHERE a=? AND b=?", (a, b))
+        for a, b, created in data.get("not_same_old", []):
+            conn.execute(
+                "INSERT OR IGNORE INTO persons_not_same(a, b, created) "
+                "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM persons WHERE id=?) AND EXISTS (SELECT 1 FROM persons WHERE id=?)",
+                (a, b, created, a, b),
             )
         for fid, prev_pid, cluster, locked in data["faces"]:
             cur = conn.execute(
@@ -1031,16 +1254,90 @@ def assign_faces(conn: sqlite3.Connection, face_ids: list[int], target: int | st
 
 
 def set_face_excluded(conn: sqlite3.Connection, face_id: int, excluded: bool) -> dict:
-    """Esclude o ripristina un volto (locked=1, mai riassegnato dal clustering automatico)."""
+    """Esclude o ripristina un volto (locked=1, mai riassegnato dal clustering automatico).
+
+    L'assegnazione alla persona (`person_id`) viene conservata: i volti esclusi sono ignorati da conteggi, centroidi
+    e liste (filtro excluded=0), cosi' «Annulla»/ripristina riporta il volto alla stessa persona."""
     row = conn.execute("SELECT person_id FROM faces WHERE id=?", (int(face_id),)).fetchone()
     if row is None:
         raise KeyError(face_id)
     prev_pid = row["person_id"]
     with conn:
         if excluded:
-            conn.execute("UPDATE faces SET excluded=1, locked=1, person_id=NULL, cluster=NULL WHERE id=?", (int(face_id),))
+            conn.execute("UPDATE faces SET excluded=1, locked=1 WHERE id=?", (int(face_id),))
         else:
-            conn.execute("UPDATE faces SET excluded=0, locked=0 WHERE id=?", (int(face_id),))
+            # con una persona di appartenenza il volto resta bloccato su di lei, altrimenti torna libero per il clustering
+            conn.execute(
+                "UPDATE faces SET excluded=0, locked=CASE WHEN person_id IS NULL THEN 0 ELSE 1 END WHERE id=?",
+                (int(face_id),),
+            )
         if prev_pid is not None:
             recompute_person(conn, int(prev_pid))
     return {"id": int(face_id), "excluded": bool(excluded)}
+
+
+# ------------------------------------------------------------ cache ritagli e pulizia dopo cancellazione file
+def crop_cache_dir(cfg: Config | None = None) -> Path:
+    c = cfg or load_config()
+    return Path(c.cache_dir) / "faces"
+
+
+def clear_crop_cache(cfg: Config | None = None, face_ids: list[int] | None = None) -> int:
+    """Elimina i ritagli dei volti in cache/faces (tutti, o solo quelli dei `face_ids`). Gli id dei volti possono
+    essere riusati dopo una cancellazione: un ritaglio vecchio mostrerebbe la faccia sbagliata."""
+    d = crop_cache_dir(cfg)
+    if not d.is_dir():
+        return 0
+    removed = 0
+    wanted = {int(x) for x in face_ids} if face_ids is not None else None
+    for f in d.glob("*.jpg*"):
+        if wanted is not None:
+            try:
+                if int(f.name.split("_", 1)[0]) not in wanted:
+                    continue
+            except ValueError:
+                continue
+        try:
+            f.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+def forget_files(conn: sqlite3.Connection, file_ids: list[int], cfg: Config | None = None) -> dict:
+    """Da chiamare PRIMA di eliminare righe da `files` (nella stessa transazione del chiamante, senza commit):
+    elimina i volti e `faces_done` dei file, azzera le copertine che puntavano a quei volti, ricalcola le persone
+    coinvolte (n, centroide, copertina), rimuove quelle senza nome rimaste vuote e i ritagli in cache.
+    Evita conteggi/copertine stantii e che un file nuovo con lo stesso id risulti gia' analizzato."""
+    ids = list(dict.fromkeys(int(x) for x in file_ids))
+    if not ids:
+        return {"files": 0, "faces": 0, "persons": 0}
+    persons: set[int] = set()
+    face_ids: list[int] = []
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        marks = ",".join("?" * len(chunk))
+        for r in conn.execute(f"SELECT id, person_id FROM faces WHERE file_id IN ({marks})", chunk):
+            face_ids.append(int(r["id"]))
+            if r["person_id"] is not None:
+                persons.add(int(r["person_id"]))
+        conn.execute(f"DELETE FROM faces_done WHERE file_id IN ({marks})", chunk)
+        conn.execute(f"DELETE FROM faces WHERE file_id IN ({marks})", chunk)
+    for i in range(0, len(face_ids), 500):
+        chunk = face_ids[i:i + 500]
+        marks = ",".join("?" * len(chunk))
+        for r in conn.execute(f"SELECT id FROM persons WHERE cover_face_id IN ({marks})", chunk):
+            persons.add(int(r["id"]))
+        conn.execute(
+            f"UPDATE persons SET cover_face_id=NULL, cover_locked=0 WHERE cover_face_id IN ({marks})", chunk
+        )
+    for pid in persons:
+        recompute_person(conn, pid)
+    if persons:
+        conn.execute("DELETE FROM persons WHERE (name IS NULL OR TRIM(name)='') AND COALESCE(n,0)=0")
+    try:
+        clear_crop_cache(cfg, face_ids)
+    except Exception:  # noqa: BLE001
+        pass
+    return {"files": len(ids), "faces": len(face_ids), "persons": len(persons)}

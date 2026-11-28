@@ -8,7 +8,9 @@ import sqlite3
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from typing import Annotated
+
+from pydantic import BaseModel, Field
 
 from . import deps
 
@@ -39,11 +41,11 @@ class AlbumIn(BaseModel):
 class AlbumPatch(BaseModel):
     # Distinguiamo "campo assente" da "null" con model_fields_set.
     name: str | None = None
-    cover_file_id: int | None = None
+    cover_file_id: Annotated[int, Field(gt=0, le=2**63 - 1)] | None = None
 
 
 class ItemsIn(BaseModel):
-    file_ids: list[int] = []
+    file_ids: list[Annotated[int, Field(gt=0, le=2**63 - 1)]] = []
 
 
 def _now() -> str:
@@ -55,7 +57,7 @@ def _album_dict(r: sqlite3.Row) -> dict:
 
 
 def _require_album(conn: sqlite3.Connection, album_id: int) -> None:
-    if conn.execute("SELECT 1 FROM albums WHERE id=?", (album_id,)).fetchone() is None:
+    if not 0 < album_id <= 2**63 - 1 or conn.execute("SELECT 1 FROM albums WHERE id=?", (album_id,)).fetchone() is None:
         raise HTTPException(404, "Album non trovato")
 
 
@@ -102,8 +104,11 @@ def list_albums(conn: sqlite3.Connection = Depends(deps.get_db)):
 def create_album(body: AlbumIn, conn: sqlite3.Connection = Depends(deps.get_db)):
     name = _clean_name(body.name)
     _check_unique_name(conn, name)
-    cur = conn.execute("INSERT INTO albums(name, created) VALUES(?,?)", (name, _now()))
-    conn.commit()
+    try:
+        cur = conn.execute("INSERT INTO albums(name, created) VALUES(?,?)", (name, _now()))
+        conn.commit()
+    except sqlite3.IntegrityError:  # due richieste insieme con lo stesso nome
+        raise HTTPException(409, "Esiste già un album con questo nome") from None
     return _album_dict(conn.execute(ALBUM_SQL + "WHERE a.id=?", (cur.lastrowid,)).fetchone())
 
 
@@ -124,8 +129,11 @@ def update_album(album_id: int, body: AlbumPatch, conn: sqlite3.Connection = Dep
         sets.append("cover_file_id=?")
         vals.append(cid)
     if sets:
-        conn.execute(f"UPDATE albums SET {', '.join(sets)} WHERE id=?", (*vals, album_id))
-        conn.commit()
+        try:
+            conn.execute(f"UPDATE albums SET {', '.join(sets)} WHERE id=?", (*vals, album_id))
+            conn.commit()
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, "Esiste già un album con questo nome") from None
     return _album_dict(conn.execute(ALBUM_SQL + "WHERE a.id=?", (album_id,)).fetchone())
 
 
@@ -199,7 +207,7 @@ def remove_items(album_id: int, body: ItemsIn, conn: sqlite3.Connection = Depend
 
 @router.get("/files/{file_id}/albums")
 def file_albums(file_id: int, conn: sqlite3.Connection = Depends(deps.get_db)):
-    if conn.execute("SELECT 1 FROM files WHERE id=?", (file_id,)).fetchone() is None:
+    if not 0 < file_id <= 2**63 - 1 or conn.execute("SELECT 1 FROM files WHERE id=?", (file_id,)).fetchone() is None:
         raise HTTPException(404, "File non trovato")
     rows = conn.execute(
         ALBUM_SQL + "WHERE a.id IN (SELECT album_id FROM album_items WHERE file_id=?) ORDER BY a.name COLLATE NOCASE, a.id",

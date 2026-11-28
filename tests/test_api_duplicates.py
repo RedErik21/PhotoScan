@@ -297,17 +297,86 @@ def test_keep_many_allows_keeping_multiple_photos():
         assert st == 200 and sim["total"] == 1
 
 
-def test_trash_all_copies_dry_run_and_apply():
+def test_trash_copies_skips_group_whose_master_is_missing():
+    """Originale sparito dal disco (nel seed i percorsi non esistono): le copie NON si cestinano, sono l'ultimo esemplare."""
     from unittest import mock
     from fotoscan.server import routes_cleanup
 
     with server() as api:
         st, dry = api.post("/api/duplicates/trash-copies", {"type": "exact", "dry_run": True})
-        assert st == 200 and dry == {"groups": 1, "files": 1, "bytes": 900, "dry_run": True}
+        assert st == 200 and dry["files"] == 0 and dry["skipped_groups"] == 1, dry
+        with mock.patch.object(routes_cleanup, "_send_to_recycle_bin") as m_bin:
+            st, res = api.post("/api/duplicates/trash-copies", {"type": "exact", "confirm": True})
+            assert st == 200 and res["trashed"] == 0 and res["skipped_groups"] == 1, res
+            m_bin.assert_not_called()
+
+
+def _native_roles():
+    return {fid: (d, of) for fid, _f, d, of in PLAN_BASE}
+
+
+def test_stale_swap_releases_overrides():
+    """Gruppo cambiato dopo lo scambio (qui sparisce un membro): al ricalcolo gli override scritti dallo scambio
+    vengono tolti, cosi' il master nativo torna nella sua cartella e non resta un master in _Duplicati."""
+    with server() as api:
+        assert api.post("/api/duplicates/keep", {"master_id": 2, "member_ids": [1, 3, 5]})[0] == 200
+        c = api.db()
+        assert c.execute("SELECT COUNT(*) FROM file_override").fetchone()[0] == 2
+        raw = {k: v for k, v in _native_roles().items() if k != 5}  # il membro 5 non c'e' piu'
+        assert routes_duplicates.release_stale(c, raw) > 0
+        assert c.execute("SELECT COUNT(*) FROM file_override").fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM dup_keep").fetchone()[0] == 0
+        c.close()
+
+
+def test_swap_after_keep_many_stays_valid_on_rebuild():
+    """keep-many toglie un membro dal gruppo effettivo; un successivo scambio deve usare la chiave del gruppo NATIVO,
+    altrimenti al ricalcolo risulterebbe invalido e verrebbe perso."""
+    with server() as api:
+        assert api.post("/api/duplicates/keep-many", {"file_ids": [3]})[0] == 200
+        st, body = api.post("/api/duplicates/keep", {"master_id": 2, "member_ids": [1, 5]})
+        assert st == 200 and body["changed"] is True, body
+        c = api.db()
+        assert routes_duplicates.release_stale(c, _native_roles()) == 0  # ricalcolo con gruppo nativo identico
+        assert c.execute("SELECT COUNT(*) FROM dup_keep").fetchone()[0] == 4
+        c.close()
+
+
+def test_manual_move_invalidates_swap_but_keeps_user_choice():
+    with server() as api:
+        api.post("/api/duplicates/keep", {"master_id": 2, "member_ids": [1, 3, 5]})
+        c = api.db()
+        c.execute("UPDATE file_override SET folder='Mia' WHERE file_id=1")  # l'utente sposta a mano l'ex master
+        c.commit()
+        assert routes_duplicates.release_stale(c, _native_roles()) > 0
+        ov = {r["file_id"]: r["folder"] for r in c.execute("SELECT file_id, folder FROM file_override")}
+        assert ov == {1: "Mia"}, ov  # l'override del nuovo master (scritto dallo scambio) e' annullato, quello utente resta
+        c.close()
+
+
+def test_mutations_refused_while_plan_rebuilds():
+    from unittest import mock
+
+    with server() as api, mock.patch.object(routes_duplicates.jobs, "running_job", lambda name: object()):
+        assert api.post("/api/duplicates/keep", {"master_id": 2, "member_ids": [1, 3, 5]})[0] == 409
+        assert api.post("/api/duplicates/keep-many", {"file_ids": [3]})[0] == 409
+        assert api.post("/api/duplicates/trash-copies", {"type": "exact", "confirm": True})[0] == 409
+        assert api.post("/api/duplicates/keep-largest", {})[0] == 409
+
+
+def test_trash_all_copies_dry_run_and_apply():
+    from unittest import mock
+    from fotoscan.server import routes_cleanup
+
+    with server() as api:
+        with mock.patch.object(routes_duplicates, "_master_available", lambda conn, fid: True):
+            st, dry = api.post("/api/duplicates/trash-copies", {"type": "exact", "dry_run": True})
+        assert st == 200 and dry == {"groups": 1, "files": 1, "bytes": 900, "skipped_groups": 0, "dry_run": True}
         # senza confirm=True viene rifiutato
         st, _ = api.post("/api/duplicates/trash-copies", {"type": "exact", "dry_run": False, "confirm": False})
         assert st == 400
-        with mock.patch.object(routes_cleanup, "_send_to_recycle_bin"):
+        with mock.patch.object(routes_cleanup, "_send_to_recycle_bin"), \
+                mock.patch.object(routes_duplicates, "_master_available", lambda conn, fid: True):
             st, res = api.post("/api/duplicates/trash-copies", {"type": "exact", "dry_run": False, "confirm": True})
             assert st == 200 and res["trashed"] == 1 and res["freed_bytes"] == 900
         st, ex = api.get("/api/duplicates", type="exact")

@@ -1,7 +1,14 @@
 """Opzioni avanzate (lotto 2): il clustering esatto non cambia; l'approssimato con topk >= n coincide con l'esatto."""
+import sys
+from pathlib import Path
+
 import numpy as np
 
-from fotoscan.faces import _blockwise_components
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from fotoscan.faces import _blockwise_components  # noqa: E402
 
 
 def _brute(mat, thr):
@@ -53,3 +60,11 @@ def test_approx_small_topk_never_merges_more_than_exact():
     exact_of = {i: k for k, c in enumerate(exact) for i in c}
     for c in approx:
         assert len({exact_of[i] for i in c}) == 1
+
+
+if __name__ == "__main__":
+    fns = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
+    for fn in fns:
+        fn()
+        print("ok", fn.__name__)
+    print(f"{len(fns)} test superati")

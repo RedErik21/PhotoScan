@@ -16,6 +16,9 @@ import sqlite3
 _NET_FSTYPES = {"cifs", "smb3", "smbfs", "nfs", "nfs4"}
 # errno tollerati durante la scansione di rete: permessi negati o file spariti sono normali.
 _BENIGN_ERRNO = {errno.EACCES, errno.EPERM, errno.ENOENT}
+# Riallineamento del catalogo: percentuale minima di file campione ritrovati nella nuova radice. Alta di proposito:
+# riscrivere i percorsi di un catalogo solo in parte presente farebbe sembrare "spariti" gli altri file.
+REBASE_MIN_PERCENT = 95
 
 
 def norm_root(path: str) -> str:
@@ -58,6 +61,26 @@ def is_network(path: str) -> bool:
     return False
 
 
+def network_mount_missing(path: str) -> bool:
+    """Linux: il percorso sta sotto un mount di rete previsto in /etc/fstab che ora NON e' montato.
+    In quel caso la cartella esiste ma e' vuota e sul disco locale: scriverci sembrerebbe un backup sul NAS."""
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        p = os.path.realpath(path)
+        with open("/etc/fstab", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                parts = line.split("#", 1)[0].split()
+                if len(parts) < 3 or parts[2] not in _NET_FSTYPES:
+                    continue
+                mnt = os.path.realpath(parts[1].replace("\\040", " "))
+                if (p == mnt or p.startswith(mnt.rstrip("/") + "/")) and not os.path.ismount(mnt):
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def reachable(path: str) -> bool:
     """La cartella risponde adesso (legge al massimo una voce)."""
     try:
@@ -87,7 +110,7 @@ def rebase_catalog(conn: sqlite3.Connection, old_root: str, new_root: str) -> in
             if os.path.normcase(r["path"]).startswith(prefix)]
     if not rows:
         return 0
-    sample = random.Random(0).sample(rows, min(30, len(rows)))
+    sample = random.Random(0).sample(rows, min(60, len(rows)))
     ok = 0
     for r in sample:
         candidate = new_n + r["path"][len(old_n):]
@@ -96,7 +119,7 @@ def rebase_catalog(conn: sqlite3.Connection, old_root: str, new_root: str) -> in
                 ok += 1
         except OSError:
             pass
-    if ok * 2 < len(sample):  # meno della meta' dei file campione trovati: non e' la stessa cartella
+    if ok * 100 < len(sample) * REBASE_MIN_PERCENT:  # troppi file campione mancanti: non e' la stessa cartella
         return 0
     moves = [(new_n + r["path"][len(old_n):], r["id"]) for r in rows]
     # ogni nuovo percorso deve restare dentro la nuova radice (niente "..", niente radici diverse)

@@ -7,12 +7,14 @@ cambia qualcosa; il download e' un job (`update_download`) con avanzamento in by
 from __future__ import annotations
 
 import logging
+import os
+import sys
 import threading
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 
-from .. import updater
+from .. import runtime, uninstall, updater
 from ..config import FROZEN, ROOT, Config
 from ..version import __version__, update_repo
 from . import jobs
@@ -33,7 +35,8 @@ def status(cfg: Config | None = None) -> dict:
     state = updater.read_state(cfg.cache_dir) or None
     latest = (state or {}).get("latest")
     pending = updater.read_pending(cfg.cache_dir)
-    if pending and not updater.is_newer(pending.get("version") or "0", __version__):
+    if pending and (pending.get("version") == __version__ if pending.get("downgrade")
+                    else not updater.is_newer(pending.get("version") or "0", __version__)):
         updater.discard_pending(cfg.cache_dir)   # gia' installato (o superato): non serve piu'
         pending = None
     job = jobs.running_job(JOB)
@@ -53,8 +56,11 @@ def status(cfg: Config | None = None) -> dict:
             "available": bool(latest and updater.is_newer(latest.get("version") or "0", __version__)),
         },
         "pending": None if not pending else {k: pending.get(k) for k in
-                                             ("version", "name", "notes", "approved", "downloaded_at", "kind")},
+                                             ("version", "name", "notes", "approved", "downloaded_at", "kind",
+                                              "downgrade", "runtime_version", "catalog_backup")},
         "exe_ready": _exe_ready(latest),
+        "runtime": runtime.status() if FROZEN else None,
+        "uninstall": _uninstall_info(),
         "download_job": job.public() if job else None,
         "last_install": updater.read_last_install(cfg.cache_dir),
         "last_failure": updater.read_last_failure(cfg.cache_dir),
@@ -67,7 +73,7 @@ def _publish(cfg: Config | None = None) -> dict:
     return st
 
 
-def _start_download(cfg: Config, info: dict) -> jobs.Job:
+def _start_download(cfg: Config, info: dict, allow_older: bool = False) -> jobs.Job:
     running = jobs.running_job(JOB)
     if running:
         return running
@@ -77,14 +83,31 @@ def _start_download(cfg: Config, info: dict) -> jobs.Job:
             job.update(stage="download", done=done, total=total,
                        message=f"Download di PhotoScan {info['version']}: {done / 1e6:.1f} MB")
         try:
+            backup = None
+            if allow_older and not updater.is_newer(info["version"], __version__):
+                # downgrade: il catalogo potrebbe essere stato migrato da una versione piu' nuova. Copia prima.
+                job.update(stage="copia", message="Copia di sicurezza del catalogo…")
+                backup = updater.backup_catalog(cfg.cache_dir, cfg.db_path, __version__)
             pending = updater.download(cfg.cache_dir, info, progress=progress, cancelled=lambda: job.cancel_requested,
-                                       exe=FROZEN)
+                                       exe=FROZEN, allow_older=allow_older)
+            if backup is not None:
+                pending["catalog_backup"] = str(backup)
+                updater._write_json(updater.updates_dir(cfg.cache_dir) / "pending.json", pending)
             job.update(stage="pronto", message=f"PhotoScan {pending['version']} pronto da installare")
             return {"version": pending["version"]}
         finally:
             _publish()
 
     return jobs.start_job(JOB, run)
+
+
+def _uninstall_info() -> dict:
+    """Come si disinstalla in questa copia: 'windows' (Setup), 'linux' (AppImage), None (clone git / sviluppo)."""
+    if not FROZEN:
+        return {"kind": None, "available": False}
+    if sys.platform == "win32":
+        return {"kind": "windows", "available": uninstall.windows_uninstaller(ROOT) is not None, "data_dir": str(ROOT)}
+    return {"kind": "linux", "available": True, "data_dir": str(ROOT), "appimage": os.environ.get("APPIMAGE")}
 
 
 def run_check(cfg: Config | None = None, auto: bool = False) -> dict:
@@ -148,7 +171,7 @@ def _self_update_msg() -> str:
 
 def _exe_ready(info: dict | None) -> bool:
     """Nell'eseguibile serve l'asset Windows della Release, altrimenti non c'e' nulla da installare."""
-    return not FROZEN or bool(info and info.get("exe_assets"))
+    return not FROZEN or bool(info and (info.get("exe_assets") or info.get("app_assets")))
 
 
 # ------------------------------------------------------------------ API
@@ -197,3 +220,64 @@ def update_discard():
         job.cancel_requested = True
     updater.discard_pending(cfg.cache_dir)
     return _publish(cfg)
+
+
+@router.get("/update/releases")
+def update_releases():
+    """«Altre versioni»: le Release di GitHub (le pre-release solo se l'opzione e' attiva)."""
+    cfg = get_cfg()
+    if not update_repo():
+        raise HTTPException(400, "Aggiornamenti non configurati in questa copia di PhotoScan.")
+    try:
+        return {"current": __version__, "releases": updater.list_releases(cfg.cache_dir, cfg.update_prerelease)}
+    except Exception as e:  # noqa: BLE001 - rete, rate limit
+        raise HTTPException(502, updater._friendly(e)) from e
+
+
+@router.post("/update/install-version")
+def update_install_version(body: dict = Body(...)):
+    """Scarica una versione scelta (anche piu' vecchia) con lo stesso percorso dell'aggiornamento: download, verifica
+    SHA256SUMS, staging. L'installazione resta quella di «Installa»."""
+    cfg = get_cfg()
+    if _self_update_off():
+        raise HTTPException(409, _self_update_msg())
+    version = str(body.get("version") or "").strip()
+    if not version:
+        raise HTTPException(400, "Indica la versione da installare.")
+    if version.lstrip("vV") == __version__:
+        raise HTTPException(400, "Questa versione è già installata.")
+    older = not updater.is_newer(version, __version__)
+    if older and body.get("confirm_downgrade") is not True:
+        raise HTTPException(409, "Installare una versione più vecchia richiede conferma (confirm_downgrade).")
+    try:
+        info = updater.release_info(version, prerelease=True)
+    except updater.UpdateError as e:
+        raise HTTPException(404, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, updater._friendly(e)) from e
+    if FROZEN and not _exe_ready(info):
+        raise HTTPException(409, "Questa Release non include il pacchetto per questo sistema: usa «Scarica installer».")
+    job = _start_download(cfg, info, allow_older=True)
+    return {"job_id": job.id, "downgrade": older}
+
+
+@router.post("/update/uninstall")
+def update_uninstall(body: dict = Body(...)):
+    """Disinstalla PhotoScan. Serve confirm=true. delete_data=true cancella anche catalogo, cache e impostazioni
+    (predefinito: si conservano). Le cartelle delle foto non si toccano mai."""
+    if body.get("confirm") is not True:
+        raise HTTPException(400, "Conferma richiesta (confirm: true).")
+    info = _uninstall_info()
+    if not info["kind"]:
+        raise HTTPException(409, "Questa copia di PhotoScan non è installata: per rimuoverla elimina la sua cartella.")
+    delete_data = bool(body.get("delete_data"))
+    if info["kind"] == "windows":
+        if not uninstall.launch_windows_uninstaller(ROOT, delete_data):
+            raise HTTPException(409, "PhotoScan non è stato installato con PhotoScan-Setup: usa «App installate» di "
+                                     "Windows oppure elimina la cartella del programma.")
+        return {"started": True, "kind": "windows", "close_app": True}
+    cfg = get_cfg()
+    uninstall.request(cfg.cache_dir, delete_data=delete_data, delete_appimage=bool(body.get("delete_appimage")))
+    return {"started": True, "kind": "linux", "close_app": True, "appimage": info.get("appimage"),
+            "message": "Alla chiusura vengono tolti il collegamento nel menu e " + (
+                "i dati dell'app." if delete_data else "(i dati restano in " + str(ROOT) + ").")}

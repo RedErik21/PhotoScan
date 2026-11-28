@@ -19,11 +19,15 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Callable
+
+import subprocess
+import sys
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from PIL import Image, ImageDraw, ImageOps
+from starlette.concurrency import run_in_threadpool
 
 from .. import scanner_metadata  # noqa: F401  (registra l'apertura HEIC via pillow-heif)
 from ..scanner_metadata import extract_frames
@@ -32,7 +36,21 @@ from . import deps
 log = logging.getLogger("fotoscan.media")
 router = APIRouter(prefix="/api", tags=["media"])
 
+# Tre pool separati: la generazione di miniature foto non fa aspettare la lettura del catalogo / l'apertura di un
+# originale (click su "play"), e ffmpeg (lento) ha un pool suo con pochi thread.
 _POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="media")
+_FAST_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="media-fast")
+_VIDEO_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="media-video")
+MAX_PIXELS = 500_000_000  # oltre questo limite l'immagine non si decodifica (RAM): niente miniatura, ma non e' "rotta"
+
+
+class _NoPreview(Exception):
+    """Anteprima impossibile per motivi che NON dipendono dal file (ffmpeg assente, formato non supportato qui,
+    immagine enorme, errore di rete): il file non va segnato come danneggiato."""
+
+
+class _NoFfmpeg(_NoPreview, RuntimeError):
+    pass
 _lock = threading.Lock()
 _inflight: dict[str, Future] = {}      # chiave cache -> generazione in corso (deduplica)
 _KEY_LOCKS = [threading.Lock() for _ in range(64)]  # lock a strisce: memoria fissa, non uno per chiave
@@ -86,17 +104,21 @@ class _Src:
 
 
 # ------------------------------------------------------------------ utilita'
-async def _run(fn: Callable, *args):
-    """Esegue fn nel pool condiviso senza bloccare l'event loop."""
-    return await asyncio.get_running_loop().run_in_executor(_POOL, fn, *args)
+async def _run(fn: Callable, *args, pool: ThreadPoolExecutor | None = None):
+    """Esegue fn in un pool (di default quello veloce: catalogo, apertura file) senza bloccare l'event loop."""
+    return await asyncio.get_running_loop().run_in_executor(pool or _FAST_POOL, fn, *args)
 
 
-async def _shared(key: str, build: Callable[[], Path]) -> Path:
+def _pool_for(kind: str) -> ThreadPoolExecutor:
+    return _VIDEO_POOL if kind == "video" else _POOL
+
+
+async def _shared(key: str, build: Callable[[], Path], pool: ThreadPoolExecutor | None = None) -> Path:
     """Esegue build() nel pool; richieste concorrenti con la stessa chiave aspettano la stessa generazione."""
     with _lock:
         fut = _inflight.get(key)
         if fut is None:
-            fut = _POOL.submit(_build_and_forget, key, build)
+            fut = (pool or _POOL).submit(_build_and_forget, key, build)
             _inflight[key] = fut
     # shield: se il client si disconnette non si annulla la generazione condivisa
     return await asyncio.shield(asyncio.wrap_future(fut))
@@ -129,7 +151,7 @@ def _source(fid: int) -> _Src:
     """Riga del catalogo + stato su disco. Unico punto da cui si leggono percorsi: solo quelli del DB."""
     conn = deps.open_db()
     try:
-        row = conn.execute("SELECT path, name, kind, duration, status FROM files WHERE id=?", (fid,)).fetchone()
+        row = conn.execute("SELECT path, name, kind, duration, status FROM files WHERE id=?", (deps.valid_id(fid),)).fetchone()
     finally:
         conn.close()
     if row is None:
@@ -169,14 +191,31 @@ def _save_jpeg_atomic(im: Image.Image, dst: Path, quality: int) -> None:
 def _load_rgb(path: str | Path, min_side: int) -> Image.Image:
     """Immagine RGB orientata secondo EXIF; trasparenza su sfondo neutro. min_side guida il draft JPEG."""
     with Image.open(path) as im:
+        # Il limite di Pillow e' disattivato (scanner_metadata): qui ne vale uno finito, controllato sull'intestazione
+        # prima di decodificare, cosi' un file con dimensioni assurde non esaurisce la RAM.
+        if im.size[0] * im.size[1] > MAX_PIXELS:
+            raise _NoPreview(f"immagine troppo grande ({im.size[0]}x{im.size[1]})")
         if im.format == "JPEG":
             im.draft("RGB", (min_side, min_side))  # decodifica ridotta, ma mai sotto min_side
         im = ImageOps.exif_transpose(im)
-        if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+        if im.mode in ("RGBA", "LA", "La", "RGBa", "PA") or (im.mode == "P" and "transparency" in im.info):
             rgba = im.convert("RGBA")
             bg = Image.new("RGBA", rgba.size, NEUTRAL + (255,))
             return Image.alpha_composite(bg, rgba).convert("RGB")
+        if im.mode in ("I", "F") or im.mode.startswith("I;16"):
+            return _gray_to_rgb(im)
         return im.convert("RGB")
+
+
+def _gray_to_rgb(im: Image.Image) -> Image.Image:
+    """Grigi a 16/32 bit (PNG e TIFF scientifici o da scanner): scalati a 8 bit invece di saturare a bianco."""
+    import numpy as np
+
+    arr = np.asarray(im, dtype=np.float32)
+    hi = float(arr.max()) if arr.size else 0.0
+    if hi > 255:
+        arr = arr / 256.0 if hi <= 65535 else arr * (255.0 / hi)
+    return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "L").convert("RGB")
 
 
 # ------------------------------------------------------------------ video
@@ -192,7 +231,7 @@ def _ensure_frames(src: _Src) -> list[tuple[int, Path]]:
         if not all(_usable(p) for _, p in want):
             ffmpeg = cfg.find_ffmpeg()[0]
             if not ffmpeg:
-                raise RuntimeError("ffmpeg non trovato")
+                raise _NoFfmpeg("ffmpeg non trovato")
             extract_frames(src.path, src.duration, out, src.id, cfg.video_fractions, ffmpeg)
     return [(i, p) for i, p in want if _usable(p)]
 
@@ -258,22 +297,51 @@ async def _placeholder(size: int, kind: str) -> Response:
 
 
 # -------------------------------------------------------------- endpoint
-def _mark_broken(fid: int, reason: str | None) -> None:
-    """Registra (reason) o toglie (None) un file dalla tabella broken: la galleria puo' nasconderli."""
+_checked = _BoundedSet(20000)  # (file, versione) gia' riconciliati con la tabella broken: niente scritture ripetute
+
+
+def _mark_broken(fid: int, reason: str | None, only_reason: str | None = None) -> None:
+    """Registra (reason) o toglie (None) un file dalla tabella broken: la galleria puo' nasconderli.
+    Scrive solo se serve (nessuna scrittura se lo stato e' gia' quello). only_reason: toglie solo se il motivo coincide."""
     try:
         conn = deps.open_db()
         try:
+            row = conn.execute("SELECT reason FROM broken WHERE file_id=?", (fid,)).fetchone()
             if reason:
+                if row is not None and row["reason"] == reason:
+                    return
                 conn.execute("INSERT INTO broken(file_id, reason, checked) VALUES(?,?,datetime('now')) "
                              "ON CONFLICT(file_id) DO UPDATE SET reason=excluded.reason, checked=excluded.checked",
                              (fid, reason))
             else:
+                if row is None or (only_reason and row["reason"] != only_reason):
+                    return
                 conn.execute("DELETE FROM broken WHERE file_id=?", (fid,))
             conn.commit()
         finally:
             conn.close()
     except Exception:  # mai bloccare una miniatura per questo
         log.exception("stato 'broken' di %s non salvato", fid)
+
+
+def _is_corrupt(exc: BaseException, src: _Src) -> bool:
+    """True solo se l'errore dice che il FILE e' danneggiato. Non lo e' se manca ffmpeg, se il formato non e'
+    supportato da questa installazione (HEIC senza pillow-heif), se l'immagine e' enorme, se la RAM e' finita o se
+    la lettura e' fallita per un errore di sistema (disco di rete, permessi, file in uso)."""
+    if isinstance(exc, (_NoPreview, MemoryError, subprocess.TimeoutExpired)):
+        return False
+    if isinstance(exc, OSError) and exc.errno is not None:
+        return False
+    if Path(src.name).suffix.lower() in (".heic", ".heif") and "pillow_heif" not in sys.modules:
+        return False
+    return True
+
+
+async def _note_ok(fid: int, key: str) -> None:
+    """Miniatura riuscita: il file non e' piu' (o non e' mai stato) illeggibile."""
+    if key not in _checked:
+        _checked.add(key)
+        await _run(_mark_broken, fid, None)
 
 
 @router.get("/files/{fid}/thumb")
@@ -284,10 +352,16 @@ async def thumb(fid: int, request: Request, size: int = 256, strict: bool = Fals
     size = _clamp(size, 96, 512)
     src = await _run(_source, fid)
     if src.stamp is None:
-        await _run(_mark_broken, fid, "mancante")
+        # "mancante" solo se la cartella e' raggiungibile: un disco scollegato o un NAS spento non e' un file perso
+        if await _run(deps.volume_online, src.path):
+            await _run(_mark_broken, fid, "mancante")
         if strict:
             return Response(status_code=404)
         return await _placeholder(size, src.kind)
+    back = f"back:{fid}:{src.stamp}"
+    if back not in _checked:  # il file c'e': se era segnato "mancante" e' tornato
+        _checked.add(back)
+        await _run(_mark_broken, fid, None, "mancante")
     etag = f'"{src.stamp}-t{size}"'
     if _not_modified(request, etag):
         return Response(status_code=304, headers={"ETag": etag, "Cache-Control": IMMUTABLE})
@@ -296,12 +370,14 @@ async def thumb(fid: int, request: Request, size: int = 256, strict: bool = Fals
         return Response(status_code=404) if strict else await _placeholder(size, src.kind)
     dst = deps.get_cfg().thumbs_dir / f"{fid}_{size}_{src.stamp}.jpg"
     try:
-        path = await _shared(key, lambda: _build_thumb(src, size, dst))
+        path = await _shared(key, lambda: _build_thumb(src, size, dst), _pool_for(src.kind))
     except Exception as exc:  # file corrotto o non decodificabile: segnaposto, mai 500
         log.warning("miniatura %s non generabile: %s", fid, exc)
-        _bad.add(key)
-        await _run(_mark_broken, fid, "illeggibile")
+        if _is_corrupt(exc, src):
+            _bad.add(key)
+            await _run(_mark_broken, fid, "illeggibile")
         return Response(status_code=404) if strict else await _placeholder(size, src.kind)
+    await _note_ok(fid, f"ok:{fid}:{src.stamp}")
     return FileResponse(path, media_type="image/jpeg", headers={"ETag": etag, "Cache-Control": IMMUTABLE})
 
 
@@ -320,9 +396,11 @@ async def display(fid: int, request: Request, max: int = 2048):
         return await _placeholder(min(mx, 512), src.kind)
     dst = Path(deps.get_cfg().cache_dir) / "display" / f"{fid}_{mx}_{src.stamp}.jpg"
     try:
-        path = await _shared(key, lambda: _build_display(src, mx, dst))
+        path = await _shared(key, lambda: _build_display(src, mx, dst), _pool_for(src.kind))
     except Exception as exc:
         log.warning("anteprima %s non generabile: %s", fid, exc)
+        if not _is_corrupt(exc, src):  # ffmpeg/formato non supportato/immagine enorme: il file non e' rotto
+            raise HTTPException(404, "anteprima non disponibile su questo computer") from None
         _bad.add(key)
         return await _placeholder(min(mx, 512), src.kind)
     return FileResponse(path, media_type="image/jpeg", headers={"ETag": etag, "Cache-Control": IMMUTABLE})
@@ -334,8 +412,8 @@ def _parse_range(header: str, size: int) -> tuple[int, int] | str | None:
     if not m or (m.group(1) == "" and m.group(2) == ""):
         return None
     a, b = m.group(1), m.group(2)
-    if size == 0:
-        return "unsat"
+    if size == 0:  # file vuoto: niente intervalli da servire, si risponde 200 con corpo vuoto
+        return None
     if a == "":  # suffisso: ultimi N byte
         n = int(b)
         if n == 0:
@@ -352,12 +430,13 @@ def _parse_range(header: str, size: int) -> tuple[int, int] | str | None:
     return start, min(end, size - 1)
 
 
-def _iter_file(f, length: int) -> Iterator[bytes]:
-    """Legge a blocchi dal file aperto (mai tutto in RAM) e lo chiude a fine invio."""
+async def _iter_file(f, length: int):
+    """Legge a blocchi dal file aperto (mai tutto in RAM) e lo chiude a fine invio, anche se il client si
+    disconnette (cancellazione): su Windows un handle rimasto aperto impedisce di spostare o cancellare il file."""
     try:
         remaining = length
         while remaining > 0:
-            chunk = f.read(min(CHUNK, remaining))
+            chunk = await run_in_threadpool(f.read, min(CHUNK, remaining))
             if not chunk:
                 break
             remaining -= len(chunk)
@@ -399,7 +478,11 @@ async def media(fid: int, request: Request):
         return StreamingResponse(_iter_file(f, size), media_type=mime,
                                  headers={**base, "Content-Length": str(size)})
     start, end = parsed
-    f.seek(start)
+    try:
+        f.seek(start)
+    except OSError:
+        f.close()
+        raise HTTPException(404, "file non disponibile su disco") from None
     length = end - start + 1
     headers = {**base, "Content-Length": str(length), "Content-Range": f"bytes {start}-{end}/{size}"}
     return StreamingResponse(_iter_file(f, length), status_code=206, media_type=mime, headers=headers)
@@ -412,7 +495,7 @@ async def frames(fid: int):
     if src.kind != "video" or src.stamp is None:
         return []
     try:
-        found = await _run(_ensure_frames, src)
+        found = await _run(_ensure_frames, src, pool=_VIDEO_POOL)
     except Exception as exc:
         log.warning("fotogrammi %s non disponibili: %s", fid, exc)
         return []
@@ -431,7 +514,7 @@ async def frame(fid: int, index: int):
     p = cfg.frames_dir / f"{fid}_{index}.jpg"
     if not _usable(p):
         try:
-            await _run(_ensure_frames, src)
+            await _run(_ensure_frames, src, pool=_VIDEO_POOL)
         except Exception as exc:
             raise HTTPException(404, f"fotogramma non disponibile: {exc}")
     if not _usable(p):

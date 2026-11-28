@@ -9,7 +9,7 @@ import { createTile, updateTile } from '../ui/photo-tile.js';
 import { createSelection, useRangeSelect } from '../ui/selection.js';
 import { skeletonGrid } from '../ui/skeleton.js';
 import { emptyState, errorState } from '../ui/empty-state.js';
-import { formatBytes, formatMonth, formatNumber, plural } from '../ui/format.js';
+import { formatBytes, formatMonth, formatNumber, plural, missingNote } from '../ui/format.js';
 
 const CATEGORIES = [
   { id: 'large_videos', icon: 'videocam',                title: 'Video pesanti',         hint: 'Video da almeno 50 MB' },
@@ -114,6 +114,8 @@ export async function mount(root, ctx) {
   // ---------- Area contenuto ----------
   const contentHost = h('div', { class: 'cln-groups' });
   contentHost.addEventListener('click', (e) => { lastShift = e.shiftKey; }, true);
+  // L'apertura da tastiera (Invio) non e' un click: non deve ereditare lo Shift dell'ultimo clic.
+  contentHost.addEventListener('keydown', () => { lastShift = false; }, true);
 
   const moreBtn = h('md-outlined-button', { hidden: true, onclick: () => loadMore(loadSeq) }, 'Carica altri');
   const moreWrap = h('div', { class: 'cln-more' }, moreBtn);
@@ -178,8 +180,18 @@ export async function mount(root, ctx) {
   }
 
   /** Sposta uno o piu' file nel Cestino di Windows. Per singolo file con quick=true salta la modale. */
+  let trashing = false;   // una sola richiesta di cestino alla volta (doppio clic)
   async function trashIds(ids, { quick = false } = {}) {
-    if (!ids.length || !alive) return;
+    if (!ids.length || !alive || trashing) return;
+    trashing = true;
+    try {
+      await trashIdsNow(ids, { quick });
+    } finally {
+      trashing = false;
+    }
+  }
+
+  async function trashIdsNow(ids, { quick = false } = {}) {
     const byId = new Map(items.map((f) => [f.id, f]));
     let bytes = 0;
     for (const fid of ids) bytes += Number(byId.get(fid)?.size || 0);
@@ -201,7 +213,7 @@ export async function mount(root, ctx) {
       items = items.filter((f) => !removed.has(f.id));
       for (const fid of removed) {
         tileMap.delete(fid);
-        selection.toggle(fid, false);
+        selection.remove(fid);
       }
       total = Math.max(0, total - removed.size);
       totalBytes = Math.max(0, totalBytes - (r.freed_bytes || 0));
@@ -210,6 +222,7 @@ export async function mount(root, ctx) {
         showSnackbar(`${plural(r.trashed, 'file spostato', 'file spostati')} nel Cestino (${formatBytes(r.freed_bytes)} liberati).`);
         window.dispatchEvent(new CustomEvent('fotoscan:cleanup-changed'));
       }
+      if (r.missing) showSnackbar(missingNote(r.missing));
       if (r.errors?.length) showSnackbar(`${plural(r.errors.length, 'file non spostato', 'file non spostati')}.`, { error: true });
       renderGroups();
       syncSelectionUi();

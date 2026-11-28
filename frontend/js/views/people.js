@@ -130,6 +130,7 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
           loadAll();
         } else if (ev.state === 'error') {
           showSnackbar(ev.error || ev.message || 'Operazione non riuscita.', { error: true });
+          loadAll(); // il lavoro svolto prima dell'errore e' salvato
         }
       }
       return;
@@ -152,41 +153,59 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
   const unsubJob = store.subscribe('facesJob', (ev) => { if (!disposed) renderJob(ev); });
   renderJob(store.get('facesJob', null));
 
-  async function startDownloadModels() {
+  // Protezione dal doppio clic: una sola richiesta di avvio alla volta (il server risponde comunque 409 ai duplicati)
+  let startBusy = false;
+  async function withStartLock(fn) {
+    if (startBusy) return;
+    startBusy = true;
     try {
-      const r = await api.post('/people/download-models', {});
-      if (disposed) return;
-      if (r.job) store.set('facesJob', r.job);
-    } catch (e) {
-      if (!disposed) showSnackbar(e.message || 'Impossibile scaricare i modelli.', { error: true });
+      await fn();
+    } finally {
+      startBusy = false;
     }
   }
 
-  async function startScanFaces() {
-    try {
-      const r = await api.post('/people/scan', {});
-      if (disposed) return;
-      if (r.job) store.set('facesJob', r.job);
-      showSnackbar('Analisi volti avviata in background: puoi cambiare pagina liberamente.');
-    } catch (e) {
-      if (!disposed) showSnackbar(e.message || 'Impossibile avviare l’analisi volti.', { error: true });
-    }
-  }
-
-  async function startRecluster() {
-    const ok = await confirmDialog({
-      title: 'Ricalcolare i gruppi di persone?',
-      message: 'PhotoScan raggrupperà nuovamente i volti non ancora assegnati manualmente. I nomi e le correzioni che hai fatto verranno mantenuti.',
-      confirmLabel: 'Ricalcola',
+  function startDownloadModels() {
+    return withStartLock(async () => {
+      try {
+        const r = await api.post('/people/download-models', {});
+        if (disposed) return;
+        if (r.job) store.set('facesJob', r.job);
+      } catch (e) {
+        if (!disposed) showSnackbar(e.message || 'Impossibile scaricare i modelli.', { error: true });
+      }
     });
-    if (!ok || disposed) return;
-    try {
-      const r = await api.post('/people/recluster', {});
-      if (disposed) return;
-      if (r.job) store.set('facesJob', r.job);
-    } catch (e) {
-      if (!disposed) showSnackbar(e.message || 'Impossibile avviare il ricalcolo.', { error: true });
-    }
+  }
+
+  function startScanFaces() {
+    return withStartLock(async () => {
+      try {
+        const r = await api.post('/people/scan', {});
+        if (disposed) return;
+        if (r.job) store.set('facesJob', r.job);
+        showSnackbar('Analisi volti avviata in background: puoi cambiare pagina liberamente.');
+      } catch (e) {
+        if (!disposed) showSnackbar(e.message || 'Impossibile avviare l’analisi volti.', { error: true });
+      }
+    });
+  }
+
+  function startRecluster() {
+    return withStartLock(async () => {
+      const ok = await confirmDialog({
+        title: 'Ricalcolare i gruppi di persone?',
+        message: 'PhotoScan raggrupperà nuovamente i volti non ancora assegnati manualmente. I nomi e le correzioni che hai fatto verranno mantenuti.',
+        confirmLabel: 'Ricalcola',
+      });
+      if (!ok || disposed) return;
+      try {
+        const r = await api.post('/people/recluster', {});
+        if (disposed) return;
+        if (r.job) store.set('facesJob', r.job);
+      } catch (e) {
+        if (!disposed) showSnackbar(e.message || 'Impossibile avviare il ricalcolo.', { error: true });
+      }
+    });
   }
 
   // ---------- Azioni sulle persone ----------
@@ -1357,6 +1376,7 @@ export async function mount(root, { navigate, query = {}, signal } = {}) {
   }
 
   async function loadAll() {
+    avatarCache.clear(); // dopo scansioni/reset gli id dei volti possono essere riusati: niente <img> vecchie
     contentSlot.replaceChildren(skeletonGrid(10, { tile: 170 }));
     try {
       const [st, cfg, ppl, groups] = await Promise.all([

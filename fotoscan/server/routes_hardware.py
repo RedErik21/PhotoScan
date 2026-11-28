@@ -58,8 +58,6 @@ def hardware_benchmark(body: dict = Body(default={})):
     """Misura la velocita' reale su questo computer (sottoprocesso: la memoria video si libera a fine prova)."""
     if _indexing_running():
         raise HTTPException(409, "Ferma l'analisi prima di misurare la velocità: userebbero la scheda video insieme.")
-    if jobs.running_job(JOB_NAME) is not None:
-        raise HTTPException(409, "La misura è già in corso.")
     from .routes_status import _model_cached
 
     wanted = body.get("models")
@@ -101,5 +99,7 @@ def hardware_benchmark(body: dict = Body(default={})):
             raise RuntimeError("La misura non è riuscita (controlla che PyTorch sia installato).")
         return {"results": results, "at": time.time()}
 
-    job = jobs.start_job(JOB_NAME, _run)
+    job, created = jobs.start_job_unique(JOB_NAME, _run)
+    if not created:
+        raise HTTPException(409, "La misura è già in corso.")
     return {"job_id": job.id}

@@ -308,14 +308,16 @@ def _sample_paths(db_path: str, n: int) -> list[str]:
     import sqlite3
 
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=30)
+        conn = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True, timeout=30)  # as_uri: '#', '?', '%' nel percorso
         try:
             rows = conn.execute("SELECT path FROM files WHERE kind='image' ORDER BY RANDOM() LIMIT ?", (n * 2,)).fetchall()
         finally:
             conn.close()
     except sqlite3.Error:
         return []
-    return [r[0] for r in rows if os.path.exists(r[0])][:n]
+    from .scanner_metadata import _fs  # percorsi >260 caratteri su Windows
+
+    return [r[0] for r in rows if os.path.exists(_fs(r[0]))][:n]
 
 
 def _bench_model(hw: dict, cfg, model: dict, db_path: str, workers: int) -> dict:

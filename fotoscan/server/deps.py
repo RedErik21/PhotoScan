@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from pathlib import Path
 from typing import Iterator
+
+from fastapi import HTTPException
 
 from .. import db as dbm
 from ..config import CONFIG_FILE, Config, load_config
@@ -51,6 +54,23 @@ def get_db() -> Iterator[sqlite3.Connection]:
 def open_db() -> sqlite3.Connection:
     """Connessione fuori da una richiesta (thread di job). Chiudila tu."""
     return dbm.connect(get_cfg().db_path)
+
+
+def volume_online(path: str) -> bool:
+    """False se nessuna cartella antenata del file esiste (disco esterno scollegato, NAS spento, unita'
+    di rete non raggiungibile): in quel caso un file assente non e' "mancante", e' solo non raggiungibile."""
+    try:
+        parent = Path(path).parent
+        return any(c.exists() for c in (parent, *parent.parents))
+    except (OSError, ValueError):
+        return False
+
+
+def valid_id(n: int) -> int:
+    """Id file/album entro i limiti di SQLite (INTEGER a 64 bit): oltre darebbe OverflowError (500)."""
+    if not 0 < n <= 2**63 - 1:
+        raise HTTPException(404, "non trovato")
+    return n
 
 
 # Colonne standard di un file + info piano/preferiti. Usare SELECT_FILE come base di ogni query "lista file".

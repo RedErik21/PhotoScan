@@ -1,28 +1,30 @@
+# Versioni esatte (quelle provate): una build riproducibile non cambia con le uscite nuove di PyPI.
+# I pacchetti pesanti (PyTorch e compagni) sono in requirements-runtime.txt: nell'exe Windows stanno in un runtime a parte.
 # PyTorch con CUDA (GPU NVIDIA): installare PRIMA con
 #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 # Solo CPU: pip install torch torchvision
-transformers>=4.49
-accelerate
-sentencepiece
-protobuf
-numpy
-pillow
-pillow-heif
-xxhash
-pandas
-streamlit>=1.40
+transformers==5.24.0
+accelerate==1.16.0
+sentencepiece==0.2.3
+protobuf==7.36.2
+numpy==2.5.4
+pillow==13.0.0
+pillow-heif==1.8.1
+xxhash==4.1.0
+pandas==3.1.1
+streamlit==1.67.0
 
 # Riconoscimento volti (enable_faces=true in config.json).
 # Usa direttamente onnxruntime-gpu con i modelli ONNX buffalo_l (nessun compilatore C++ richiesto).
 # Su PC senza GPU NVIDIA sostituire con: onnxruntime
-onnxruntime-gpu
+onnxruntime-gpu==1.32.0
 
 # Finestra dell'app senza bordi (fotoscan/desktop.py). Su Windows usa WebView2 (gia' presente con Edge).
-pywebview
+pywebview==6.2.1
 
 # Server API + interfaccia (FastAPI). uvicorn[standard] include websocket/uvloop opzionali.
-fastapi
-uvicorn[standard]
+fastapi==0.165.0
+uvicorn[standard]==0.54.0
 
 # Facoltativo: client HTTP (test con TestClient). Gia' presente nel venv come dipendenza indiretta.
 # httpx

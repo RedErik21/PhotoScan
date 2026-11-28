@@ -28,13 +28,14 @@ Lista paginata: `{"total":N,"items":[File,...]}`.
 
 ## 2. API (tutte sotto `/api`, JSON; errori `{"detail":"messaggio italiano"}` con status HTTP corretto)
 Ogni gruppo vive in **un file `fotoscan/server/routes_<gruppo>.py`** con `router = APIRouter(prefix="/api", tags=[...])` (scoperta automatica).
+**Sicurezza (middleware in `app.py`)**: il server risponde solo a richieste con `Host` 127.0.0.1, localhost, [::1] (qualsiasi porta; `testserver` per i test), altrimenti 403 `{"detail":"Host non consentito."}` (difesa da DNS rebinding). Le richieste non GET/HEAD/OPTIONS con `Origin` presente e diverso dalla stessa origine → 403 `{"detail":"Origine non consentita."}`; `Origin` assente è ammesso. Gli id oltre 2^63-1 danno 404/422, mai 500. GZip è applicato a JSON e testo ma non a miniature, anteprime, originali, fotogrammi e ritagli volto.
 Già presenti (core, non modificare): `GET /health`, `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/{id}/cancel`, `GET /events` (SSE: `job`, `index`, `hello`).
 Per i job: `from . import jobs; job = jobs.start_job("nome", fn)`; `fn(job)` chiama `job.update(stage=, done=, total=, message=)` e controlla `job.cancel_requested`. Ritorna `job.public()` al client.
 
 ### routes_status.py
 - `GET /status` → `{version, first_run:bool (nessun source_dir o catalogo vuoto), source_dir, output_dir, db_path, counts:{totale,foto,video,indicizzati,errori,duplicati,data_incerta,senza_data_exif}, plan:{built:bool, folders:int, files:int}, device, ffmpeg:bool, model, model_cached:bool, faces:{available,reason,models_ready,provider,model_id}, faces_available:bool, faces_reason}` (usa `db.stats`).
 - `GET /settings` → impostazioni editabili `{source_dir,output_dir,model_name,device,batch_size,workers,score_threshold,score_temperature,event_gap_hours,max_event_days,min_event_size,near_dup_threshold,near_dup_seconds,near_dup_name_rule,dup_mode("subfolder|skip"),link_mode("hardlink|copy"),folder_template,labels:[{name,prompt}],null_prompts:[str],video_fractions:[..],enable_faces,faces_threshold,faces_assign_threshold,faces_min_photos,faces_det_size}`.
-- `PUT /settings` (corpo parziale, validazione con messaggi italiani, salva `config.json`, chiama `deps.reload_cfg()`), → settings aggiornate.
+- `PUT /settings` (rifiuta anche `source_dir` che coincide o si sovrappone a `nas_dir`, `model_name` non presente in `/status.available_models`, `device` cuda/mps non disponibile; corpo parziale, validazione con messaggi italiani, salva `config.json`, chiama `deps.reload_cfg()`), → settings aggiornate.
 - `POST /settings/reset-labels` → ripristina le etichette di default.
 - `POST /system/pick-folder` `{title?, initial?}` → `{path|null}` (finestra di scelta cartella nativa via tkinter in thread; mai bloccare il loop).
 - `POST /system/open-folder` `{path}` → apre in Esplora risorse (solo percorsi esistenti dentro `output_dir` o `source_dir`).
@@ -48,15 +49,16 @@ Per i job: `from . import jobs; job = jobs.start_job("nome", fn)`; `fn(job)` chi
 - `GET /timeline/years` → `[{year,count}]`.
 - `GET /memories?limit=` → "Ricordi": file di oggi (stesso giorno/mese) negli anni passati `[{year, items:[File,...]}]`.
 - `POST /files/{id}/favorite` `{value:bool}` → `{favorite}`; `POST /files/favorite` `{ids:[],value}` → `{changed}`.
+- `GET /library/broken` → `{total,mancanti,illeggibili}`; `POST /library/broken/check` → job `broken_check` (un solo job alla volta, segna solo i file con cartella raggiungibile); `POST /library/broken/remove` `{confirm:true}` → `{removed,recovered,skipped}`: riverifica ogni voce, toglie dal catalogo solo i file davvero assenti/illeggibili, toglie il segno ai file ritrovati (`recovered`) e salta quelli su dischi non raggiungibili (`skipped`).
 
 ### routes_media.py
-- `GET /files/{id}/thumb?size=256` → JPEG quadrato ritagliato al centro (size ∈ 96..512), cache su disco `cache/thumbs/`, generazione on-demand in thread pool, foto (HEIC incl. via pillow-heif, EXIF orientation) e video (fotogramma da `cache/frames/{id}_1.jpg` o ffmpeg al volo). Header `Cache-Control: public, max-age=31536000, immutable`, ETag. Fallimento → PNG segnaposto 200 (mai 500 per un file corrotto).
-- `GET /files/{id}/display?max=2048` → JPEG ridimensionato (visualizzatore; HEIC/TIFF non mostrabili dal browser), cache `cache/display/`.
-- `GET /files/{id}/media` → file originale in streaming con **HTTP Range** (206) per video; `Content-Type` corretto; sola lettura. Rifiuta percorsi non presenti nel catalogo.
+- `GET /files/{id}/thumb?size=256` → JPEG quadrato ritagliato al centro (size ∈ 96..512), cache su disco `cache/thumbs/`, generazione on-demand in thread pool, foto (HEIC incl. via pillow-heif, EXIF orientation) e video (fotogramma da `cache/frames/{id}_1.jpg` o ffmpeg al volo). Header `Cache-Control: public, max-age=31536000, immutable`, ETag. Fallimento → PNG segnaposto 200 (mai 500 per un file corrotto). Il file è segnato in `broken` come `illeggibile` solo se è davvero danneggiato (non se manca ffmpeg, manca pillow-heif, l'immagine supera 500 Mpx o la lettura fallisce per errore di sistema/rete) e come `mancante` solo se la cartella è raggiungibile (un disco scollegato non conta); il segno si toglie da solo quando la miniatura riesce o il file torna. Immagini a 16 bit sono scalate a 8 bit.
+- `GET /files/{id}/display?max=2048` → JPEG ridimensionato (visualizzatore; HEIC/TIFF non mostrabili dal browser), cache `cache/display/`. 404 se l'anteprima è impossibile per cause non legate al file (ffmpeg/formato non supportati, immagine enorme).
+- `GET /files/{id}/media` → file originale in streaming con **HTTP Range** (206) per video; `Content-Type` corretto; sola lettura. Rifiuta percorsi non presenti nel catalogo. Range non soddisfacibile → 416; file da 0 byte → 200 vuoto; Range multipli → 200 con tutto il file. Il file si chiude anche se il client si disconnette.
 - `GET /files/{id}/frames` → `[url,...]` dei fotogrammi in cache del video (anteprima scorrimento).
 
 ### routes_search.py
-- `GET /search?q=&limit=60&offset=0&kind=` → `{total, items:[File + {"match":0.31}]}` ricerca semantica (embedding testo SigLIP2 su CPU, caricamento lazy una volta, matrice embedding in cache invalidata dal numero di righe). Query vuota → 400.
+- `GET /search?q=&limit=60&offset=0&kind=` → `{total, items:[File + {"match":0.31}]}` ricerca semantica (embedding testo SigLIP2 su CPU, caricamento lazy una volta, matrice embedding in cache invalidata dal numero di righe). Query vuota → 400. 409 se gli embedding in catalogo hanno una dimensione diversa dal modello corrente (rifare l'analisi).
 - `GET /search/status` → `{model_loaded, loading, indexed}`; `POST /search/warmup` avvia il caricamento in background.
 - `POST /labels/test` `{prompt}` → `{items:[File+match] (top 24), coverage:{above_threshold:int}}` per provare un'etichetta prima di salvarla.
 - `GET /search/suggestions` → `["tramonto","torta di compleanno",...]` (etichette + frasi comuni).
@@ -67,24 +69,26 @@ Per i job: `from . import jobs; job = jobs.start_job("nome", fn)`; `fn(job)` chi
 - `GET /plan/folder?name=&offset=0&limit=120&sort=date` → lista paginata dei file del gruppo + `{folder, count}`.
 - `POST /plan/rename` `{old,new}` (unisce se `new` esiste; `organizer.rename_group`) → summary del gruppo.
 - `POST /plan/move` `{file_ids:[],folder}` (`organizer.move_files`).
-- `POST /plan/reset-overrides` → svuota `rename_map` e `file_override` e ricalcola.
+- `POST /plan/reset-overrides` `{confirm:true}` (senza conferma 400; irreversibile) → svuota `rename_map`, `file_override` e i master scelti a mano (`dup_keep`) e ricalcola; 409 se il piano è in ricalcolo o in applicazione.
 - `GET /plan/folders/tree` → albero `[{name:"2020", count, children:[{name:"06 - Evento ...", folder:"2020/06 - ...", count}]}]`.
 
 ### routes_duplicates.py
 - `GET /duplicates?type=exact|similar&offset=0&limit=20` → `{total, groups:[{master:File, members:[File], reason:"hash|nome|immagine", similarity:0.99|null}]}` (da tabella `plan`: `is_dup`, `dup_of`).
 - `POST /duplicates/keep` `{master_id, member_ids:[...]}` → riassegna il master (scambia ruoli nel piano via `file_override`); non tocca file su disco.
+- `POST /duplicates/keep-many`, `POST /duplicates/keep-largest`: come `keep`. `keep`, `keep-many`, `keep-largest` e `trash-copies` rispondono 409 durante il ricalcolo del piano.
+- `POST /duplicates/trash-copies` `{dry_run?, confirm?}` → copie nel Cestino. Risposta con `skipped_groups` (gruppi saltati) anche in `dry_run` (`{groups,files,bytes,skipped_groups,dry_run}`); eseguita: `{trashed,freed_bytes,errors,missing,groups,skipped_groups}`.
 - `GET /duplicates/summary` → `{exact:{groups,files,bytes}, similar:{groups,files,bytes}}` (byte recuperabili se si eliminassero).
 
 ### routes_index.py
 - `GET /index/status` → `{running, stage:"scansione|metadati|embedding|volti|completato|", done, total, percent, eta_seconds|null, rate_per_sec|null, started, log_tail:[str], stats:{...db.stats}}`.
-- `POST /index/start` `{limit?:int, subdir?:str}` → avvia `python -m fotoscan index` come **sottoprocesso nascosto** (riprendibile), `{started:true}` (409 se già in corso; 400 se `source_dir` mancante/non esiste).
+- `POST /index/start` `{limit?:int, subdir?:str}` → avvia `python -m fotoscan index` come **sottoprocesso nascosto** (riprendibile), `{started:true}` (409 se già in corso, se il modello impostato non coincide con quello degli embedding in catalogo, o se c'è un job volti attivo; 400 se `source_dir` mancante/non esiste o `subdir` non valida). `/index/status.error_code` (dopo un fallimento, a indicizzazione ferma) può essere `model_mismatch`, `index_failed`, `source_missing` (oltre a `network_unreachable`).
 - `POST /index/stop` → termina l'albero di processi (sicuro: riprendibile).
 - Pubblica eventi SSE `index` (stesso corpo di `/index/status`) ogni ~1 s mentre gira (`jobs.bus.publish("index", ...)`), leggendo la meta `progress` del catalogo e `index.log`.
 - `GET /index/errors?limit=200` → `[{path,error}]` file in stato `error`; `POST /index/retry-errors` → riporta a `meta` gli errori (riprovabili).
 
 ### routes_apply.py
-- `GET /apply/preview` → `{ok, total, link, copies, existing, extra_bytes, same_volume, free_bytes, output_dir, source_dir, link_mode, warnings:[str], folders:int, duplicates_to_folder:int}` (`organizer.apply_plan(apply=False)`, calcolo in cache breve). Errori di validazione (`output_dir` dentro sorgente...) → `{ok:false, error:"..."}` con 200.
-- `POST /apply/run` `{confirm:true}` → job con progresso (applica davvero, **solo con `confirm:true` esplicito**), `{job_id}`; 409 se già in corso.
+- `GET /apply/preview` → `{ok, total, link, copies, existing, extra_bytes, same_volume, free_bytes, output_dir, source_dir, link_mode, warnings:[str], folders:int, duplicates_to_folder:int, hardlink_supported:bool}` (`organizer.apply_plan(apply=False)`, calcolo in cache breve). Errori di validazione (`output_dir` dentro sorgente...) → `{ok:false, error:"..."}` con 200.
+- `POST /apply/run` `{confirm:true}` → job con progresso (applica davvero, **solo con `confirm:true` esplicito**), `{job_id}`; 409 se già in corso, se il piano è in ricalcolo o se lo spazio libero non basta; il risultato del job può contenere `spazio_esaurito` (disco pieno durante la scrittura). `fingerprint` dell'anteprima dipende anche da nome, dimensione, hash e ruolo duplicato dei file. Se la destinazione non supporta gli hard link (FAT32/exFAT/rete) `hardlink_supported:false`, si copia e c'è un avviso.
 - `GET /apply/log?tail=200` → ultime righe di `<output>/_fotoscan_apply.log`.
 
 ### routes_library.py (preferiti già in routes_files)
@@ -117,6 +121,16 @@ Per i job: `from . import jobs; job = jobs.start_job("nome", fn)`; `fn(job)` chi
 - `POST /update/install` → approva l'installazione: la esegue `fotoscan.desktop` al prossimo avvio, prima di avviare il server (copia di riserva e ripristino se fallisce). La finestra pywebview espone `restart_app()` per riavviare subito.
 - `DELETE /update/pending` → annulla il download in corso o elimina l'aggiornamento scaricato.
 - Evento SSE `update` (stesso contenuto di `GET /update`). Il server controlla all'avvio (`fotoscan.server.__main__` → `routes_update.startup_check()`) se `update_check_on_start`.
+
+### routes_cleanup.py (Pulizia)
+- `GET /cleanup/summary`, `GET /cleanup/items` → candidati alla pulizia (file nel catalogo). `POST /cleanup/trash` `{ids:[...], confirm:true}` → sposta nel Cestino (Windows: Cestino; Linux: cestino freedesktop; mai cancellazione definitiva), toglie dal catalogo (a blocchi, con volti/persone/copertine) e ripara i gruppi duplicati. Risposta `{trashed, freed_bytes, errors:[{id,path,error}], missing}`: `missing` = file già spariti dal disco (tolti dal catalogo ma non contati in `trashed`). 409 se il piano è in ricalcolo o in applicazione.
+
+### routes_nas.py (prefisso `/api/nas`)
+- `GET /nas/cleanup` → anteprima dei file locali con copia verificata sul NAS: `{count, bytes, sample, ids:[...]}`.
+- `POST /nas/cleanup` `{confirm:"CESTINO", expected_count, expected_ids:[...]}` → job. `expected_ids` deve coincidere con i candidati attuali (400 se elenco non valido, 409 se è cambiato dall'anteprima). Invio, ricezione e pulizia non girano mai insieme (409). `PUT /nas/settings` rifiuta cartelle NAS identiche o sovrapposte a sorgente e cartella di ricezione.
+
+### routes_phone.py (prefisso `/api/phone`)
+- `GET /phone/history`, `GET /phone/devices`, `GET /phone/folder`, `POST /phone/scan`, `POST /phone/import` (job). Errori di accesso al telefono → 503 con messaggio. Il risultato dell'import (`job.result`) contiene `aborted` (motivo, stringa vuota se completo) quando si ferma a metà, ad esempio telefono scollegato; lo storico lo registra come non riuscito.
 
 ### routes_places.py
 - `GET /places?precision=1` → cluster GPS `[{lat,lon,count,sample_id,label:"41.9°N 12.5°E"}]` (griglia arrotondata, precision = decimali).

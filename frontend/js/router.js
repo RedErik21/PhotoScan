@@ -80,7 +80,7 @@ async function render() {
     current = { path, query, params: m.params || {}, route: m.route };
     listeners.forEach((fn) => fn(current));
     document.title = `${m.route.title} · PhotoScan`;
-    const ret = await mod.mount(outlet, { params: m.params, query, navigate, signal: abort.signal });
+    const ret = await mod.mount(outlet, { path: path.length > 1 ? path.replace(/\/+$/, '') : path, route: m.route, params: m.params, query, navigate, signal: abort.signal });
     if (my !== seq) { if (typeof ret === 'function') ret(); return; }
     if (typeof ret === 'function') cleanup = ret;
   } catch (e) {

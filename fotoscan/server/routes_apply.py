@@ -53,10 +53,13 @@ def _fmt_bytes(n: int) -> str:
 
 
 def _plan_fingerprint(conn: sqlite3.Connection) -> str:
-    """Impronta del piano: cambia appena cambia una cartella assegnata a un file."""
+    """Impronta del piano: cambia appena cambia una cartella, un nome, una dimensione o il ruolo duplicato di un file."""
     h = hashlib.md5()
-    for row in conn.execute("SELECT file_id, folder FROM plan ORDER BY file_id"):
-        h.update(f"{row[0]}\t{row[1]}\n".encode("utf-8"))
+    for row in conn.execute(
+        "SELECT p.file_id, p.folder, COALESCE(p.is_dup,0), f.name, f.size, f.hash "
+        "FROM plan p JOIN files f ON f.id=p.file_id ORDER BY p.file_id"
+    ):
+        h.update("\t".join(str(x) for x in row).encode("utf-8") + b"\n")
     return h.hexdigest()
 
 
@@ -103,19 +106,19 @@ def _compute_preview(conn: sqlite3.Connection, cfg) -> dict:
     anc = _nearest_existing(out)
     same_volume = os.stat(src).st_dev == os.stat(anc).st_dev
     hardlink = cfg.link_mode == "hardlink" and same_volume
+    link_unsupported = False
+    if hardlink:  # stesso volume non basta: FAT32/exFAT/condivisioni di rete non supportano gli hard link
+        sample = conn.execute(
+            "SELECT f.path FROM plan p JOIN files f ON f.id=p.file_id WHERE p.folder IS NOT NULL LIMIT 20").fetchall()
+        probe = next((r[0] for r in sample if os.path.exists(r[0])), None)
+        if not organizer.can_hardlink(probe, anc):
+            hardlink, link_unsupported = False, True
     new_files = res["link"] + res["copie"]
     n_link = new_files if hardlink else 0
     n_copy = 0 if hardlink else new_files
 
-    # Byte da scrivere davvero: solo i file la cui destinazione non esiste ancora (con hard link non occupano spazio).
-    new_bytes = 0
-    if not hardlink:
-        rows = conn.execute(
-            "SELECT p.folder, f.name, f.size FROM plan p JOIN files f ON f.id=p.file_id WHERE p.folder IS NOT NULL"
-        ).fetchall()
-        for folder, name, size in rows:
-            if not (out / organizer.safe_folder(folder) / organizer.safe_name(name)).exists():
-                new_bytes += size or 0
+    # Byte da scrivere davvero (stessa logica dell'applicazione, nomi alternativi inclusi); con hard link zero.
+    new_bytes = 0 if hardlink else int(res.get("byte_nuovi", 0))
     free = shutil.disk_usage(anc).free
 
     warnings: list[str] = []
@@ -127,6 +130,9 @@ def _compute_preview(conn: sqlite3.Connection, cfg) -> dict:
     elif not same_volume:
         warnings.append("Sorgente e destinazione sono su dischi diversi: verrà usata la copia, "
                         f"servono {_fmt_bytes(new_bytes)} di spazio extra.")
+    if link_unsupported:
+        warnings.append("Il disco di destinazione non supporta i collegamenti (FAT32, exFAT o rete): verrà usata la "
+                        f"copia, servono {_fmt_bytes(new_bytes)} di spazio extra.")
     if new_bytes > free:
         warnings.append(
             f"Spazio insufficiente sul disco di destinazione: servono circa {_fmt_bytes(new_bytes)}, "
@@ -152,6 +158,7 @@ def _compute_preview(conn: sqlite3.Connection, cfg) -> dict:
         "existing": res["gia_presenti"],
         "extra_bytes": 0 if hardlink else new_bytes,
         "same_volume": same_volume,
+        "hardlink_supported": not link_unsupported,
         "free_bytes": free,
         "output_dir": cfg.output_dir,
         "source_dir": cfg.source_dir,
@@ -196,7 +203,17 @@ def apply_suggest(conn: sqlite3.Connection = Depends(deps.get_db)):
     src = os.path.abspath(cfg.source_dir)
     anchor = Path(src).anchor or src
     path = Path(anchor) / SUGGEST_NAME
-    return {"path": str(path), "drive": anchor, "exists": path.is_dir(), "same_volume": True}
+    if os.name != "nt":
+        # su Linux/macOS l'ancora e' "/": non scrivibile senza privilegi e non e' il disco della sorgente.
+        # Si propone una cartella accanto alla sorgente (stesso filesystem), o nella home se non e' scrivibile.
+        parent = Path(src).parent
+        path = (parent if os.access(parent, os.W_OK) else Path.home()) / SUGGEST_NAME
+        anchor = str(path.parent)
+    try:
+        same = os.stat(src).st_dev == os.stat(_nearest_existing(path)).st_dev
+    except OSError:
+        same = False
+    return {"path": str(path), "drive": anchor, "exists": path.is_dir(), "same_volume": same}
 
 
 @router.post("/apply/destination")
@@ -242,7 +259,7 @@ def _run_job(job: jobs.Job, cfg) -> dict:
 
         def progress(stage: str, done: int, total: int) -> None:
             # chiamato prima di ogni file: l'annullamento e' quindi rapido e lo stato resta coerente
-            if job.cancel_requested:
+            if job.cancel_requested and done < total:  # a lavoro finito un annullamento tardivo non cambia l'esito
                 raise _Cancelled()
             if _TEST_DELAY and total:
                 time.sleep(_TEST_DELAY)
@@ -285,8 +302,22 @@ def apply_run(body: dict | None = None):
     if not _run_lock.acquire(blocking=False):
         raise HTTPException(409, "Un'applicazione è già in corso.")
     try:
-        job = jobs.start_job(JOB_NAME, lambda j: _run_job(j, cfg))
-    except Exception:
+        # spazio: l'anteprima in cache puo' avere fino a 30 s; qui si ricontrolla prima di scrivere
+        conn = deps.open_db()
+        try:
+            pre = _compute_preview(conn, cfg)
+        except OSError:
+            pre = {}
+        finally:
+            conn.close()
+        if pre.get("ok") and pre.get("extra_bytes", 0) > pre.get("free_bytes", 0):
+            raise HTTPException(409, f"Spazio insufficiente sul disco di destinazione: servono circa "
+                                     f"{_fmt_bytes(pre['extra_bytes'])}, ne risultano liberi {_fmt_bytes(pre['free_bytes'])}.")
+        # atomico e mai in parallelo al ricalcolo del piano (che riscrive la tabella letta da apply)
+        job, created = jobs.start_job_unique(JOB_NAME, lambda j: _run_job(j, cfg), conflicts=("piano",))
+        if not created:
+            raise HTTPException(409, "Il piano e' in ricalcolo o un'applicazione e' gia' in corso.")
+    except BaseException:
         _run_lock.release()
         raise
     return {"job_id": job.id}

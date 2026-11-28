@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 import zlib
+from collections import Counter
 
 import numpy as np
 
@@ -111,11 +113,14 @@ CREATE TABLE IF NOT EXISTS broken(
 """
 
 
-MIGRATION_REV = 1  # da incrementare quando cambia _migrate
+MIGRATION_REV = 2  # da incrementare quando cambia _migrate
 # Versione dello schema scritta in PRAGMA user_version dopo SCHEMA + migrazioni: le connessioni successive
 # (una per richiesta HTTP) la leggono dall'intestazione del file e saltano executescript e migrazioni.
 # Un catalogo nuovo, sostituito o creato da una versione diversa ha un altro valore e viene aggiornato.
 SCHEMA_VERSION = (zlib.crc32(SCHEMA.encode("utf-8")) ^ MIGRATION_REV) & 0x7FFFFFFF or 1
+
+
+_upgrade_lock = threading.Lock()  # aggiornamento dello schema: una connessione alla volta (richieste parallele all'avvio)
 
 
 def connect(path: str) -> sqlite3.Connection:
@@ -124,11 +129,14 @@ def connect(path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
     if conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
-        conn.execute("PRAGMA journal_mode=WAL")  # persistente nel file: basta impostarlo una volta
-        conn.executescript(SCHEMA)
-        _migrate(conn)
-        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-        conn.commit()
+        with _upgrade_lock:
+            # un'altra richiesta puo' aver gia' aggiornato il file mentre si aspettava il lock
+            if conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+                conn.execute("PRAGMA journal_mode=WAL")  # persistente nel file: basta impostarlo una volta
+                conn.executescript(SCHEMA)
+                _migrate(conn)
+                conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+                conn.commit()
     return conn
 
 
@@ -157,6 +165,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
             changed = True
     conn.execute("CREATE INDEX IF NOT EXISTS ix_faces_file ON faces(file_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_faces_person ON faces(person_id)")
+    try:  # nomi album unici (senza maiuscole); se esistono gia' doppioni il vincolo non si crea e resta il controllo nella route
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_albums_name ON albums(name COLLATE NOCASE)")
+    except sqlite3.IntegrityError:
+        pass
     # Migrazione una tantum dei vecchi cluster greedy -> tabella persons
     if conn.execute("SELECT COUNT(*) FROM persons").fetchone()[0] == 0:
         legacy = conn.execute(
@@ -201,6 +213,12 @@ def load_embeddings(conn: sqlite3.Connection) -> tuple[np.ndarray, np.ndarray]:
     rows = conn.execute("SELECT file_id, vec FROM embeddings ORDER BY file_id").fetchall()
     if not rows:
         return np.zeros(0, dtype=np.int64), np.zeros((0, 0), dtype=np.float32)
+    # Catalogo con embedding di modelli diversi (cambio modello a meta'): si tengono quelli della dimensione piu'
+    # comune, invece di far fallire np.stack con un errore.
+    dims = Counter(len(r["vec"]) for r in rows)
+    if len(dims) > 1:
+        keep = dims.most_common(1)[0][0]
+        rows = [r for r in rows if len(r["vec"]) == keep]
     ids = np.fromiter((r["file_id"] for r in rows), dtype=np.int64, count=len(rows))
     mat = np.stack([from_blob(r["vec"]) for r in rows])
     return ids, mat

@@ -45,6 +45,8 @@ def _run_import(job, body: dict, dest: Path):
             cancelled=lambda: job.cancel_requested,
             skip=set(body.get("skip") or []),
         )
+        if res.aborted:  # fermata a meta' (telefono scollegato): lo storico la segna come non riuscita
+            err = res.aborted
         return asdict(res)
     except Exception as e:  # noqa: BLE001 - si registra nello storico e poi si rilancia
         err = f"{type(e).__name__}: {e}"
@@ -75,7 +77,7 @@ def devices():
     """Telefoni collegati e storage. Vuoto se il telefono non e' collegato o non e' sbloccato."""
     try:
         return {"devices": phone_mtp.list_devices()}
-    except phone_mtp.PhoneError as e:
+    except (phone_mtp.PhoneError, OSError) as e:
         raise HTTPException(503, str(e))
 
 
@@ -84,8 +86,16 @@ def folder(device: str = Query(...), storage: str = Query(...), path: list[str] 
     """Contenuto di una cartella del telefono: sottocartelle con numero di foto/video."""
     try:
         return phone_mtp.list_folder(device, storage, path)
-    except phone_mtp.PhoneError as e:
+    except (phone_mtp.PhoneError, OSError) as e:
         raise HTTPException(503, str(e))
+
+
+def _check_dest(value) -> str:
+    """Destinazione assoluta, non la radice di un disco e non una cartella di sistema o del programma
+    (come per la ricezione dal NAS): un percorso relativo finirebbe nella cartella dell'app."""
+    from .routes_nas import _check_write_dir
+
+    return _check_write_dir(str(value).strip(), "La cartella di destinazione")
 
 
 def _dedupe_folders(folders: list[list[str]]) -> list[list[str]]:
@@ -115,10 +125,10 @@ def scan(body: dict = Body(...)):
     (stesso nome e stessa dimensione nel catalogo o nella destinazione). Nessun file viene copiato."""
     device, storage, folders = _check_selection(body)
     dest_raw = body.get("dest")
-    dest = Path(dest_raw.strip()).expanduser() if isinstance(dest_raw, str) and dest_raw.strip() else None
+    dest = Path(_check_dest(dest_raw)) if isinstance(dest_raw, str) and dest_raw.strip() else None
     try:
         items = phone_mtp.scan_folders(device, storage, folders)
-    except phone_mtp.PhoneError as e:
+    except (phone_mtp.PhoneError, OSError) as e:
         raise HTTPException(503, str(e))
     conn = deps.open_db()
     try:
@@ -149,13 +159,13 @@ def start_import(body: dict = Body(...)):
     # Eccezione voluta: la destinazione puo' stare dentro la cartella delle foto (es. Foto\Pixel).
     # Restano le protezioni: nessun file esistente viene sovrascritto (duplicati saltati, conflitti rinominati)
     # e il telefono e' sempre solo letto.
-    dest = Path(dest_raw.strip()).expanduser()
-    if jobs.running_job(JOB_NAME):
-        raise HTTPException(409, "Un'importazione dal telefono e' gia' in corso.")
+    dest = Path(_check_dest(dest_raw))
 
     skip = body.get("skip") or []
     if not isinstance(skip, list) or not all(isinstance(x, str) for x in skip):
         raise HTTPException(400, "Elenco dei file da saltare non valido.")
     clean = {"device": device, "storage": storage, "folders": folders, "skip": skip}
-    job = jobs.start_job(JOB_NAME, lambda j: _run_import(j, clean, dest))
+    job, created = jobs.start_job_unique(JOB_NAME, lambda j: _run_import(j, clean, dest))
+    if not created:
+        raise HTTPException(409, "Un'importazione dal telefono e' gia' in corso.")
     return job.public()

@@ -285,6 +285,9 @@ def search(
     ids, mat, is_video = _embedding_matrix(conn)
     if len(ids) == 0:
         return {"total": 0, "items": []}
+    if mat.ndim != 2 or mat.shape[1] != qv.shape[0]:
+        raise HTTPException(409, "Le foto sono state analizzate con un altro modello: rifai l'analisi "
+                                 "(Impostazioni > Modello AI) prima di cercare.")
     scores = mat @ qv
     mask = _candidate_mask(conn, ids, is_video, kind)
     if not mask.any():

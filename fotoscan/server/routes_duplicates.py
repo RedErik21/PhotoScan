@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from .. import db as dbm
 from ..organizer import DUP_FOLDER, SIMILI_FOLDER, move_files
-from . import deps, routes_cleanup
+from . import deps, jobs, routes_cleanup
 
 router = APIRouter(prefix="/api", tags=["duplicati"])
 
@@ -31,13 +31,26 @@ CREATE TABLE IF NOT EXISTS dup_keep(
   file_id INTEGER PRIMARY KEY,
   is_dup INTEGER NOT NULL, dup_of INTEGER,
   cluster TEXT NOT NULL,        -- id di tutto il gruppo, ordinati e separati da virgola
-  expect_folder TEXT            -- file_override atteso per il file (NULL = nessuno)
+  expect_folder TEXT,           -- file_override atteso per il file (NULL = nessuno)
+  prev_folder TEXT,             -- file_override che il file aveva PRIMA dello scambio (NULL = nessuno)
+  touched INTEGER DEFAULT 0     -- 1 = l'override di questo file l'ha scritto lo scambio (da annullare se non vale piu')
 )"""
+JOB_PLAN = "piano"
 
 
 def _ensure(conn: sqlite3.Connection) -> None:
     conn.execute(_KEEP_SCHEMA)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(dup_keep)")}
+    for col, spec in (("prev_folder", "TEXT"), ("touched", "INTEGER DEFAULT 0")):  # cataloghi creati prima
+        if col not in cols:
+            conn.execute(f"ALTER TABLE dup_keep ADD COLUMN {col} {spec}")
     conn.commit()
+
+
+def _ensure_idle() -> None:
+    """Le modifiche ai gruppi non convivono con il ricalcolo del piano (che riscrive tutta la tabella plan)."""
+    if jobs.running_job(JOB_PLAN) is not None:
+        raise HTTPException(409, "Il piano e' in ricalcolo: riprova tra un momento.")
 
 
 def _csv(ids) -> str:
@@ -53,6 +66,43 @@ def _clusters(roles: Roles) -> dict[int, set[int]]:
     return out
 
 
+def _group_key(raw: Roles, raw_cl: dict[int, set[int]], fid: int) -> str:
+    """Chiave del gruppo GREZZO (quello del piano, senza scambi) a cui appartiene `fid`."""
+    root = raw[fid][1] or fid
+    return _csv(raw_cl.get(root, {root}))
+
+
+def _native_key(conn: sqlite3.Connection, raw: Roles, mem: set[int], root: int) -> str:
+    """Chiave da scrivere in dup_keep.cluster. La tabella plan contiene gia' gli scambi precedenti, quindi se un
+    membro ha una riga dup_keep se ne riusa la chiave (quella del gruppo nativo, come lo ricalcola build_plan)."""
+    q = ",".join("?" * len(mem))
+    row = conn.execute(f"SELECT cluster FROM dup_keep WHERE file_id IN ({q}) LIMIT 1", sorted(mem)).fetchone()
+    if row:
+        return row["cluster"]
+    return _group_key(raw, _clusters(raw), root)
+
+
+def _prev_touched(conn: sqlite3.Connection, fid: int, overrides: dict, touched_now: bool) -> tuple[str | None, int]:
+    """(prev_folder, touched) da scrivere in dup_keep. Se uno scambio precedente aveva gia' scritto l'override del
+    file, l'override 'originale' resta quello di prima di quel primo scambio."""
+    old = conn.execute("SELECT prev_folder, touched FROM dup_keep WHERE file_id=?", (fid,)).fetchone()
+    if old is not None and old["touched"]:
+        return old["prev_folder"], 1
+    return overrides.get(fid), 1 if touched_now else 0
+
+
+def _validity(raw: Roles, keeps, folders: dict[int, str]) -> dict[str, bool]:
+    """Un gruppo scambiato vale solo se e' lo stesso di quando lo scambio e' stato fatto (stessi membri)
+    e nessun file e' stato spostato a mano da allora."""
+    raw_cl = _clusters(raw)
+    valid: dict[str, bool] = {}
+    for k in keeps:
+        fid = k["file_id"]
+        ok = fid in raw and _group_key(raw, raw_cl, fid) == k["cluster"] and folders.get(fid) == k["expect_folder"]
+        valid[k["cluster"]] = valid.get(k["cluster"], True) and ok
+    return valid
+
+
 def _load(conn: sqlite3.Connection) -> tuple[Roles, Roles, dict[int, set[int]]]:
     """(ruoli nel piano, ruoli effettivi dopo gli scambi, gruppi effettivi)."""
     raw: Roles = {r["file_id"]: (int(r["is_dup"]), r["dup_of"])
@@ -60,21 +110,36 @@ def _load(conn: sqlite3.Connection) -> tuple[Roles, Roles, dict[int, set[int]]]:
     eff = dict(raw)
     keeps = conn.execute("SELECT file_id, is_dup, dup_of, cluster, expect_folder FROM dup_keep").fetchall()
     if keeps:
-        raw_cl = _clusters(raw)
         folders = {r["file_id"]: r["folder"] for r in conn.execute("SELECT file_id, folder FROM file_override")}
-        valid: dict[str, bool] = {}
-        for k in keeps:  # un gruppo vale solo se e' lo stesso di quando lo scambio e' stato fatto
-            fid = k["file_id"]
-            if fid not in raw:
-                ok = False
-            else:
-                root = raw[fid][1] or fid
-                ok = _csv(raw_cl.get(root, {root})) == k["cluster"] and folders.get(fid) == k["expect_folder"]
-            valid[k["cluster"]] = valid.get(k["cluster"], True) and ok
+        valid = _validity(raw, keeps, folders)
         for k in keeps:
             if valid[k["cluster"]] and k["file_id"] in raw:
                 eff[k["file_id"]] = (int(k["is_dup"]), k["dup_of"])
     return raw, eff, _clusters(eff)
+
+
+def release_stale(conn: sqlite3.Connection, raw: Roles) -> int:
+    """Chiamata da build_plan PRIMA di applicare gli override, con i ruoli grezzi del piano nuovo.
+    Per ogni scambio non piu' valido (gruppo cambiato, file spostato a mano o sparito) toglie le righe dup_keep
+    e ripristina gli override che lo scambio aveva scritto (quelli che l'utente ha poi cambiato restano)."""
+    _ensure(conn)
+    keeps = conn.execute("SELECT file_id, cluster, expect_folder, prev_folder, touched FROM dup_keep").fetchall()
+    if not keeps:
+        return 0
+    folders = {r["file_id"]: r["folder"] for r in conn.execute("SELECT file_id, folder FROM file_override")}
+    valid = _validity(raw, keeps, folders)
+    stale = [k for k in keeps if not valid[k["cluster"]]]
+    for k in stale:
+        fid = k["file_id"]
+        if k["touched"] and k["expect_folder"] is not None and folders.get(fid) == k["expect_folder"]:
+            if k["prev_folder"] is not None:
+                conn.execute("UPDATE file_override SET folder=? WHERE file_id=?", (k["prev_folder"], fid))
+            else:
+                conn.execute("DELETE FROM file_override WHERE file_id=?", (fid,))
+        conn.execute("DELETE FROM dup_keep WHERE file_id=?", (fid,))
+    if stale:
+        conn.commit()
+    return len(stale)
 
 
 def _write_back(conn: sqlite3.Connection, raw: Roles, eff: Roles) -> int:
@@ -163,7 +228,8 @@ def list_duplicates(
         raise HTTPException(400, "tipo non valido: usa 'exact' o 'similar'")
     _ensure(conn)
     raw, eff, clusters = _load(conn)
-    _write_back(conn, raw, eff)
+    if jobs.running_job(JOB_PLAN) is None:  # durante il ricalcolo il piano si sta riscrivendo: solo lettura
+        _write_back(conn, raw, eff)
     want = 1 if type == "exact" else 2
     roots = sorted(r for r, mem in clusters.items() if any(eff[x][0] == want for x in mem if x != r))
     page = roots[offset:offset + limit]
@@ -184,8 +250,9 @@ def keep_master(body: KeepBody, conn: sqlite3.Connection = Depends(deps.get_db))
     """Sceglie `master_id` come nuovo originale del gruppo. `member_ids` deve elencare tutti gli
     altri membri del gruppo (il vecchio master incluso): e' un controllo contro gruppi cambiati."""
     cfg = deps.get_cfg()
+    _ensure_idle()
     _ensure(conn)
-    _, eff, clusters = _load(conn)
+    raw, eff, clusters = _load(conn)
     root = next((r for r, mem in clusters.items() if body.master_id in mem), None)
     if root is None:
         raise HTTPException(404, "il file non fa parte di un gruppo di duplicati")
@@ -201,12 +268,12 @@ def keep_master(body: KeepBody, conn: sqlite3.Connection = Depends(deps.get_db))
         raise HTTPException(409, "cartella dell'originale non disponibile: ricalcola il piano")
 
     overrides = {r["file_id"]: r["folder"] for r in conn.execute("SELECT file_id, folder FROM file_override")}
-    _swap(conn, eff, root, members, body.master_id, row["folder"], overrides)
+    _swap(conn, eff, root, members, body.master_id, row["folder"], overrides, _native_key(conn, raw, members, root))
     return {"changed": True, "master_id": body.master_id, "members": sorted(members - {body.master_id})}
 
 
 def _swap(conn: sqlite3.Connection, eff: Roles, root: int, members: set[int], master_id: int,
-          keep_folder: str, overrides: dict) -> None:
+          keep_folder: str, overrides: dict, cluster: str | None = None) -> None:
     """Scrive lo scambio del master (plan, file_override, dup_keep) e aggiorna `eff` in memoria.
     I controlli (gruppo, cartelle, dup_mode) sono gia' stati fatti dal chiamante."""
     new_kind = eff[master_id][0] or 1
@@ -216,7 +283,7 @@ def _swap(conn: sqlite3.Connection, eff: Roles, root: int, members: set[int], ma
 
     expect = {x: overrides.get(x) for x in members}
     expect.update({master_id: keep_folder, root: demoted_folder})
-    cluster = _csv(members)
+    cluster = cluster or _csv(members)  # chiave del gruppo NATIVO: resta valida al ricalcolo del piano
     for x in members:
         if x == master_id:
             d, of = 0, None
@@ -226,11 +293,20 @@ def _swap(conn: sqlite3.Connection, eff: Roles, root: int, members: set[int], ma
             d, of = (eff[x][0] or 1), master_id
         conn.execute("UPDATE plan SET is_dup=?, dup_of=? WHERE file_id=?", (d, of, x))
         conn.execute(
-            "INSERT OR REPLACE INTO dup_keep(file_id,is_dup,dup_of,cluster,expect_folder) VALUES(?,?,?,?,?)",
-            (x, d, of, cluster, expect[x]),
+            "INSERT OR REPLACE INTO dup_keep(file_id,is_dup,dup_of,cluster,expect_folder,prev_folder,touched) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (x, d, of, cluster, expect[x], *_prev_touched(conn, x, overrides, x in (master_id, root))),
         )
         eff[x] = (d, of)
     conn.commit()
+
+
+def _master_available(conn: sqlite3.Connection, fid: int) -> bool:
+    """L'originale di un gruppo esiste ancora sul disco e non e' segnalato come mancante/illeggibile."""
+    row = conn.execute("SELECT path FROM files WHERE id=?", (fid,)).fetchone()
+    if row is None or not os.path.exists(row["path"]):
+        return False
+    return conn.execute("SELECT 1 FROM broken WHERE file_id=?", (fid,)).fetchone() is None
 
 
 class BulkBody(BaseModel):
@@ -250,6 +326,7 @@ class TrashCopiesBody(BaseModel):
 @router.post("/duplicates/keep-many")
 def keep_many(body: KeepManyBody, conn: sqlite3.Connection = Depends(deps.get_db)):
     """Segna uno o piu' file (anche tutto un gruppo) come foto normali da conservare (is_dup=0, dup_of=NULL)."""
+    _ensure_idle()
     _ensure(conn)
     raw, eff, clusters = _load(conn)
     _write_back(conn, raw, eff)
@@ -277,7 +354,7 @@ def keep_many(body: KeepManyBody, conn: sqlite3.Connection = Depends(deps.get_db
         if keep_folder:
             for fid in to_promote:
                 expect[fid] = keep_folder
-        cluster = _csv(mem)
+        cluster = _native_key(conn, raw, mem, root)
         for x in mem:
             if x in to_promote:
                 d, of = 0, None
@@ -285,8 +362,9 @@ def keep_many(body: KeepManyBody, conn: sqlite3.Connection = Depends(deps.get_db
                 d, of = eff[x]
             conn.execute("UPDATE plan SET is_dup=?, dup_of=? WHERE file_id=?", (d, of, x))
             conn.execute(
-                "INSERT OR REPLACE INTO dup_keep(file_id,is_dup,dup_of,cluster,expect_folder) VALUES(?,?,?,?,?)",
-                (x, d, of, cluster, expect[x]),
+                "INSERT OR REPLACE INTO dup_keep(file_id,is_dup,dup_of,cluster,expect_folder,prev_folder,touched) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (x, d, of, cluster, expect[x], *_prev_touched(conn, x, overrides, bool(x in to_promote and keep_folder))),
             )
             eff[x] = (d, of)
     if kept_count:
@@ -296,30 +374,38 @@ def keep_many(body: KeepManyBody, conn: sqlite3.Connection = Depends(deps.get_db
 
 @router.post("/duplicates/trash-copies")
 def trash_all_copies(body: TrashCopiesBody, conn: sqlite3.Connection = Depends(deps.get_db)):
-    """Sposta nel Cestino tutte le copie extra del tipo scelto ('exact' o 'similar'), tenendo gli originali."""
+    """Sposta nel Cestino tutte le copie extra del tipo scelto ('exact' o 'similar'), tenendo gli originali.
+    I gruppi il cui originale non e' piu' sul disco (o e' illeggibile) vengono SALTATI: cestinare le copie
+    farebbe perdere l'unico file rimasto."""
     if body.type not in ("exact", "similar"):
         raise HTTPException(400, "tipo non valido: usa 'exact' o 'similar'")
+    _ensure_idle()
     _ensure(conn)
     raw, eff, clusters = _load(conn)
     _write_back(conn, raw, eff)
     want = 1 if body.type == "exact" else 2
     sizes = {r["id"]: int(r["size"] or 0) for r in conn.execute("SELECT id, size FROM files")}
     copy_ids: list[int] = []
-    groups = 0
+    groups = skipped = 0
     for r, mem in clusters.items():
         extra = [x for x in sorted(mem) if x != r and eff[x][0] == want]
         if extra:
+            if not _master_available(conn, r):
+                skipped += 1
+                continue
             groups += 1
             copy_ids.extend(extra)
     total_bytes = sum(sizes.get(x, 0) for x in copy_ids)
     if body.dry_run:
-        return {"groups": groups, "files": len(copy_ids), "bytes": total_bytes, "dry_run": True}
+        return {"groups": groups, "files": len(copy_ids), "bytes": total_bytes, "skipped_groups": skipped,
+                "dry_run": True}
     if not body.confirm:
         raise HTTPException(400, "Serve la conferma esplicita per spostare le copie nel Cestino.")
     if not copy_ids:
-        return {"trashed": 0, "freed_bytes": 0, "errors": [], "groups": 0}
+        return {"trashed": 0, "freed_bytes": 0, "errors": [], "groups": 0, "missing": 0, "skipped_groups": skipped}
     res = routes_cleanup.trash_file_ids(conn, copy_ids)
     res["groups"] = groups
+    res["skipped_groups"] = skipped
     return res
 
 
@@ -328,6 +414,7 @@ def keep_largest_all(body: BulkBody, conn: sqlite3.Connection = Depends(deps.get
     """In ogni gruppo la foto piu' grande diventa l'originale (a parita' resta quella attuale).
     Stessa logica di keep_master, in una sola chiamata. Con dry_run=true conta soltanto."""
     cfg = deps.get_cfg()
+    _ensure_idle()
     _ensure(conn)
     raw, eff, clusters = _load(conn)
     _write_back(conn, raw, eff)
@@ -344,7 +431,7 @@ def keep_largest_all(body: BulkBody, conn: sqlite3.Connection = Depends(deps.get
         return {"groups": len(clusters), "changed": len(todo), "dry_run": True}
     overrides = {r["file_id"]: r["folder"] for r in conn.execute("SELECT file_id, folder FROM file_override")}
     for root, mem, best in todo:
-        _swap(conn, eff, root, mem, best, folders[root], overrides)
+        _swap(conn, eff, root, mem, best, folders[root], overrides, _native_key(conn, raw, mem, root))
     return {"groups": len(clusters), "changed": len(todo), "dry_run": False}
 
 
@@ -363,7 +450,8 @@ def set_reviewed(body: ReviewBody, conn: sqlite3.Connection = Depends(deps.get_d
 def duplicates_summary(conn: sqlite3.Connection = Depends(deps.get_db)):
     _ensure(conn)
     raw, eff, clusters = _load(conn)
-    _write_back(conn, raw, eff)
+    if jobs.running_job(JOB_PLAN) is None:
+        _write_back(conn, raw, eff)
     sizes = {r["id"]: r["size"] or 0 for r in conn.execute("SELECT id, size FROM files")}
     out: dict = {}
     for key, want in (("exact", 1), ("similar", 2)):

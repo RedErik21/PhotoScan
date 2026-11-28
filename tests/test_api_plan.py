@@ -256,6 +256,32 @@ def test_rinomina_nomi_non_validi():
             assert isinstance(r.json()["detail"], str) and r.json()["detail"], nome
 
 
+def test_rinomina_duplicati_senza_distinguere_maiuscole_e_nomi_lunghi():
+    with fresh_catalog() as (c, _):
+        for nome in ("_duplicati", "_DUPLICATI/Simili", "a/" + "x" * 121):
+            r = c.post("/api/plan/rename", json={"old": "2020/06 - Mare", "new": nome})
+            assert r.status_code == 400, nome
+
+
+def test_ricalcolo_doppio_clic_una_sola_volta():
+    """Due richieste ravvicinate: la seconda trova il job in corso (start_job_unique e' atomico)."""
+    import threading
+
+    gate = threading.Event()
+    with fresh_catalog() as (c, _), _patched(routes_plan, "_run_rebuild", lambda job: gate.wait(5) and {"ok": True}):
+        r1 = c.post("/api/plan/rebuild")
+        r2 = c.post("/api/plan/rebuild")
+        gate.set()
+        assert r1.status_code == 200 and r2.status_code == 409, (r1.status_code, r2.status_code)
+        _wait_job(c, r1.json()["job_id"])
+
+
+def test_ricalcolo_rifiutato_durante_applicazione():
+    with fresh_catalog() as (c, _), _patched(routes_plan.jobs, "running_job",
+                                             lambda name: object() if name == "apply" else None):
+        assert c.post("/api/plan/rebuild").status_code == 409
+
+
 def test_rinomina_gruppi_speciali_e_inesistenti():
     with fresh_catalog() as (c, _):
         assert c.post("/api/plan/rename", json={"old": "_Duplicati", "new": "X"}).status_code == 400
@@ -344,7 +370,8 @@ def test_reset_overrides_svuota_e_ricalcola():
     with fresh_catalog() as (c, cfg), _patched(routes_plan, "_run_rebuild", lambda job: {"ricalcolato": True}):
         c.post("/api/plan/move", json={"file_ids": [1], "folder": "2021/01 - Test"})
         c.post("/api/plan/rename", json={"old": "2020/07 - Varie", "new": "Altro"})
-        r = c.post("/api/plan/reset-overrides")
+        assert c.post("/api/plan/reset-overrides").status_code == 400  # senza conferma non cancella nulla
+        r = c.post("/api/plan/reset-overrides", json={"confirm": True})
         assert r.status_code == 200
         j = _wait_job(c, r.json()["job_id"])
         assert j["state"] == "done" and j["result"]["ricalcolato"] is True
@@ -432,7 +459,7 @@ def test_scambio_master_sopravvive_al_ricalcolo_e_alla_rinomina():
         assert c.post("/api/plan/rename", json={"old": _folder_of(c, 10), "new": "Scambio"}).status_code == 200
         _rebuild_real(c)
         assert _dup_master(c) == 10                      # la rinomina della cartella dell'originale lo segue
-        j = _wait_job(c, c.post("/api/plan/reset-overrides").json()["job_id"])
+        j = _wait_job(c, c.post("/api/plan/reset-overrides", json={"confirm": True}).json()["job_id"])
         assert j["state"] == "done", j.get("error")
         assert _dup_master(c) == 9                       # reset: scelte dell'utente cancellate
 

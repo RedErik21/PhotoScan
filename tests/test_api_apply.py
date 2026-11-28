@@ -492,6 +492,150 @@ def test_restart_resumes_without_duplicates(env: Env) -> None:
         env2.close()
 
 
+def _add_file(env: Env, fid: int, folder: str, name: str, content: bytes, sub: str = "x", hash_: str | None = "auto") -> Path:
+    from fotoscan.scanner_metadata import file_hash
+
+    p = env.src / sub / name
+    p.parent.mkdir(exist_ok=True)
+    p.write_bytes(content)
+    h = file_hash(str(p)) if hash_ == "auto" else hash_
+    conn = env.db()
+    conn.execute("INSERT INTO files(id,path,name,kind,size,hash,status,date_taken,date_source) "
+                 "VALUES(?,?,?,?,?,?,'embedded','2020-06-09T10:00:00','exif')",
+                 (fid, str(p), name, "image", len(content), h))
+    conn.execute("INSERT INTO plan(file_id,folder,context,score,is_dup,dup_of) VALUES(?,?,?,?,0,NULL)",
+                 (fid, folder, None, 0.9))
+    conn.commit()
+    conn.close()
+    return p
+
+
+def _apply(env: Env, **kw) -> dict:
+    from fotoscan import organizer
+
+    conn = env.db()
+    try:
+        return organizer.apply_plan(conn, env.cfg, apply=True, **kw)
+    finally:
+        conn.close()
+
+
+def test_safe_name_reserved_and_long(env: Env) -> None:
+    from fotoscan import organizer
+
+    assert organizer.safe_name("CON") == "CON_" and organizer.safe_name("nul.txt") == "nul_.txt"
+    assert organizer.safe_name("COM1.jpg") == "COM1_.jpg" and organizer.safe_name("console.jpg") == "console.jpg"
+    n = organizer.safe_name("a" * 300 + ".jpg")
+    assert len(n) <= organizer.MAX_COMPONENT and n.endswith(".jpg"), n
+    assert organizer.safe_folder("Aux/ok/" + "b" * 300).split("/")[0] == "Aux_"
+
+
+def test_alt_name_with_different_content_is_never_counted_as_present(env: Env) -> None:
+    """nome e nome_<id> gia' occupati da file DIVERSI: il file si scrive con un terzo nome, non e' 'gia' presente'."""
+    folder = "2020/06 - Alt"
+    a = _add_file(env, 20, folder, "dup.jpg", b"AAAA" * 20, sub="a")
+    (env.out / folder).mkdir(parents=True)
+    (env.out / folder / "dup.jpg").write_bytes(b"altro contenuto 1")
+    (env.out / folder / "dup_20.jpg").write_bytes(b"altro contenuto 2")
+    env.cfg.link_mode = "copy"
+    res = _apply(env)
+    assert res["errori"] == 1, res  # l'unico errore e' il file mancante della fixture
+    assert (env.out / folder / "dup_20_2.jpg").read_bytes() == a.read_bytes()
+    assert (env.out / folder / "dup.jpg").read_bytes() == b"altro contenuto 1"
+    assert (env.out / folder / "dup_20.jpg").read_bytes() == b"altro contenuto 2"
+    res2 = _apply(env)  # riapplicare non crea altre copie
+    assert res2["gia_presenti"] >= 1 and not (env.out / folder / "dup_20_3.jpg").exists(), res2
+
+
+def test_missing_hash_does_not_multiply_copies_on_rerun(env: Env) -> None:
+    folder = "2020/06 - NoHash"
+    _add_file(env, 30, folder, "nohash.jpg", b"contenuto" * 9, hash_=None)
+    env.cfg.link_mode = "copy"
+    _apply(env)
+    _apply(env)
+    names = sorted(p.name for p in (env.out / folder).iterdir())
+    assert names == ["nohash.jpg"], names
+
+
+def test_reserved_name_is_written_safely(env: Env) -> None:
+    folder = "2020/06 - Riservati"
+    _add_file(env, 40, folder, "NUL.jpg", b"riservato" * 5)
+    res = _apply(env)
+    assert res["errori"] == 1 and (env.out / folder / "NUL_.jpg").exists(), res  # 1 = file mancante della fixture
+
+
+def test_stale_tmp_is_cleaned_and_dest_never_overwritten(env: Env) -> None:
+    from fotoscan import organizer
+
+    folder = "2020/06 - Tmp"
+    p = _add_file(env, 50, folder, "t.jpg", b"tmp" * 30)
+    stale = env.out / folder / ("vecchio.jpg" + organizer.TMP_SUFFIX)
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"parziale")
+    env.cfg.link_mode = "copy"
+    _apply(env)
+    assert not stale.exists()
+    dest = env.out / folder / "esiste.jpg"
+    dest.write_bytes(b"non toccare")
+    try:
+        organizer._copy_atomic(str(p), dest)
+        raise AssertionError("avrebbe dovuto rifiutare di sovrascrivere")
+    except FileExistsError:
+        pass
+    assert dest.read_bytes() == b"non toccare" and not list(dest.parent.glob("*" + organizer.TMP_SUFFIX))
+
+
+def test_disk_full_stops_after_three_errors(env: Env) -> None:
+    import errno
+
+    from fotoscan import organizer
+
+    folder = "2020/06 - Pieno"
+    for i in range(60, 70):
+        _add_file(env, i, folder, f"f{i}.jpg", f"pieno {i}".encode() * 8)
+    env.cfg.link_mode = "copy"
+    calls = []
+
+    def boom(src, dest):
+        calls.append(src)
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    with patched(organizer, "_copy_atomic", boom):
+        res = _apply(env)
+    assert res["errori"] == 3 and res.get("spazio_esaurito") == 1 and len(calls) == 3, res
+
+
+def test_hardlink_unsupported_falls_back_to_copy_in_preview(env: Env) -> None:
+    from fotoscan import organizer
+
+    with patched(organizer, "can_hardlink", lambda *a, **k: False):
+        st, p = call(env, "GET", "/api/apply/preview")
+    assert st == 200 and p["hardlink_supported"] is False and p["link"] == 0 and p["copies"] == 4, p
+    assert any("non supporta i collegamenti" in w for w in p["warnings"]), p["warnings"]
+    assert p["extra_bytes"] > 0
+
+
+def test_run_refused_while_plan_rebuilds(env: Env) -> None:
+    with patched(jobs, "running_job", lambda name: object() if name == "piano" else None):
+        pass  # (start_job_unique legge _jobs: simulato sotto)
+    job = jobs.Job(id="piano-finto", name="piano")
+    with jobs._jlock:
+        jobs._jobs[job.id] = job
+    try:
+        st, r = call(env, "POST", "/api/apply/run", {"confirm": True})
+        assert st == 409, (st, r)
+        assert not routes_apply._run_lock.locked(), "il lock dell'apply non deve restare preso"
+    finally:
+        job.state = "done"
+        with jobs._jlock:
+            jobs._jobs.pop(job.id, None)
+
+
+def test_suggest_destination_on_posix_is_not_root(env: Env) -> None:
+    st, r = call(env, "GET", "/api/apply/suggest")
+    assert st == 200 and r["path"] and (os.name == "nt" or not r["path"].startswith("/PhotoScan")), r
+
+
 TESTS = [test_preview_hardlink_same_volume, test_preview_copy_mode_reports_bytes,
          test_preview_low_space_warns, test_preview_other_volume_uses_copy, test_fmt_bytes_matches_frontend_units,
          test_source_from_catalog_when_not_in_config,
@@ -503,7 +647,12 @@ TESTS = [test_preview_hardlink_same_volume, test_preview_copy_mode_reports_bytes
          test_log_is_readable_and_tail_works, test_log_missing_when_never_run,
          test_second_run_while_running_is_409, test_run_rejects_plan_changed_after_preview,
          test_cancel_is_prompt_and_rerun_resumes,
-         test_failed_copy_leaves_no_partial_file, test_restart_resumes_without_duplicates]
+         test_failed_copy_leaves_no_partial_file, test_restart_resumes_without_duplicates,
+         test_safe_name_reserved_and_long, test_alt_name_with_different_content_is_never_counted_as_present,
+         test_missing_hash_does_not_multiply_copies_on_rerun, test_reserved_name_is_written_safely,
+         test_stale_tmp_is_cleaned_and_dest_never_overwritten, test_disk_full_stops_after_three_errors,
+         test_hardlink_unsupported_falls_back_to_copy_in_preview, test_run_refused_while_plan_rebuilds,
+         test_suggest_destination_on_posix_is_not_root]
 
 
 if __name__ == "__main__":

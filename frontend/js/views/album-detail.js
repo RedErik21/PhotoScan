@@ -419,7 +419,9 @@ export async function mount(root, ctx = {}) {
     }
   }
 
+  let deleting = false;
   async function deleteAlbum() {
+    if (deleting) return;
     const name = state.album?.name ?? '';
     const ok = await confirmDialog({
       title: `Eliminare l'album "${name}"?`,
@@ -428,6 +430,7 @@ export async function mount(root, ctx = {}) {
       danger: true,
     });
     if (!ok || !alive) return;
+    deleting = true;
     try {
       await api.del(path);
       if (!alive) return;
@@ -435,6 +438,8 @@ export async function mount(root, ctx = {}) {
       ctx.navigate?.('/albums');
     } catch (e) {
       fail(e);
+    } finally {
+      deleting = false;
     }
   }
 

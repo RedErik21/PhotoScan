@@ -265,7 +265,7 @@ def test_merge_assign_and_exclude_helpers():
             faces.set_face_excluded(conn, face_2, True)
             conn.commit()
             r2 = conn.execute("SELECT person_id, excluded FROM faces WHERE id=?", (face_2,)).fetchone()
-            assert r2["person_id"] is None and r2["excluded"] == 1
+            assert r2["person_id"] == pid_a and r2["excluded"] == 1  # la persona resta: il ripristino la riporta
             assert conn.execute("SELECT n FROM persons WHERE id=?", (pid_a,)).fetchone()[0] == 4
 
             faces.set_face_excluded(conn, face_2, False)
@@ -473,6 +473,113 @@ def test_real_model_smoke_if_present():
     assert engine.detect_boxes(blank) == []
     assert engine.embed_crops([]).shape == (0, 512)
     assert engine.detect(blank) == []
+
+
+def test_detect_faces_engine_errors_do_not_mark_photos_done():
+    """Errori del motore o di lettura transitori NON segnano la foto come analizzata; file mancanti/corrotti si'."""
+    class _Broken:
+        def detect(self, _img):
+            raise RuntimeError("cuDNN non trovato")
+
+    with tempfile.TemporaryDirectory(prefix="fs_faces_err_") as td:
+        tmp = Path(td)
+        conn, cfg = _make_db(tmp)
+        try:
+            for fid in range(1, 6):
+                p = tmp / f"e_{fid}.png"
+                Image.new("RGB", (120, 120), (fid * 10, 50, 50)).save(p)
+                _add_file(conn, fid, str(p))
+            conn.commit()
+            try:
+                faces.detect_faces(conn, cfg=cfg, detector=_Broken())
+                raise AssertionError("atteso RuntimeError per motore rotto")
+            except RuntimeError:
+                pass
+            assert conn.execute("SELECT COUNT(*) FROM faces_done").fetchone()[0] == 0
+
+            # File mancante e file corrotto: errore permanente -> segnati come analizzati (senza volti)
+            conn.execute("DELETE FROM files")
+            _add_file(conn, 1, str(tmp / "non_esiste.jpg"))
+            bad = tmp / "corrotto.jpg"
+            bad.write_bytes(b"questo non e' un jpeg")
+            _add_file(conn, 2, str(bad))
+            conn.commit()
+
+            class _Ok:
+                def detect(self, _img):
+                    return []
+
+            faces.detect_faces(conn, cfg=cfg, detector=_Ok())
+            assert conn.execute("SELECT COUNT(*) FROM faces_done").fetchone()[0] == 2
+        finally:
+            conn.close()
+
+
+def test_reset_unlocked_keeps_faces_of_named_persons():
+    """cluster_faces(reset_unlocked=True) non svuota le persone con nome (volti non bloccati inclusi)."""
+    with tempfile.TemporaryDirectory(prefix="fs_faces_reset_") as td:
+        conn, cfg = _make_db(Path(td))
+        try:
+            base = _unit_vec(5)
+            for fid in range(1, 5):
+                _add_file(conn, fid)
+            cur = conn.execute("INSERT INTO persons(name, created, n) VALUES('Anna','x',0)")
+            pid = int(cur.lastrowid)
+            for fid in range(1, 5):
+                _add_face(conn, fid, _perturb(base, fid), person_id=pid)
+            conn.commit()
+            faces.cluster_faces(conn, cfg=cfg, reset_unlocked=True)
+            assert conn.execute("SELECT COUNT(*) FROM faces WHERE person_id=?", (pid,)).fetchone()[0] == 4
+            row = conn.execute("SELECT name, n FROM persons WHERE id=?", (pid,)).fetchone()
+            assert row["name"] == "Anna" and row["n"] == 4
+        finally:
+            conn.close()
+
+
+def test_undo_merge_restores_not_same_pairs_and_exclusion_keeps_person():
+    with tempfile.TemporaryDirectory(prefix="fs_faces_ns_") as td:
+        conn, cfg = _make_db(Path(td))
+        try:
+            pids = []
+            for k in range(3):
+                pids.append(int(conn.execute("INSERT INTO persons(name, created, n) VALUES(NULL,'x',0)").lastrowid))
+            for k, pid in enumerate(pids):
+                _add_file(conn, k + 1)
+                _add_face(conn, k + 1, _unit_vec(k + 1), person_id=pid)
+            a, b, c = pids
+            conn.execute("INSERT INTO persons_not_same(a,b,created) VALUES(?,?,'x')", (b, c))
+            conn.commit()
+            res = faces.merge_persons(conn, [a, b], a)
+            pairs = {(r[0], r[1]) for r in conn.execute("SELECT a,b FROM persons_not_same")}
+            assert pairs == {(a, c)}, pairs          # la coppia (b,c) passa sulla destinazione
+            faces.undo_merge(conn, res["log_id"])
+            pairs = {(r[0], r[1]) for r in conn.execute("SELECT a,b FROM persons_not_same")}
+            assert pairs == {(b, c)}, pairs
+        finally:
+            conn.close()
+
+
+def test_forget_files_recomputes_people_and_clears_state():
+    with tempfile.TemporaryDirectory(prefix="fs_faces_forget_") as td:
+        conn, cfg = _make_db(Path(td))
+        try:
+            pid = int(conn.execute("INSERT INTO persons(name, created, n) VALUES('Luca','x',0)").lastrowid)
+            fids = []
+            for fid in range(1, 4):
+                _add_file(conn, fid)
+                fids.append(_add_face(conn, fid, _unit_vec(fid), person_id=pid))
+                conn.execute("INSERT INTO faces_done(file_id) VALUES(?)", (fid,))
+            faces.recompute_person(conn, pid)
+            conn.execute("UPDATE persons SET cover_face_id=?, cover_locked=1 WHERE id=?", (fids[2], pid))
+            conn.commit()
+            with conn:
+                faces.forget_files(conn, [3])
+                conn.execute("DELETE FROM files WHERE id=3")
+            row = conn.execute("SELECT n, cover_face_id, cover_locked FROM persons WHERE id=?", (pid,)).fetchone()
+            assert row["n"] == 2 and row["cover_face_id"] in fids[:2] and row["cover_locked"] == 0
+            assert conn.execute("SELECT COUNT(*) FROM faces_done WHERE file_id=3").fetchone()[0] == 0
+        finally:
+            conn.close()
 
 
 if __name__ == "__main__":

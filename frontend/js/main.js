@@ -1,7 +1,7 @@
 // Bootstrap: componenti M3, tema, shell (con ripiego minimale se shell.js non c'e'), router.
 import '../vendor/material-web.js';
 import { initTheme, store } from './store.js';
-import { api } from './api.js';
+import { api, onEvent } from './api.js';
 import { startRouter } from './router.js';
 import { mountTitlebar } from './ui/titlebar.js';
 import { errorState } from './ui/empty-state.js';
@@ -33,7 +33,8 @@ async function dismissSplash() {
 }
 
 async function fetchStatusWithRetry() {
-  const delays = [0, 350, 700, 1200];
+  // Backoff crescente (~25 s in totale): l'eseguibile al primo avvio puo' impiegare piu' del previsto.
+  const delays = [0, 350, 700, 1200, 2000, 3000, 4000, 5000, 6000, 8000];
   for (let i = 0; i < delays.length; i++) {
     if (delays[i]) {
       setSplashStatus('Attesa del server locale…');
@@ -71,12 +72,28 @@ async function boot() {
       onRetry: () => location.reload(),
     }));
     await dismissSplash();
+    // Se il server torna disponibile (evento SSE), l'app riparte da sola.
+    let resumed = false;
+    onEvent('connection', async ({ online }) => {
+      if (!online || resumed) return;
+      resumed = true;
+      try {
+        const st = await api.get('/status');
+        store.set('status', st);
+        outlet.replaceChildren();
+        start(st, outlet);
+      } catch { resumed = false; }
+    });
     return;
   }
+  start(status, outlet);
+}
+
+function start(status, outlet) {
   if (status.first_run && location.hash !== '#/onboarding') location.hash = '#/onboarding';
   setSplashStatus('Pronto');
   startRouter(outlet);
-  await dismissSplash();
+  dismissSplash();
   if (!status.first_run) import('./ui/update-notice.js').then((m) => m.watchUpdates()).catch(() => {});
 }
-boot();
+boot().catch((e) => { console.error('Avvio non riuscito:', e); splash?.remove(); });

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import glob
 import json
+import logging
 import os
 import shutil
 import sys
@@ -11,6 +12,7 @@ from pathlib import Path
 
 # Eseguibile PyInstaller (PhotoScan.exe): il codice e le risorse stanno nella cartella temporanea _MEIPASS
 # (sola lettura), mentre catalogo, cache, config e log vanno in %LOCALAPPDATA%\PhotoScan.
+log = logging.getLogger("fotoscan")
 FROZEN = bool(getattr(sys, "frozen", False))
 CODE_ROOT = Path(getattr(sys, "_MEIPASS", "")) if FROZEN else Path(__file__).resolve().parent.parent
 if FROZEN:
@@ -240,7 +242,23 @@ class Config:
         return look("ffmpeg"), look("ffprobe")
 
     def save(self, path: Path = CONFIG_FILE) -> None:
-        path.write_text(json.dumps(asdict(self), indent=2, ensure_ascii=False), encoding="utf-8")
+        """Scrittura atomica: file temporaneo + fsync + replace. Un crash o un disco pieno a meta' non lasciano
+        mai un config.json troncato (che farebbe ripartire l'app con le impostazioni di fabbrica)."""
+        path = Path(path)
+        tmp = path.with_name(path.name + ".part")
+        data = json.dumps(asdict(self), indent=2, ensure_ascii=False)
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
 
     @property
     def thumbs_dir(self) -> Path:
@@ -297,16 +315,54 @@ def load_config(path: Path = CONFIG_FILE) -> Config:
     cfg = Config()
     if path.exists():
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8-sig"))  # utf-8-sig: file salvati con BOM (Blocco note)
+            if not isinstance(data, dict):
+                raise ValueError("la radice non e' un oggetto JSON")
             for k, v in data.items():
                 if hasattr(cfg, k):
-                    setattr(cfg, k, v)
-        except Exception:
-            pass
+                    if _type_ok(getattr(cfg, k), v):
+                        setattr(cfg, k, v)
+                    else:  # valore del tipo sbagliato (es. workers: "8" o null): si tiene quello predefinito
+                        log.warning("config: valore non valido per %r (%r), uso il predefinito", k, v)
+        except (OSError, ValueError) as e:
+            # Non si perde in silenzio: il file illeggibile viene messo da parte (config.json.bad) cosi' il
+            # prossimo salvataggio non lo cancella, e l'utente puo' recuperare a mano le sue impostazioni.
+            _quarantine_config(path, e)
+            cfg = Config()
+    cfg.workers = max(1, cfg.workers)  # 0 o negativo farebbe fallire ThreadPoolExecutor
+    cfg.batch_size = max(1, cfg.batch_size)
     # Override da ambiente: permettono catalogo/cache isolati per test paralleli.
     if os.environ.get("FOTOSCAN_DB"):
         cfg.db_path = os.environ["FOTOSCAN_DB"]
     if os.environ.get("FOTOSCAN_CACHE"):
         cfg.cache_dir = os.environ["FOTOSCAN_CACHE"]
-    Path(cfg.cache_dir).mkdir(parents=True, exist_ok=True)
+    try:
+        Path(cfg.cache_dir).mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        # cache su un disco scollegato / percorso non scrivibile: ripiego sulla cache predefinita, l'app parte
+        default = str(ROOT / "cache")
+        log.warning("cartella cache %s non utilizzabile (%s): uso %s", cfg.cache_dir, e, default)
+        cfg.cache_dir = default
+        Path(default).mkdir(parents=True, exist_ok=True)
     return cfg
+
+
+def _type_ok(default, value) -> bool:
+    if isinstance(default, bool):
+        return isinstance(value, bool)
+    if isinstance(default, int):
+        return isinstance(value, int) and not isinstance(value, bool)
+    if isinstance(default, float):
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if isinstance(default, (str, list, dict)):
+        return isinstance(value, type(default))
+    return True
+
+
+def _quarantine_config(path: Path, err: Exception) -> None:
+    bad = path.with_name(path.name + ".bad")
+    try:
+        os.replace(path, bad)
+        log.error("config %s illeggibile (%s): copia conservata in %s, uso le impostazioni di fabbrica", path, err, bad)
+    except OSError as e2:
+        log.error("config %s illeggibile (%s) e non spostabile (%s): uso le impostazioni di fabbrica", path, err, e2)

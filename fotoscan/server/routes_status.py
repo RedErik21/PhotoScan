@@ -62,14 +62,10 @@ def _nearest_existing(p: Path) -> Path | None:
 
 
 def _model_cached(model_name: str) -> bool:
-    """Il modello HuggingFace e' gia' nella cache locale (nessun download necessario)."""
-    home = os.environ.get("HF_HUB_CACHE") or os.path.join(
-        os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface"), "hub")
-    snaps = Path(home) / ("models--" + model_name.replace("/", "--")) / "snapshots"
-    try:
-        return snaps.is_dir() and any(snaps.iterdir())
-    except OSError:
-        return False
+    """Il modello HuggingFace e' gia' nella cache locale, completo di config e pesi (nessun download necessario)."""
+    from .. import netguard
+
+    return netguard.model_in_cache(model_name)
 
 
 def _catalog_bytes(db_path: str) -> int | None:
@@ -93,11 +89,58 @@ def _settings_view(cfg: Config, conn) -> dict[str, Any]:
 
 
 def _write_config(new: Config) -> None:
-    """Scrittura atomica di config.json (file temporaneo + replace), poi ricarica la config in memoria."""
+    """Scrittura atomica di config.json (file temporaneo + fsync + replace), poi ricarica la config in memoria."""
     tmp = CONFIG_FILE.with_name(CONFIG_FILE.name + ".tmp")
     new.save(tmp)
+    try:  # i dati su disco prima dello scambio: un blackout non lascia un config.json vuoto
+        fd = os.open(tmp, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
     os.replace(tmp, CONFIG_FILE)
     reload_cfg()
+
+
+# ---------------------------------------------------------------- sonde con tempo massimo
+# Su un NAS spento o un disco scollegato os.scandir / disk_usage possono restare bloccati decine di secondi:
+# se girassero direttamente nel threadpool delle richieste, poche chiamate di /status riempirebbero tutti i thread.
+_probe_lock = threading.Lock()
+_probe_cache: dict[str, tuple[float, Any]] = {}
+_probe_busy: dict[str, threading.Thread] = {}
+PROBE_TTL_S = 10.0
+PROBE_TIMEOUT_S = 2.0
+
+
+def _probe(key: str, fn: Callable[[], Any], default: Any, ttl: float = PROBE_TTL_S) -> Any:
+    """Risultato di fn() con cache (PROBE_TTL_S) e al massimo una esecuzione per chiave. Se non risponde entro
+    PROBE_TIMEOUT_S si usa l'ultimo valore noto (o `default`): il thread resta in fondo senza bloccare le richieste."""
+    import time as _time
+
+    with _probe_lock:
+        hit = _probe_cache.get(key)
+        if hit is not None and _time.monotonic() - hit[0] < ttl:
+            return hit[1]
+        th = _probe_busy.get(key)
+        if th is None:
+            def run() -> None:
+                try:
+                    val = fn()
+                except Exception:  # noqa: BLE001
+                    val = default
+                with _probe_lock:
+                    _probe_cache[key] = (_time.monotonic(), val)
+                    _probe_busy.pop(key, None)
+
+            th = threading.Thread(target=run, daemon=True, name="probe")
+            _probe_busy[key] = th
+            th.start()
+    th.join(PROBE_TIMEOUT_S)
+    with _probe_lock:
+        hit = _probe_cache.get(key)
+    return hit[1] if hit is not None else default
 
 
 # ---------------------------------------------------------------- validazione impostazioni
@@ -329,7 +372,7 @@ def _file_stamp(path: str) -> tuple:
 
 def _status_key(cfg: Config) -> tuple:
     """Cambia quando cambia la configurazione o quando qualcuno scrive nel catalogo (file principale o WAL)."""
-    return (id(cfg), _file_stamp(cfg.db_path), _file_stamp(cfg.db_path + "-wal"))
+    return (_file_stamp(str(CONFIG_FILE)), cfg.db_path, _file_stamp(cfg.db_path), _file_stamp(cfg.db_path + "-wal"))
 
 
 def _device_label(cfg: Config) -> str:
@@ -385,7 +428,7 @@ def _status_uncached(cfg: Config, conn) -> dict:
     from .. import faces as faces_mod
     faces_info = faces_mod.status_info(cfg)
     src_net = bool(source) and sourcefs.is_network(source)
-    src_reach = sourcefs.reachable(source) if source else None
+    src_reach = _probe("reach:" + source, lambda: sourcefs.reachable(source), False) if source else None
     return {
         "version": APP_VERSION,
         "first_run": not source and st["totale"] == 0,
@@ -447,6 +490,26 @@ def put_settings(body: dict = Body(...), conn=Depends(get_db)):
         out = updates.get("output_dir", cur.output_dir)
         if "output_dir" not in errors and src and out and (_inside(Path(out), Path(src)) or _inside(Path(src), Path(out))):
             errors["output_dir"] = "La cartella di destinazione non puo' essere dentro (o contenere) la cartella sorgente."
+        # La sorgente non puo' coincidere o sovrapporsi alla cartella di backup sul NAS (si copierebbe su se' stessa).
+        nas = cur.nas_dir
+        if "source_dir" in updates and "source_dir" not in errors and updates["source_dir"] and nas \
+                and (_inside(Path(nas), Path(updates["source_dir"])) or _inside(Path(updates["source_dir"]), Path(nas))):
+            errors["source_dir"] = "La cartella sorgente non puo' coincidere o sovrapporsi alla cartella di backup sul NAS."
+        # Modello e dispositivo devono esistere davvero su questo computer, altrimenti l'analisi fallisce piu' tardi.
+        mn = updates.get("model_name")
+        if mn is not None and mn != cur.model_name and mn not in {m["id"] for m in all_models(cur)}:
+            errors["model_name"] = "Modello sconosciuto: scegline uno dell'elenco o aggiungilo da Impostazioni > Per esperti."
+        dev = updates.get("device")
+        if dev in ("cuda", "mps") and dev != cur.device:
+            try:
+                from .. import hardware
+
+                disponibile = hardware.detect()["device"] == dev
+            except Exception:  # noqa: BLE001 - rilevamento non riuscito: non si blocca l'utente
+                disponibile = True
+            if not disponibile:
+                errors["device"] = ("Questo computer non ha una scheda video "
+                                    f"{'NVIDIA con PyTorch CUDA' if dev == 'cuda' else 'Apple compatibile'}: usa Automatico o Processore.")
         if errors:
             # Stesso formato di HTTPException (detail = testo per l'avviso), con i messaggi anche per campo.
             return JSONResponse(status_code=400, content={"detail": " ".join(errors.values()), "fields": errors})
@@ -522,6 +585,19 @@ def pick_folder(body: dict | None = Body(default=None)):
         _dialog_lock.release()
 
 
+def _spawn_open(args: list[str]) -> None:
+    """Avvia xdg-open/open senza aspettarlo. Nell'AppImage l'ambiente (LD_LIBRARY_PATH, ...) e' quello del pacchetto
+    e romperebbe l'app di sistema: lo si ripulisce; il processo e' staccato e raccolto da un thread (niente zombie)."""
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("LD_LIBRARY_PATH", "LD_PRELOAD", "PYTHONHOME", "PYTHONPATH", "APPDIR", "APPIMAGE")}
+    try:
+        proc = subprocess.Popen(args, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        raise HTTPException(500, "Impossibile aprire la cartella o il file con le app di sistema.") from None
+    threading.Thread(target=proc.wait, daemon=True, name="open-wait").start()
+
+
 @router.post("/system/open-folder")
 def open_folder(body: dict = Body(...), conn=Depends(get_db)):
     """Apre in Esplora risorse solo cartelle esistenti dentro output_dir o source_dir."""
@@ -538,7 +614,7 @@ def open_folder(body: dict = Body(...), conn=Depends(get_db)):
     if sys.platform == "win32":
         os.startfile(str(target))  # noqa: S606 - percorso verificato sopra
     else:
-        subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(target)])
+        _spawn_open(["open" if sys.platform == "darwin" else "xdg-open", str(target)])
     return {"ok": True}
 
 
@@ -566,9 +642,9 @@ def open_file(body: dict = Body(...), conn=Depends(get_db)):
             os.startfile(str(target))  # noqa: S606 - percorso verificato sopra
     else:
         if action == "reveal":
-            subprocess.Popen(["xdg-open", str(target.parent)])
+            _spawn_open(["xdg-open", str(target.parent)])
         else:
-            subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(target)])
+            _spawn_open(["open" if sys.platform == "darwin" else "xdg-open", str(target)])
     return {"ok": True}
 
 
@@ -579,25 +655,32 @@ def disk(path: str | None = Query(default=None), conn=Depends(get_db)):
     target = (path or "").strip() or cfg.output_dir or source
     if not target:
         raise HTTPException(400, "Indica una cartella.")
+    if "\0" in target:
+        raise HTTPException(400, "Percorso non valido.")
     p = Path(os.path.abspath(target))
-    probe = _nearest_existing(p)  # per lo spazio libero: la cartella stessa o il primo antenato esistente
-    src_probe = _nearest_existing(Path(os.path.abspath(source))) if source else None
     target_network = sourcefs.is_network(target)
     source_network = bool(source) and sourcefs.is_network(source)
-    if probe is None:
-        return {"exists": False, "is_file": False, "reachable": False, "free_bytes": None, "total_bytes": None,
-                "drive": None, "same_volume_as_source": False, "network": target_network,
-                "source_network": source_network}
-    try:
-        usage = shutil.disk_usage(probe)
-        is_dir = p.is_dir()
-        is_file = p.is_file()
-        is_reach = sourcefs.reachable(str(p)) if is_dir else False
-        same_vol = src_probe is not None and os.stat(probe).st_dev == os.stat(src_probe).st_dev
-    except OSError:
-        return {"exists": False, "is_file": False, "reachable": False, "free_bytes": None, "total_bytes": None,
-                "drive": None, "same_volume_as_source": False, "network": target_network,
-                "source_network": source_network}
+    nulla = {"exists": False, "is_file": False, "reachable": False, "free_bytes": None, "total_bytes": None,
+             "drive": None, "same_volume_as_source": False, "network": target_network,
+             "source_network": source_network}
+
+    def misura():
+        probe = _nearest_existing(p)  # per lo spazio libero: la cartella stessa o il primo antenato esistente
+        if probe is None:
+            return None
+        src_probe = _nearest_existing(Path(os.path.abspath(source))) if source else None
+        try:
+            usage = shutil.disk_usage(probe)
+            is_dir = p.is_dir()
+            return (probe, usage, is_dir, p.is_file(), sourcefs.reachable(str(p)) if is_dir else False,
+                    src_probe is not None and os.stat(probe).st_dev == os.stat(src_probe).st_dev)
+        except OSError:
+            return None
+
+    res = _probe("disk:" + str(p) + "|" + source, misura, None, ttl=1.0)
+    if res is None:
+        return nulla
+    probe, usage, is_dir, is_file, is_reach, same_vol = res
     return {
         "exists": is_dir,
         "is_file": is_file,  # un file al posto della cartella: messaggio diverso dal "non esiste"

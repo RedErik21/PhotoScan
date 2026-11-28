@@ -36,7 +36,11 @@ def _devices() -> list[dict]:
         name = entry.name
         if name.startswith("mtp:") or name.startswith("gphoto2:"):
             storages = {}
-            for child in sorted(entry.iterdir()):
+            try:
+                children = sorted(entry.iterdir())
+            except OSError:
+                children = []  # telefono montato ma bloccato: nessuna memoria visibile finche' non lo sblocchi
+            for child in children:
                 if child.is_dir():
                     storages[child.name] = child
             out.append({"name": _pretty(name), "storages": list(storages), "apple": False,
@@ -141,7 +145,23 @@ def _folder_list(device: str, storage: str, folders: list[list[str]]) -> list[di
 
 
 def run(args: dict) -> Iterator[dict]:
-    """Stessi messaggi di phone_mtp.ps1 per le azioni list / scan / copy."""
+    """Stessi messaggi di phone_mtp.ps1 per le azioni list / scan / copy. Gli errori di lettura (telefono
+    scollegato o bloccato, gvfs che non risponde) diventano PhoneError, con un messaggio comprensibile."""
+    try:
+        yield from _run_action(args)
+    except OSError as e:
+        raise PhoneError(f"Il telefono non risponde: {e}. Sbloccalo, controlla il cavo e riprova.") from e
+
+
+def _device_present(device: str, storage: str) -> bool:
+    try:
+        _find(device, storage)
+        return True
+    except (PhoneError, OSError):
+        return False
+
+
+def _run_action(args: dict) -> Iterator[dict]:
     action = args.get("action")
     device, storage = args.get("device", ""), args.get("storage", "")
     if action == "list" and not device:
@@ -169,16 +189,27 @@ def run(args: dict) -> Iterator[dict]:
         if any(i["size"] < 0 for i in kept):
             total_bytes = -1
         yield {"type": "total", "n": len(kept), "bytes": total_bytes, "skipped": skipped}
+        fails = 0
         for idx, it in enumerate(kept, start=1):
             rel = "/".join(it["rel"])
             dst = staging.joinpath(*it["rel"])
+            actual = 0
             try:
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(it["path"], dst)   # sola lettura sul telefono: si copia e basta
+                actual = dst.stat().st_size
+                if it["size"] >= 0 and actual != it["size"]:
+                    raise OSError(f"dimensione diversa ({actual} di {it['size']} byte)")
                 ok, err = True, None
             except OSError as e:
                 ok, err = False, str(e)
-            yield {"type": "file", "i": idx, "rel": rel, "ok": ok, "bytes": max(it["size"], 0), "error": err}
+                dst.unlink(missing_ok=True)   # un file a meta' non deve restare nello staging
+                actual = 0
+            yield {"type": "file", "i": idx, "rel": rel, "ok": ok, "bytes": actual, "size": it["size"], "error": err}
+            fails = 0 if ok else fails + 1
+            if fails >= 3 and not _device_present(device, storage):
+                raise PhoneError("Telefono scollegato o bloccato: importazione interrotta. "
+                                 "Sbloccalo, ricollega il cavo e riprova.")
         yield {"type": "done"}
         return
     raise PhoneError(f"Azione non supportata: {action}")

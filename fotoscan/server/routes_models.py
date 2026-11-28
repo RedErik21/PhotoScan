@@ -57,7 +57,7 @@ def _entry(m: dict, cfg, cached: bool, embedding_model: str | None) -> dict:
 
 @router.get("/models")
 def list_models(conn=Depends(deps.get_db)):
-    from .routes_status import _model_cached
+    from .. import netguard
 
     cfg = deps.get_cfg()
     emb_model = dbm.get_meta(conn, "embedding_model")
@@ -67,7 +67,7 @@ def list_models(conn=Depends(deps.get_db)):
         "score_temperature": cfg.score_temperature, "score_threshold": cfg.score_threshold,
         "base_thresholds": dict(BASE_SEARCH_THR), "limits": LIMITS,
         "supported_types": list(SUPPORTED_MODEL_TYPES),
-        "models": [_entry(m, cfg, _model_cached(m["id"]), emb_model) for m in all_models(cfg)],
+        "models": [_entry(m, cfg, netguard.model_in_cache(m["id"]), emb_model) for m in all_models(cfg)],
         "reference_model": REFERENCE_MODEL,
         "calibration_job_id": running.id if running else None,
         "calibration_model": _running_model.get(running.id) if running else None,
@@ -192,10 +192,16 @@ def calibrate(body: dict = Body(...)):
         raise HTTPException(404, "Modello sconosciuto.")
     if _indexing_running():
         raise HTTPException(409, "Ferma l'analisi prima di calibrare: userebbero la scheda video insieme.")
-    if jobs.running_job(JOB_NAME) is not None or jobs.running_job("hardware_bench") is not None:
-        raise HTTPException(409, "C'è già una misura o una calibrazione in corso.")
     n = body.get("n")
-    n = min(max(int(n), 300), 5000) if n else None     # None: lo decide calibrate (3000 con GPU, 1000 su CPU)
+    if n is not None and n != "":
+        if isinstance(n, bool) or not isinstance(n, (int, float, str)):
+            raise HTTPException(400, "Il numero di foto del campione non è valido.")
+        try:
+            n = min(max(int(n), 300), 5000)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Il numero di foto del campione deve essere un numero intero.")
+    else:
+        n = None     # None: lo decide calibrate (3000 con GPU, 1000 su CPU)
 
     def _run(job):
         env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
@@ -232,6 +238,10 @@ def calibrate(body: dict = Body(...)):
         _last_result[mid] = result
         return result
 
-    job = jobs.start_job(JOB_NAME, _run)
+    job, created = jobs.start_job_unique(JOB_NAME, _run, conflicts=("hardware_bench",))
+    if not created:
+        raise HTTPException(409, "C'è già una misura o una calibrazione in corso.")
     _running_model[job.id] = mid
+    for old in [k for k in _running_model if k != job.id and jobs.get_job(k) is None]:
+        _running_model.pop(old, None)   # job conclusi e ormai dimenticati dal registro dei job
     return {"job_id": job.id}

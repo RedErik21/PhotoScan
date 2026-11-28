@@ -242,9 +242,10 @@ function nextStep() {
 
 function resultBlock(r, state) {
   return h('div', { class: 'phone-result' },
+    r.aborted ? h('div', { class: 'callout callout--warning', role: 'alert' }, icon('usb_off'), h('p', {}, `Importazione interrotta: ${r.aborted}`)) : null,
     h('p', {}, `${plural(r.new_files, 'file nuovo copiato', 'file nuovi copiati')} in `, h('code', {}, r.dest)),
     r.skipped_known ? h('p', { class: 'muted md-typescale-body-medium' }, `${plural(r.skipped_known, 'già presente non copiato (nome e dimensione uguali)', 'già presenti non copiati (nome e dimensione uguali)')}.`) : null,
-    r.skipped_existing ? h('p', { class: 'muted md-typescale-body-medium' }, `${plural(r.skipped_existing, 'già presente (saltato)', 'già presenti (saltati)')}.`) : null,
+    r.skipped_existing ? h('p', { class: 'muted md-typescale-body-medium' }, `${plural(r.skipped_existing, 'già presente con lo stesso contenuto (saltato)', 'già presenti con lo stesso contenuto (saltati)')}.`) : null,
     r.errors?.length ? h('details', { class: 'phone-errors' },
       h('summary', {}, `${plural(r.errors.length, 'file non copiato', 'file non copiati')}`),
       h('ul', {}, ...r.errors.slice(0, 200).map((e) => h('li', {}, e)))) : null,
@@ -516,18 +517,24 @@ async function startImport() {
   }
 
   if (!scan.total) { showSnackbar('Nelle cartelle scelte non ci sono foto o video.', { error: true }); return; }
-  if (!scan.new) { showSnackbar('Nessun file nuovo da copiare: sono già tutti presenti.'); return; }
-
   // 2) scelta: se ci sono gia' presenti, l'utente decide se includerli
   let skip = [];
-  if (scan.known > 0) {
+  if (!scan.new) {
+    // tutti "gia' presenti" per nome e dimensione: potrebbero essere foto diverse con lo stesso nome
+    const ok = await confirmDialog({
+      title: 'Tutti i file sembrano già presenti',
+      message: `${formatNumber(scan.known)} file hanno lo stesso nome e la stessa dimensione di foto che hai già, ma il controllo non confronta il contenuto. Copio comunque dal telefono? Quelli davvero identici verranno saltati.`,
+      confirmLabel: 'Copia e confronta',
+    });
+    if (!ok) return;
+  } else if (scan.known > 0) {
     const choice = await choiceDialog({
       title: 'Foto già presenti',
-      message: `Su ${formatNumber(scan.total)} file, ${formatNumber(scan.known)} risultano già presenti (stesso nome e stessa dimensione nell'archivio o nella destinazione). Il controllo non confronta il contenuto.`,
+      message: `Su ${formatNumber(scan.total)} file, ${formatNumber(scan.known)} risultano già presenti (stesso nome e stessa dimensione nell'archivio o nella destinazione). Il controllo non confronta il contenuto: due foto diverse possono avere lo stesso nome e la stessa dimensione.`,
       confirmLabel: 'Importa',
       options: [
         { value: 'new', label: `Solo le nuove (${formatNumber(scan.new)})`, description: 'Le già presenti non vengono copiate dal telefono.' },
-        { value: 'all', label: `Tutte (${formatNumber(scan.total)})`, description: `Copia anche le ${formatNumber(scan.known)} già presenti: saranno copie in più dei file che hai già.` },
+        { value: 'all', label: `Tutte (${formatNumber(scan.total)})`, description: `Trasferisce anche le ${formatNumber(scan.known)} già presenti e ne confronta il contenuto: quelle davvero identiche vengono saltate, le diverse restano come copie con un numero nel nome. Scegli questa se non sei sicuro.` },
       ],
     });
     if (!choice) return;

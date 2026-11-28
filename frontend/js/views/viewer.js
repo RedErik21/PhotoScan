@@ -5,7 +5,7 @@ import { api, fileUrl, ApiError } from '../api.js';
 import { h, icon } from '../ui/el.js';
 import { showSnackbar } from '../ui/snackbar.js';
 import { albumPickerDialog, confirmDialog } from '../ui/dialog.js';
-import { formatDateTime, formatBytes, formatDuration, formatNumber } from '../ui/format.js';
+import { formatDateTime, formatBytes, formatDuration, formatNumber, missingNote } from '../ui/format.js';
 
 const PRELOAD_AHEAD = 5;          // chiede loadMore() quando mancano meno di N foto
 const MAX_TAIL_PAGES = 200;       // tetto di pagine caricate da "Fine" (200 x 120 foto)
@@ -602,12 +602,12 @@ export function openViewer({ items = [], index = 0, loadMore = null, onClose = n
     try {
       const res = await api.post('/cleanup/trash', { file_ids: [f.id], confirm: true });
       if (closed) return;
-      if (res.errors?.length && !res.trashed) {
-        showSnackbar(res.errors[0].error || 'Impossibile spostare nel Cestino.', { error: true });
+      if (!res.trashed && !res.missing) {
+        showSnackbar(res.errors?.[0]?.error || 'Impossibile spostare nel Cestino.', { error: true });
         if (isVid) renderStage(0);
         return;
       }
-      showSnackbar('Spostato nel Cestino.');
+      showSnackbar(res.trashed ? 'Spostato nel Cestino.' : missingNote(res.missing));
       const removedIndex = list.indexOf(f);
       if (removedIndex >= 0) list.splice(removedIndex, 1);
       known.delete(f.id);
