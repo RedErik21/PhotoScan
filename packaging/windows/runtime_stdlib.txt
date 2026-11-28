@@ -2,11 +2,13 @@ __future__
 _codecs
 _collections
 _compat_pickle
+_ctypes
 _imp
 _interpqueues
 _interpreters
 _io
 _operator
+_osx_support
 _socket
 _ssl
 _string
@@ -71,6 +73,7 @@ errno
 faulthandler
 fcntl
 filecmp
+fileinput
 fnmatch
 fractions
 ftplib
@@ -182,12 +185,14 @@ tokenize
 tomllib
 trace
 traceback
+tracemalloc
 tty
 types
 typing
 typing.io
 unicodedata
 unittest
+unittest.case
 unittest.mock
 urllib
 urllib.error

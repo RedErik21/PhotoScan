@@ -67,7 +67,10 @@ def _torchvision_ext_modules():
     if spec_tv is None or not spec_tv.submodule_search_locations:
         return []
     base = list(spec_tv.submodule_search_locations)[0]
-    return [(p, "torchvision") for p in glob.glob(os.path.join(base, "*.pyd"))]
+    # Windows: *.pyd; Linux: *.so (_C.so, image.so). Senza, AutoProcessor fallisce con
+    # "operator torchvision::nms does not exist".
+    found = glob.glob(os.path.join(base, "*.pyd")) + glob.glob(os.path.join(base, "*.so"))
+    return [(p, "torchvision") for p in found]
 
 
 hidden = collect_submodules("fotoscan", filter=lambda name: name != "fotoscan.app_streamlit")

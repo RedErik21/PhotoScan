@@ -138,8 +138,8 @@ jobs:
         shell: pwsh
         run: |
           .\.venv-cpu\Scripts\python.exe packaging\windows\release_tools.py runtime-build --site .venv-cpu\Lib\site-packages --out build\rt-cpu --flavor cpu
-          # moduli della libreria standard che il runtime importa: l'elenco committato deve coprirli tutti
-          .\.venv-cpu\Scripts\python.exe packaging\windows\release_tools.py stdlib-scan --site build\rt-cpu\runtime\site --check
+          # moduli della libreria standard che il runtime importa: si aggiungono all elenco prima di costruire l app leggera
+          .\.venv-cpu\Scripts\python.exe packaging\windows\release_tools.py stdlib-scan --site build\rt-cpu\runtime\site
 
       - name: App leggera (senza PyTorch)
         shell: pwsh
