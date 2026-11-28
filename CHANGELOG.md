@@ -4,8 +4,9 @@ Ogni versione ha una sezione `## <versione>`. Il workflow `.github/workflows/rel
 della versione taggata come testo della Release, e PhotoScan la mostra in Impostazioni > Aggiornamenti
 prima dell'installazione. Per una versione senza sezione la Release usa le note generate da GitHub.
 
-## 0.1.9
+## 0.1.10
 
+- Indicizzazione nell'eseguibile Windows corretta: l'errore "operator torchvision::nms does not exist" su AutoProcessor è risolto.
 - Build Linux (AppImage) funzionante.
 - Risorsa di versione di `PhotoScan.exe` solo su Windows.
 
