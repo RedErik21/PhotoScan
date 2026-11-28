@@ -179,7 +179,11 @@ jobs:
         run: |
           PRE=""
           case "$GITHUB_REF_NAME" in *-*) PRE="--prerelease" ;; esac
+          # Note: sezione della versione in CHANGELOG.md; se manca, quelle generate da GitHub.
+          VER="${{ needs.verify.outputs.version }}"
+          awk -v v="$VER" 'BEGIN{p=0} /^## /{ if(p) exit; if ($0 ~ ("^## " v "( |$)")) p=1; next } p' CHANGELOG.md > release-notes.md
+          if [ -s release-notes.md ]; then NOTES="--notes-file release-notes.md"; else NOTES="--generate-notes"; fi
           ls -lh release-assets
           gh release create "$GITHUB_REF_NAME" release-assets/* \
-            --title "PhotoScan ${{ needs.verify.outputs.version }}" \
-            --generate-notes $PRE
+            --title "PhotoScan $VER" \
+            $NOTES $PRE
