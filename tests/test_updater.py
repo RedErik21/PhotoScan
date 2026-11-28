@@ -425,13 +425,46 @@ def test_exe_rollback_when_package_broken():
     assert updater.start_exe_update(cache, app, no_launch=True, process_name="NessunProcessoPhotoScanXYZ")
     log = cache / "updates" / "apply-exe.log"
     end = _t.time() + 60
-    while not (log.exists() and "ripristino" in log.read_text(encoding="utf-8-sig")) and _t.time() < end:
+    while not (log.exists() and "danneggiato" in log.read_text(encoding="utf-8-sig")) and _t.time() < end:
         _t.sleep(0.2)
-    assert "ripristino" in log.read_text(encoding="utf-8-sig"), "lo script doveva segnalare il ripristino"
+    assert "danneggiato" in log.read_text(encoding="utf-8-sig"), "lo script doveva segnalare il pacchetto danneggiato"
     assert (app / "PhotoScan.exe").read_bytes() == b"exe vecchio", "la versione vecchia torna al suo posto"
     assert not (cache / "updates" / "installed.json").exists(), "nessuna installazione registrata"
     assert updater.read_pending(cache) is None, "pacchetto rotto scartato"
+    failure = updater.read_last_failure(cache)
+    assert failure and failure["to"] == "0.3.0" and "danneggiato" in failure["message"], failure
     print("ok exe_rollback")
+
+
+def test_exe_install_with_app_folder_as_cwd():
+    """Regressione: il processo che lancia lo script aveva la cartella del programma come directory corrente;
+    lo spostamento falliva con «elemento in uso». Lo script ora parte fuori da quella cartella."""
+    if sys.platform != "win32":
+        print("skip exe_install_cwd (solo Windows)")
+        return
+    import time as _t
+    cache = _TMP / "cache_exe_cwd"
+    app = _TMP / "app_exe_cwd" / "PhotoScan"
+    (app / "_internal").mkdir(parents=True)
+    (app / "PhotoScan.exe").write_bytes(b"exe vecchio")
+    staged = cache / "updates" / "staging" / "exe-cwd"
+    (staged / "_internal").mkdir(parents=True)
+    (staged / "PhotoScan.exe").write_bytes(b"exe nuovo")
+    updater._write_json(cache / "updates" / "pending.json",
+                        {"version": "0.4.0", "dir": str(staged), "kind": "exe", "approved": True})
+    old_cwd = os.getcwd()
+    os.chdir(app)
+    try:
+        assert updater.start_exe_update(cache, app, no_launch=True, process_name="NessunProcessoPhotoScanXYZ")
+    finally:
+        os.chdir(old_cwd)
+    end = _t.time() + 60
+    while not (cache / "updates" / "installed.json").exists() and _t.time() < end:
+        _t.sleep(0.2)
+    log = (cache / "updates" / "apply-exe.log").read_text(encoding="utf-8-sig")
+    assert (cache / "updates" / "installed.json").exists(), log
+    assert (app / "PhotoScan.exe").read_bytes() == b"exe nuovo", log
+    print("ok exe_install_cwd")
 
 
 if __name__ == "__main__":

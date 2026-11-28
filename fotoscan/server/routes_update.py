@@ -57,6 +57,7 @@ def status(cfg: Config | None = None) -> dict:
         "exe_ready": _exe_ready(latest),
         "download_job": job.public() if job else None,
         "last_install": updater.read_last_install(cfg.cache_dir),
+        "last_failure": updater.read_last_failure(cfg.cache_dir),
     }
 
 

@@ -199,6 +199,12 @@ export async function mountSection(container) {
       out.push(callout('info', 'download', 'Pacchetto Windows non ancora pubblicato',
         h('p', {}, 'Questa versione è disponibile ma la Release non include ancora PhotoScan.exe: scaricala dalla pagina Release.')));
     }
+    const f = d.last_failure;
+    if (f && f.from === d.current) {
+      out.push(callout('error', 'error', `Installazione di PhotoScan ${f.to} non riuscita`,
+        h('p', {}, f.message || 'Motivo non registrato.'),
+        h('p', {}, `Tentativo del ${formatDateTime(f.at)}. Il programma è rimasto alla versione ${f.from}.`)));
+    }
     if (d.last_install && d.last_install.to === d.current) {
       out.push(callout('ok', 'task_alt', `Aggiornato alla versione ${d.last_install.to}`,
         h('p', {}, `Installato il ${formatDateTime(d.last_install.at)} (prima: ${d.last_install.from}).`)));

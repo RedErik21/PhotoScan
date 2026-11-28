@@ -419,26 +419,65 @@ EXE_HELPER = r"""param(
   [switch]$NoLaunch
 )
 $ErrorActionPreference = 'Stop'
+# Non tenere aperta la cartella del programma: un processo con la cartella come directory corrente blocca lo spostamento.
+Set-Location -LiteralPath $env:TEMP
+$utf8 = New-Object Text.UTF8Encoding $false
+$failureFile = Join-Path (Split-Path -Parent $InstalledFile) 'last_failure.json'
 function Log($m) { Add-Content -LiteralPath $LogFile -Value ("{0} {1}" -f (Get-Date -Format s), $m) -Encoding utf8 }
+# Scrive il motivo dell'errore: Python lo mostra in Impostazioni > Aggiornamenti.
+function Write-Failure([string]$msg, [bool]$keepPackage) {
+  $f = [ordered]@{ from = $FromVersion; to = $Version; at = (Get-Date -Format s); message = $msg; keepPackage = $keepPackage }
+  [IO.File]::WriteAllText($failureFile, ($f | ConvertTo-Json), $utf8)
+  Log "errore: $msg"
+  if ($keepPackage) {
+    # il pacchetto scaricato resta pronto: si riprova con «Installa», senza scaricarlo di nuovo
+    $p = Get-Content -LiteralPath $PendingFile -Raw -Encoding utf8 | ConvertFrom-Json
+    $p.approved = $false
+    [IO.File]::WriteAllText($PendingFile, ($p | ConvertTo-Json), $utf8)
+  } else {
+    Remove-Item -LiteralPath $PendingFile -Force -ErrorAction SilentlyContinue
+  }
+}
+# Antivirus e indicizzazione possono tenere aperti i file per qualche secondo: si riprova.
+function Move-Retry([string]$src, [string]$dst) {
+  for ($i = 1; ; $i++) {
+    try { Move-Item -LiteralPath $src -Destination $dst -ErrorAction Stop; return }
+    catch { if ($i -ge 40) { throw }; Start-Sleep -Milliseconds 500 }
+  }
+}
 Log "installazione $FromVersion -> $Version"
+if (Test-Path -LiteralPath $failureFile) { Remove-Item -LiteralPath $failureFile -Force }
 $deadline = (Get-Date).AddSeconds(120)
 while (Get-Process -Name $ProcessName -ErrorAction SilentlyContinue) {
-  if ((Get-Date) -gt $deadline) { Log 'PhotoScan ancora aperto: installazione rinviata'; exit 2 }
+  if ((Get-Date) -gt $deadline) {
+    Write-Failure "PhotoScan non si è chiuso entro 2 minuti. Chiudilo (anche la finestra di analisi) e riprova." $true
+    exit 2
+  }
   Start-Sleep -Milliseconds 500
 }
 $movedOld = $false
 try {
-  Move-Item -LiteralPath $AppDir -Destination $Backup
+  Move-Retry $AppDir $Backup
   $movedOld = $true
-  Move-Item -LiteralPath $Staged -Destination $AppDir
-  if (-not (Test-Path -LiteralPath (Join-Path $AppDir $ExeName))) { throw "$ExeName mancante nel pacchetto" }
+  Move-Retry $Staged $AppDir
+  if (-not (Test-Path -LiteralPath (Join-Path $AppDir $ExeName))) { throw "$ExeName mancante nel pacchetto scaricato" }
 } catch {
-  Log "errore: $($_.Exception.Message): ripristino della versione $FromVersion"
+  $why = $_.Exception.Message
   if ($movedOld) {
-    if (Test-Path -LiteralPath $AppDir) { Remove-Item -LiteralPath $AppDir -Recurse -Force }
-    Move-Item -LiteralPath $Backup -Destination $AppDir
+    try {
+      if (Test-Path -LiteralPath $AppDir) { Remove-Item -LiteralPath $AppDir -Recurse -Force }
+      Move-Retry $Backup $AppDir
+    } catch {
+      Write-Failure "ripristino della versione $FromVersion non riuscito: $($_.Exception.Message). Copia di riserva in: $Backup" $false
+      exit 1
+    }
   }
-  Remove-Item -LiteralPath $PendingFile -Force -ErrorAction SilentlyContinue  # pacchetto scartato: niente nuovo tentativo in loop
+  $broken = $why -like '*mancante nel pacchetto*'
+  if ($broken) {
+    Write-Failure "il pacchetto scaricato è danneggiato ($why). Nessuna modifica: resta la versione $FromVersion. Scarica di nuovo l'aggiornamento." $false
+  } else {
+    Write-Failure "impossibile sostituire la cartella di PhotoScan: un file è ancora in uso ($why). Nessuna modifica: resta la versione $FromVersion. Il pacchetto è ancora pronto: premi «Installa» per riprovare." $true
+  }
   if (-not $NoLaunch) { Start-Process -FilePath (Join-Path $AppDir $ExeName) -WorkingDirectory $AppDir }
   exit 1
 }
@@ -446,7 +485,7 @@ Remove-Item -LiteralPath $PendingFile -Force -ErrorAction SilentlyContinue
 $info = [ordered]@{ from = $FromVersion; to = $Version; at = (Get-Date -Format s); backup = $Backup;
   requirements_changed = $false; notes = '' }
 # senza BOM: Python legge il file con json
-[IO.File]::WriteAllText($InstalledFile, ($info | ConvertTo-Json), (New-Object Text.UTF8Encoding $false))
+[IO.File]::WriteAllText($InstalledFile, ($info | ConvertTo-Json), $utf8)
 # tiene solo la copia di riserva piu' recente
 $keep = (Get-Item -LiteralPath $Backup).FullName  # percorso lungo: Python puo' passare quello corto (ANDREA~1)
 Get-ChildItem -LiteralPath (Split-Path -Parent $keep) -Directory | Where-Object { $_.FullName -ne $keep } |
@@ -504,9 +543,15 @@ def start_exe_update(cache_dir, app_dir: Path, *, no_launch: bool = False, proce
         cmd.append("-NoLaunch")
     # niente DETACHED_PROCESS: senza console PowerShell non parte. CREATE_NO_WINDOW basta.
     flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    # cwd fuori dalla cartella del programma: lo script non deve tenerla aperta (vedi EXE_HELPER)
+    subprocess.Popen(cmd, cwd=str(d), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      creationflags=flags, close_fds=True)
     return True
+
+
+def read_last_failure(cache_dir) -> dict | None:
+    """Ultimo tentativo di installazione dell'eseguibile non riuscito: {from, to, at, message, keepPackage}."""
+    return _read_json(updates_dir(cache_dir) / "last_failure.json")
 
 
 # ------------------------------------------------------------------ 3. installazione
